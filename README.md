@@ -171,7 +171,18 @@ python scripts/validate_schemas.py
 ```
 
 ---
+## Maintainers
 
+Event Mill is maintained by a small group of security practitioners focused on detection engineering, incident response, and cyber threat informed detection.
+
+Current maintainers:
+
+- Doug Leece (dleecefft)
+- Veljko Mojic (veljkomojic7-mamba)
+
+Please use GitHub Issues for bug reports, feature requests, and design discussions. Pull Requests are welcome, especially for new plugins, artifact parsers, investigation workflows, documentation improvements, and test coverage.
+
+---
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
