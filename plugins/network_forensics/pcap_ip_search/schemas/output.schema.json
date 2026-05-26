@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "mode": { "type": "string" },
+    "query": { "type": "string" },
+    "matches": {
+      "type": "object",
+      "properties": {
+        "conversations": { "type": "array", "items": { "type": "object" } },
+        "dns_queries": { "type": "array", "items": { "type": "object" } },
+        "http_requests": { "type": "array", "items": { "type": "object" } },
+        "tls_handshakes": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "timeline": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  }
+}

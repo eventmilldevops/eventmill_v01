@@ -21,6 +21,17 @@ Seven actions for comprehensive threat modeling:
 | Consumed | `text`, `pdf` | Threat model documents |
 | Produced | `json_events`, `text` | Analysis results, markdown reports |
 
+## Output Persistence
+
+On successful completion the framework automatically writes the full result to:
+```
+workspace/artifacts/threat_model_analyzer_<YYYYMMDD_HHMMSS>.json
+```
+The file is registered as a `json_events` session artifact. Use `artifacts` to get its ID.
+- The `export` action additionally produces a markdown report — its `output` field is extracted and saved as `.md`
+- Scenario and gap analysis results can be loaded into `attack_path_visualizer` via the artifact ID
+- Use `export <artifact_id>` to push the JSON to `common/exports/threat_model_analyzer/` in cloud storage for external access or troubleshooting
+
 ## Defense Layers
 
 `perimeter`, `network`, `endpoint`, `application`, `data`, `identity`, `monitoring`

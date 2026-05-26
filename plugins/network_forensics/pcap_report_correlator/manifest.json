@@ -1,0 +1,31 @@
+{
+  "tool_name": "pcap_report_correlator",
+  "version": "1.0.0",
+  "pillar": "network_forensics",
+  "display_name": "PCAP Report Correlator",
+  "description_short": "Correlates threat report IOCs against loaded PCAP data.",
+  "description_long": "Three-stage correlation engine (sync_pcap): Stage 1 extracts IOCs from threat reports (Markdown/text) using regex and optional AI-enhanced extraction. Stage 2 matches extracted IOCs against PcapSession data (conversations, DNS, HTTP, TLS). Stage 3 produces a correlated output showing which IOCs were observed in the network capture with full evidence chains.",
+  "author": "Event Mill Contributors",
+  "entry_point": "tool.py",
+  "class_name": "PcapReportCorrelator",
+  "artifacts_consumed": ["pcap", "text", "markdown"],
+  "artifacts_produced": ["json_events", "text"],
+  "capabilities": [
+    "network_forensics:report_correlation",
+    "network_forensics:ioc_extraction",
+    "network_forensics:evidence_chain",
+    "network_forensics:threat_intel_matching"
+  ],
+  "input_schema": "schemas/input.schema.json",
+  "output_schema": "schemas/output.schema.json",
+  "timeout_class": "long",
+  "cost_hint": "low",
+  "model_tier": "light",
+  "safe_for_auto_invoke": true,
+  "requires_llm": false,
+  "dependencies": ["pcap_metadata_summary"],
+  "stability": "stable",
+  "tags": ["ioc", "correlation", "threat_intel", "sync_pcap", "report"],
+  "chains_to": ["pcap_ai_analyzer"],
+  "chains_from": ["pcap_metadata_summary", "threat_report_analyzer"]
+}

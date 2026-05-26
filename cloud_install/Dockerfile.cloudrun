@@ -1,4 +1,4 @@
-# Event Mill v0.2.0 - Cloud Run Deployment with ttyd web terminal
+# Event Mill v0.1.0 - Cloud Run Deployment with ttyd web terminal
 # Cloud Run provides HTTPS on port 443 automatically, routing to container PORT (8080)
 #
 # Multi-stage build:
@@ -17,10 +17,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency manifest and install
+# Copy dependency manifest and install with GCP + plugin extras
+# gcp:                  google-cloud-storage, secret-manager, logging
+# plugins-threat-modeling: pypdf (PDF extraction for threat_report_analyzer)
+# plugins-log-analysis: pdfplumber, beautifulsoup4, python-docx, stix2 (for threat_intel_ingester)
 COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir build && \
-    pip install --no-cache-dir .
+    pip install --no-cache-dir ".[gcp,plugins-threat-modeling,plugins-log-analysis,plugins-network-forensics]"
 
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime
@@ -54,10 +57,10 @@ COPY --chown=eventmill:eventmill framework/ ./framework/
 COPY --chown=eventmill:eventmill plugins/ ./plugins/
 COPY --chown=eventmill:eventmill pyproject.toml README.md ./
 
-# Create workspace and credentials directories
+# Create workspace directory
+# Note: GCS access uses workload identity (no credentials file needed)
 RUN mkdir -p /app/workspace/sessions /app/workspace/artifacts /app/workspace/logs \
-    && mkdir -p /app/credentials \
-    && chown -R eventmill:eventmill /app/workspace /app/credentials
+    && chown -R eventmill:eventmill /app/workspace
 
 # Switch to non-privileged user
 USER eventmill
@@ -69,6 +72,11 @@ ENV PYTHONUNBUFFERED=1
 ENV EVENTMILL_WORKSPACE=/app/workspace
 ENV EVENTMILL_LOG_LEVEL=INFO
 
+# LLM API keys are injected via Cloud Run secrets (--set-secrets in deploy script):
+#   GEMINI_FLASH_API_KEY - Gemini Flash (light tier, fast/cheap)
+#   GEMINI_PRO_API_KEY   - Gemini Pro (heavy tier, powerful)
+# The shell auto-detects available models from these environment variables.
+
 EXPOSE 8080
 
 # ttyd options:
@@ -76,9 +84,13 @@ EXPOSE 8080
 #   -p $PORT        = listen on Cloud Run's PORT
 #   -t fontSize=16  = larger font for readability
 #   -c user:pass    = basic auth (optional, use with Secret Manager)
+#   --ping-interval = WebSocket ping interval (seconds) to keep the
+#                     connection alive through Cloud Run's LB / proxy.
+#                     Without this, idle connections during long LLM calls
+#                     are dropped after ~60-90 s.
 #
 # For public access without auth (Cloud Run IAM handles access):
-# CMD ["sh", "-c", "ttyd -W -p ${PORT} -t fontSize=16 python -m framework.cli.shell"]
+# CMD ["sh", "-c", "ttyd -W -p ${PORT} --ping-interval 30 -t fontSize=16 python -m framework.cli.shell"]
 #
 # For basic auth (set TTYD_USERNAME and TTYD_PASSWORD as secrets):
-CMD ["sh", "-c", "ttyd -W -p ${PORT} -c ${TTYD_USERNAME}:${TTYD_PASSWORD} -t fontSize=16 python -m framework.cli.shell"]
+CMD ["sh", "-c", "ttyd -W -p ${PORT} -c ${TTYD_USERNAME}:${TTYD_PASSWORD} --ping-interval 30 -t fontSize=16 python -m framework.cli.shell"]

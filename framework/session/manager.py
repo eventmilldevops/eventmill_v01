@@ -111,6 +111,30 @@ class SessionManager:
         self.db.update_session(self._current_session)
         logger.info("Set pillar to: %s", pillar)
     
+    def set_workspace(self, workspace_folder: str | None) -> None:
+        """Set the active workspace folder for the current session.
+        
+        The workspace folder scopes file resolution to a subfolder
+        within the pillar and common storage buckets (e.g. an incident
+        identifier like ``incident-2024-03``).  Set to *None* to clear.
+        
+        Args:
+            workspace_folder: Folder name, or None to clear.
+        
+        Raises:
+            ValueError: If no session is active.
+        """
+        if not self._current_session:
+            raise ValueError("No active session")
+        
+        self._current_session.workspace_folder = workspace_folder
+        self._current_session.updated_at = datetime.now()
+        self.db.update_session(self._current_session)
+        if workspace_folder:
+            logger.info("Set workspace folder to: %s", workspace_folder)
+        else:
+            logger.info("Cleared workspace folder")
+    
     def list_sessions(self) -> list[Session]:
         """List all sessions."""
         return self.db.list_sessions()

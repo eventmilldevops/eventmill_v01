@@ -1,0 +1,108 @@
+# Event Mill — Zeek PCAP Processing Pipeline
+# =============================================================================
+# Processes large PCAP files using Zeek in Cloud Build.
+# Triggered from EventMill shell via 'zeek <pcap_uri>' command.
+#
+# Usage (manual):
+#   gcloud builds submit --no-source \
+#     --project="your-project-id" \
+#     --config=cloud_install/cloudbuild-zeek.yaml \
+#     --substitutions=_PCAP_URI=gs://bucket/file.pcap,_OUTPUT_PREFIX=gs://bucket/zeek-output/run-id
+#
+# Usage (from EventMill shell — preferred):
+#   eventmill> zeek gs://bucket/massive.pcap
+#
+# The pipeline:
+#   1. Downloads PCAP from GCS
+#   2. Runs Zeek with local policy (conn, dns, ssl, http, files, notice, weird)
+#   3. Converts Zeek TSV logs to JSON (for EventMill json_events compatibility)
+#   4. Uploads JSON logs back to GCS output prefix
+# =============================================================================
+
+steps:
+  # Step 1: Download PCAP from GCS
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'download-pcap'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Downloading PCAP from ${_PCAP_URI}..."
+        mkdir -p /workspace/pcap /workspace/zeek-output /workspace/json-output
+        gsutil -o GSUtil:parallel_composite_upload_threshold=150M \
+          cp "${_PCAP_URI}" /workspace/pcap/capture.pcap
+        ls -lh /workspace/pcap/capture.pcap
+        echo "Download complete."
+
+  # Step 2: Run Zeek analysis
+  - name: 'zeek/zeek:latest'
+    id: 'run-zeek'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Running Zeek analysis..."
+        cd /workspace/zeek-output
+
+        # Run Zeek with local policy scripts
+        # LogAscii::use_json=T outputs JSON instead of TSV
+        zeek -r /workspace/pcap/capture.pcap \
+          LogAscii::use_json=T \
+          local \
+          "Site::local_nets += { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }"
+
+        echo ""
+        echo "Zeek analysis complete. Output files:"
+        ls -lh /workspace/zeek-output/
+        echo ""
+
+        # Show summary stats
+        if [ -f conn.log ]; then
+          CONN_COUNT=$(wc -l < conn.log)
+          echo "Connections logged: ${CONN_COUNT}"
+        fi
+        if [ -f dns.log ]; then
+          DNS_COUNT=$(wc -l < dns.log)
+          echo "DNS queries logged: ${DNS_COUNT}"
+        fi
+        if [ -f notice.log ]; then
+          NOTICE_COUNT=$(wc -l < notice.log)
+          echo "Notices generated: ${NOTICE_COUNT}"
+        fi
+    waitFor: ['download-pcap']
+
+  # Step 3: Upload Zeek JSON logs to GCS
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'upload-results'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Uploading Zeek logs to ${_OUTPUT_PREFIX}/"
+
+        # Upload all .log files (Zeek JSON output)
+        for logfile in /workspace/zeek-output/*.log; do
+          if [ -f "$logfile" ]; then
+            basename=$(basename "$logfile")
+            echo "  Uploading ${basename}..."
+            gsutil cp "$logfile" "${_OUTPUT_PREFIX}/${basename}"
+          fi
+        done
+
+        echo ""
+        echo "Upload complete. Zeek logs available at:"
+        echo "  ${_OUTPUT_PREFIX}/"
+        gsutil ls -lh "${_OUTPUT_PREFIX}/"
+    waitFor: ['run-zeek']
+
+substitutions:
+  _PCAP_URI: ''           # gs://bucket/path/to/file.pcap
+  _OUTPUT_PREFIX: ''      # gs://bucket/zeek-output/run-id
+  _REGION: northamerica-northeast2
+
+timeout: 7200s   # 2 hours — sufficient for 100+ GB PCAPs
+
+options:
+  machineType: 'E2_HIGHCPU_32'
+  diskSizeGb: 500
+  logging: CLOUD_LOGGING_ONLY

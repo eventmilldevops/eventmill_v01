@@ -21,6 +21,14 @@ Two modes for security-focused log analysis:
 | Consumed | `text`, `log_stream` | Log files to investigate |
 | Produced | `json_events` | Investigation results |
 
+## Output Persistence
+
+On successful completion the framework automatically writes the full result to:
+```
+workspace/artifacts/log_investigator_<YYYYMMDD_HHMMSS>.json
+```
+The file is registered as a `json_events` session artifact. Use `artifacts` to get its ID, then pass it as `artifact_id` to downstream tools such as `attack_path_visualizer`. Use `export <artifact_id>` to push the JSON to `common/exports/log_investigator/` in cloud storage for external access or troubleshooting.
+
 ## Example Usage
 
 ### AI Investigation

@@ -253,6 +253,70 @@ class MyNewTool:
 
 4. **Artifact registration** happens through `context.register_artifact()`, not by writing files directly.
 
+## Using LLM Capabilities
+
+### QueryHints for Model Selection
+
+When calling the LLM, pass `QueryHints` to guide the dispatcher toward the right model tier:
+
+```python
+from framework.plugins.protocol import QueryHints
+
+# Light model (default) — fast, cheap, good for bulk extraction
+response = context.llm_query.query_text(
+    prompt=my_prompt,
+    max_tokens=3000,
+    hints=QueryHints(tier="light"),
+)
+
+# Heavy model with reasoning — for complex analysis
+response = context.llm_query.query_text(
+    prompt=my_prompt,
+    max_tokens=8192,
+    hints=QueryHints(tier="heavy", needs_reasoning=True),
+)
+```
+
+If you omit `hints`, the dispatcher falls back to token-count-based routing (same behavior as before).
+
+### Native Document Ingestion
+
+For plugins that process PDFs or other document artifacts, use `query_with_document()` instead of manually extracting text and chunking it:
+
+```python
+from framework.plugins.protocol import QueryHints
+
+# Find the PDF artifact
+pdf_artifact = next(
+    (a for a in context.artifacts if a.artifact_type == "pdf_report"),
+    None,
+)
+
+if pdf_artifact and context.llm_query.supports_native_document("application/pdf"):
+    # Native path — the dispatcher sends the full PDF to the model
+    response = context.llm_query.query_with_document(
+        prompt="Extract all IOCs from this threat intel report...",
+        artifact=pdf_artifact,
+        hints=QueryHints(tier="heavy", prefers_native_file=True),
+    )
+    # response.transport_path tells you how it was ingested:
+    #   "gs_uri"        — zero-copy from GCS
+    #   "inline_bytes"  — uploaded as raw bytes
+else:
+    # Fallback — extract text yourself and use query_text()
+    text = extract_text_from_pdf(pdf_artifact.file_path)
+    response = context.llm_query.query_text(
+        prompt=f"Extract IOCs from:\n{text}",
+        max_tokens=3000,
+    )
+```
+
+This eliminates the chunking-and-reassembly pattern that loses document context.
+
+### Artifact storage_uri
+
+Artifacts loaded from cloud storage have a `storage_uri` field (e.g. `gs://bucket/path.pdf`). The framework uses this for zero-copy ingestion. Plugins do **not** need to handle this field directly — just pass the artifact to `query_with_document()`.
+
 ## Step 5: Add Examples
 
 ### `examples/request.example.json`
@@ -387,6 +451,16 @@ python scripts/generate_tool_catalog.py
 | `html_report` | HTML format reports |
 | `image` | Screenshot or diagram images |
 | `text` | Plain text files |
+
+## LLMResponse Diagnostics
+
+The `LLMResponse` includes diagnostic fields that help with debugging:
+
+- **`model_used`** — which model actually ran the query (e.g. `gemini-2.5-flash`)
+- **`transport_path`** — how the document was ingested (`gs_uri`, `inline_bytes`, `text`)
+- **`fallback_reason`** — why the preferred path wasn’t used (if applicable)
+
+Plugins MAY log these for diagnostics but MUST NOT branch on specific model names.
 
 ## Routing Integration
 

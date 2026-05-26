@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "triage_summary", "hunt_talkers", "hunt_beacons", "hunt_dns",
+        "hunt_tls", "hunt_lateral", "hunt_exfil", "report",
+        "ot_triage", "ot_threat_hunt", "ot_report",
+        "netops_triage", "netops_health", "netops_report"
+      ],
+      "description": "AI analysis mode to execute."
+    },
+    "condition_orange": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable Condition Orange (heightened alert, paranoid analysis posture)."
+    },
+    "hunt_payload": {
+      "type": "object",
+      "description": "Optional parameters to pass to the underlying hunt tool."
+    }
+  },
+  "required": ["mode"]
+}

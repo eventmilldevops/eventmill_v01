@@ -1,0 +1,340 @@
+{
+  "report_metadata": {},
+  "iocs": [
+    {
+      "ioc_type": "domain",
+      "value": "www.crowdstrike.com",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "vironments. CrowdStrike Intelligence observes the use of unmanaged adversary-controlled VMs by eCrime and targeted intrusion threat actors. 3 https://www.crowdstrike.com/en-us/blog/falcon-next-gen-siem-protects-against-vmware-vcenter-attacks/  CROWDSTRIKE 2026 GLOBAL THREAT REPORT 24 CASE HIGHLIGHT:",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "domain",
+      "value": "www.s-rminform.com",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "VMs in victim networks and subtly modifying existing identity-oriented security policies. No known link exists between the two adversaries. 4 https://www.s-rminform.com/latest-thinking/camera-off-akira-deploys-ransomware-via-webcam 5 https://www.crowdstrike.com/en-us/blog/stop-remote-ransomware-over",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "domain",
+      "value": "cloud.google.com",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "ly a less important criterion to these adversaries than the ease with which they can obtain a given exploit, either directly or indirectly. 7 https://cloud.google.com/blog/topics/threat-intelligence/2024-zero-day-trends  CROWDSTRIKE 2026 GLOBAL THREAT REPORT 36 TARGETED INTRUSION THREAT ACTORS EXPLO",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "url",
+      "value": "https://www.ic3.gov/psa/2025/psa250226",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "mpromise.1 This demonstrates how abuse of trusted technology relationships can rapidly translate into large-scale financial and operational damage. 1 https://www.ic3.gov/psa/2025/psa250226 https://www.elliptic.co/blog/bybit-hack-largest-in-history  CROWDSTRIKE 2026 GLOBAL THREAT REPORT 6 Other Democ",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "url",
+      "value": "https://www.elliptic.co/blog/bybit-hack-largest-in-history",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "of trusted technology relationships can rapidly translate into large-scale financial and operational damage. 1 https://www.ic3.gov/psa/2025/psa250226 https://www.elliptic.co/blog/bybit-hack-largest-in-history  CROWDSTRIKE 2026 GLOBAL THREAT REPORT 6 Other Democratic People's Republic of Korea (DPRK)",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "url",
+      "value": "https://www.crowdstrike.com/en-us/blog/falcon-next-gen-siem-protects-against-vmware-vcenter-attacks/",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "Mware environments. CrowdStrike Intelligence observes the use of unmanaged adversary-controlled VMs by eCrime and targeted intrusion threat actors. 3 https://www.crowdstrike.com/en-us/blog/falcon-next-gen-siem-protects-against-vmware-vcenter-attacks/  CROWDSTRIKE 2026 GLOBAL THREAT REPORT 24 CASE HI",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "url",
+      "value": "https://www.s-rminform.com/latest-thinking/camera-off-akira-deploys-ransomware-via-webcam",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "managed VMs in victim networks and subtly modifying existing identity-oriented security policies. No known link exists between the two adversaries. 4 https://www.s-rminform.com/latest-thinking/camera-off-akira-deploys-ransomware-via-webcam 5 https://www.crowdstrike.com/en-us/blog/stop-remote-ransomw",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "url",
+      "value": "https://www.crowdstrike.com/en-us/blog/stop-remote-ransomware-over-smb-falcon-endpoint-security",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "cies. No known link exists between the two adversaries. 4 https://www.s-rminform.com/latest-thinking/camera-off-akira-deploys-ransomware-via-webcam 5 https://www.crowdstrike.com/en-us/blog/stop-remote-ransomware-over-smb-falcon-endpoint-security  CROWDSTRIKE 2026 GLOBAL THREAT REPORT 25 Virtualizati",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "url",
+      "value": "https://cloud.google.com/blog/topics/threat-intelligence/2024-zero-day-trends",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "is likely a less important criterion to these adversaries than the ease with which they can obtain a given exploit, either directly or indirectly. 7 https://cloud.google.com/blog/topics/threat-intelligence/2024-zero-day-trends  CROWDSTRIKE 2026 GLOBAL THREAT REPORT 36 TARGETED INTRUSION THREAT ACTOR",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2025-3248",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "IES RELATED TO TRUSTED AI INFRASTRUCTURE AI PLATFORMS AND TOOLS AND TOOLS AI Cerber ransomware operators Threat actors deployed a malicious exploited CVE-2025-3248 clone of a legitimate MCP server against Langflow AI to deploy that forwarded emails to ransomware and distribute attacker-controlled ad",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2025-25257",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "arch and exploit development. On July 14, 2025, six days after researchers published public proof-of-concept (POC) exploits, OPERATOR PANDA exploited CVE-2025-25257, a SQL injection vulnerability. Similarly, PHANTOM PANDA exploited CVE-2025-31324 on April 27, 2025, three days after the vendor public",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2025-31324",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "ed public proof-of-concept (POC) exploits, OPERATOR PANDA exploited CVE-2025-25257, a SQL injection vulnerability. Similarly, PHANTOM PANDA exploited CVE-2025-31324 on April 27, 2025, three days after the vendor publicly disclosed the file upload vulnerability.  CROWDSTRIKE 2026 GLOBAL THREAT REPORT",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2025-55182",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "the file upload vulnerability.  CROWDSTRIKE 2026 GLOBAL THREAT REPORT 27 VAULT PANDA and GENESIS PANDA both deployed exploits targeting React2Shell (CVE-2025-55182) on December 5, 2025, only two days after security researchers publicly disclosed these vulnerabilities. VAULT PANDA deployed the custom",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2024-21887",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "WARP PANDA\u2019s June 2025-August 2025 operations targeted U.S.-based legal, technology, and manufacturing entities by exploiting VPN appliances through CVE-2024-21887 and CVE-2023-46805, an exploit chain that bypasses authentication and enables arbitrary RCE. WARP PANDA pivoted from compromised edge de",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2023-46805",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "2025-August 2025 operations targeted U.S.-based legal, technology, and manufacturing entities by exploiting VPN appliances through CVE-2024-21887 and CVE-2023-46805, an exploit chain that bypasses authentication and enables arbitrary RCE. WARP PANDA pivoted from compromised edge devices to vCenter e",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2024-24919",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "nes, Southeast Asia, and the U.S. Limited visibility prevents a determination of the exact compromise method; however, the adversary likely exploited CVE-2024-24919 or leveraged previously compromised \u00bb accounts. Following initial access, the adversary deployed ShadowPad malware via DLL search-order",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2024-3400",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "ING compromising Cisco IOS XE devices, Palo Alto Networks firewalls, and other network THAT THESE OPERATIONS WERE appliances. The adversary exploited CVE-2024-3400, a critical command injection LIKELY INTENDED TO FULFILL vulnerability in Palo Alto Networks PAN-OS, days after a POC exploit for LONG-T",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2025-59287",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "outheast Asia. VEILED PANDA targeted a U.S.-based aviation entity in late 2025, exploiting a Windows Server Update Services (WSUS) RCE vulnerability (CVE-2025-59287) before deploying ShadowPad. 6 An ORB network is a traffic relay system (generally composed of a mix of compromised devices and leased ",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2025-22457",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "exploit VPN servers, which are also commonly unmanaged and exposed. Multiple vulnerabilities disclosed in 2025 that impact network devices, including CVE-2025-22457 and CVE-2025-0282, were previously exploited as zero-days. Though the malware and target sectors differed between incidents, a techniqu",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2025-0282",
+      "confidence": "low",
+      "priority": "medium",
+      "context": ", which are also commonly unmanaged and exposed. Multiple vulnerabilities disclosed in 2025 that impact network devices, including CVE-2025-22457 and CVE-2025-0282, were previously exploited as zero-days. Though the malware and target sectors differed between incidents, a technique often used in the",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2025-61882",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "Beginning as early as August 2025, GRACEFUL SPIDER conducted data exfiltration operations by exploiting a novel zero-day vulnerability now tracked as CVE-2025-61882. Though this campaign diverges from GRACEFUL SPIDER\u2019s historical pattern of targeting file transfer applications, the tactical shift re",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2021-27101",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "imately, exfiltrate data. This strategy will almost certainly drive GRACEFUL SPIDER\u2019s choice of exploit targets in the future. Product: Accellion FTA CVE-2021-27101 CVE-2021-27102 CVE-2021-27103 CVE-2021-27104 Product: GoAnywhere MFT Products: CVE-2023-0669 Cleo Harmony Product: MOVEit Cleo VLTrader",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2021-27102",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "rate data. This strategy will almost certainly drive GRACEFUL SPIDER\u2019s choice of exploit targets in the future. Product: Accellion FTA CVE-2021-27101 CVE-2021-27102 CVE-2021-27103 CVE-2021-27104 Product: GoAnywhere MFT Products: CVE-2023-0669 Cleo Harmony Product: MOVEit Cleo VLTrader Transfer Cleo ",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2021-27103",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "strategy will almost certainly drive GRACEFUL SPIDER\u2019s choice of exploit targets in the future. Product: Accellion FTA CVE-2021-27101 CVE-2021-27102 CVE-2021-27103 CVE-2021-27104 Product: GoAnywhere MFT Products: CVE-2023-0669 Cleo Harmony Product: MOVEit Cleo VLTrader Transfer Cleo LexiCom CVE-2023",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2021-27104",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "almost certainly drive GRACEFUL SPIDER\u2019s choice of exploit targets in the future. Product: Accellion FTA CVE-2021-27101 CVE-2021-27102 CVE-2021-27103 CVE-2021-27104 Product: GoAnywhere MFT Products: CVE-2023-0669 Cleo Harmony Product: MOVEit Cleo VLTrader Transfer Cleo LexiCom CVE-2023-34362 CVE-202",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2023-0669",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "f exploit targets in the future. Product: Accellion FTA CVE-2021-27101 CVE-2021-27102 CVE-2021-27103 CVE-2021-27104 Product: GoAnywhere MFT Products: CVE-2023-0669 Cleo Harmony Product: MOVEit Cleo VLTrader Transfer Cleo LexiCom CVE-2023-34362 CVE-2024-55956 Product: SysAid Product: On-Premises E-Bu",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2023-34362",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "-27102 CVE-2021-27103 CVE-2021-27104 Product: GoAnywhere MFT Products: CVE-2023-0669 Cleo Harmony Product: MOVEit Cleo VLTrader Transfer Cleo LexiCom CVE-2023-34362 CVE-2024-55956 Product: SysAid Product: On-Premises E-Business Suite (EBS) CVE-2023-47246 CVE-2025-61882 DEC FEB MAY NOV DEC AUG 2020 2",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2024-55956",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "-27103 CVE-2021-27104 Product: GoAnywhere MFT Products: CVE-2023-0669 Cleo Harmony Product: MOVEit Cleo VLTrader Transfer Cleo LexiCom CVE-2023-34362 CVE-2024-55956 Product: SysAid Product: On-Premises E-Business Suite (EBS) CVE-2023-47246 CVE-2025-61882 DEC FEB MAY NOV DEC AUG 2020 2023 2024 2025 P",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2023-47246",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "Harmony Product: MOVEit Cleo VLTrader Transfer Cleo LexiCom CVE-2023-34362 CVE-2024-55956 Product: SysAid Product: On-Premises E-Business Suite (EBS) CVE-2023-47246 CVE-2025-61882 DEC FEB MAY NOV DEC AUG 2020 2023 2024 2025 Product Type: File Transfer IT Service Management Business Integration Figur",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2025-32706",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "therefore remain effective for longer periods. In late April 2025, eCrime adversary VICE SPIDER highly likely exploited a zero-day LPE vulnerability (CVE-2025-32706) affecting the Microsoft Windows Common Log File System (CLFS) driver. Though VICE SPIDER previously leveraged n-day LPE vulnerabilitie",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2023-36874",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "SPIDER previously leveraged n-day LPE vulnerabilities against various Windows services and protocols (such as the Windows Error Reporting service via CVE-2023-36874, CLFS via CVE-2022-24521, and Netlogon via CVE-2020-1472), the April 2025 activity marked the first observed instance of VICE SPIDER us",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2022-24521",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "ed n-day LPE vulnerabilities against various Windows services and protocols (such as the Windows Error Reporting service via CVE-2023-36874, CLFS via CVE-2022-24521, and Netlogon via CVE-2020-1472), the April 2025 activity marked the first observed instance of VICE SPIDER using a zero-day LPE vulner",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2020-1472",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "nst various Windows services and protocols (such as the Windows Error Reporting service via CVE-2023-36874, CLFS via CVE-2022-24521, and Netlogon via CVE-2020-1472), the April 2025 activity marked the first observed instance of VICE SPIDER using a zero-day LPE vulnerability for the Windows CLFS driv",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2025-59230",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "reat actors have also used exploits to target vulnerabilities affecting multiple Windows drivers, services, and protocols, including the following: \u2022 CVE-2025-59230, which affects the NetMan service \u2022 CVE-2023-29360, which affects the Microsoft Streaming Service \u2022 CVE-2024-35250, which affects Windo",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2023-29360",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "rabilities affecting multiple Windows drivers, services, and protocols, including the following: \u2022 CVE-2025-59230, which affects the NetMan service \u2022 CVE-2023-29360, which affects the Microsoft Streaming Service \u2022 CVE-2024-35250, which affects Windows kernel-mode drivers \u2022 CVE-2024-26169, which affe",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2024-35250",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "tocols, including the following: \u2022 CVE-2025-59230, which affects the NetMan service \u2022 CVE-2023-29360, which affects the Microsoft Streaming Service \u2022 CVE-2024-35250, which affects Windows kernel-mode drivers \u2022 CVE-2024-26169, which affects the Windows Error Reporting service eCrime adversaries highl",
+      "related_mitre": [],
+      "defanged": false
+    },
+    {
+      "ioc_type": "cve",
+      "value": "CVE-2024-26169",
+      "confidence": "low",
+      "priority": "medium",
+      "context": "ects the NetMan service \u2022 CVE-2023-29360, which affects the Microsoft Streaming Service \u2022 CVE-2024-35250, which affects Windows kernel-mode drivers \u2022 CVE-2024-26169, which affects the Windows Error Reporting service eCrime adversaries highly likely choose specific Windows drivers, services, or proto",
+      "related_mitre": [],
+      "defanged": false
+    }
+  ],
+  "mitre_mappings": [],
+  "attack_graph": {}
+}

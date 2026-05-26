@@ -19,6 +19,7 @@
   "output_schema": "schemas/output.schema.json",
   "timeout_class": "short",
   "cost_hint": "low",
+  "model_tier": "light",
   "safe_for_auto_invoke": true,
   "requires_llm": false,
   "dependencies": [],

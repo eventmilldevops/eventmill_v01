@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["ioc", "timeline"],
+      "default": "ioc",
+      "description": "Search mode: 'ioc' for IOC lookup, 'timeline' for chronological activity."
+    },
+    "query": {
+      "type": "string",
+      "description": "IOC to search for (IP address, domain name, or port number)."
+    },
+    "ip": {
+      "type": "string",
+      "description": "IP address for timeline mode."
+    }
+  },
+  "required": ["mode"]
+}

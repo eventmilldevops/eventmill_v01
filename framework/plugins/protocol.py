@@ -42,6 +42,20 @@ class ValidationResult:
 
 
 @dataclass
+class QueryHints:
+    """Plugin hints to the LLMDispatcher about what kind of query this is.
+    
+    Plugins pass these to guide model selection without knowing provider details.
+    All fields are optional — the dispatcher uses sensible defaults.
+    """
+    tier: str = "light"                    # "light" | "heavy"
+    needs_reasoning: bool = False          # biases toward deep-reasoning models
+    needs_structured_output: bool = False  # ensures JSON-mode capable model
+    prefers_native_file: bool = False      # prefer native file > text extraction
+    max_budget_cents: float | None = None  # cost ceiling per call (safety net)
+
+
+@dataclass
 class LLMResponse:
     """Response from LLM query.
     
@@ -51,6 +65,9 @@ class LLMResponse:
     text: str | None = None
     error: str | None = None
     token_usage: dict[str, int] | None = None
+    model_used: str | None = None          # which model actually ran
+    transport_path: str | None = None      # "gs_uri", "inline_bytes", "text_fallback"
+    fallback_reason: str | None = None     # why preferred path wasn't used
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +84,7 @@ class ArtifactRef:
     artifact_id: str
     artifact_type: str
     file_path: str
+    storage_uri: str | None = None
     source_tool: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -111,6 +129,7 @@ class LLMQueryInterface(Protocol):
         system_context: str | None = None,
         max_tokens: int = 4096,
         grounding_data: list[str] | None = None,
+        hints: QueryHints | None = None,
     ) -> LLMResponse:
         """Send a text prompt to the connected LLM via MCP.
         
@@ -119,6 +138,7 @@ class LLMQueryInterface(Protocol):
             system_context: Optional system context override.
             max_tokens: Maximum tokens in response.
             grounding_data: Additional context strings injected before prompt.
+            hints: Optional routing hints for model selection.
         
         Returns:
             LLMResponse with text or error.
@@ -145,6 +165,48 @@ class LLMQueryInterface(Protocol):
         Returns:
             LLMResponse with text or error. If the model doesn't support
             vision, returns ok=False with error indicating capability gap.
+        """
+        ...
+    
+    def query_with_document(
+        self,
+        prompt: str,
+        artifact: ArtifactRef,
+        system_context: str | None = None,
+        max_tokens: int = 8192,
+        grounding_data: list[str] | None = None,
+        hints: QueryHints | None = None,
+    ) -> LLMResponse:
+        """Query with a document artifact.
+        
+        The dispatcher resolves the best ingestion path automatically:
+          1. Native document + remote URI (gs:// for Gemini) — zero-copy
+          2. Native document + inline bytes from local file
+          3. Fallback: returns ok=False so plugin can use text extraction
+        
+        The response's transport_path field records which path was used.
+        
+        Args:
+            prompt: Analysis instructions.
+            artifact: Reference to the document artifact.
+            system_context: Optional system context override.
+            max_tokens: Maximum tokens in response.
+            grounding_data: Additional context strings injected before prompt.
+            hints: Optional routing hints for model selection.
+        
+        Returns:
+            LLMResponse with text or error.
+        """
+        ...
+    
+    def supports_native_document(self, mime_type: str) -> bool:
+        """Check if any connected model handles this MIME type natively.
+        
+        Args:
+            mime_type: MIME type to check (e.g. "application/pdf").
+        
+        Returns:
+            True if at least one connected model supports native ingestion.
         """
         ...
 
@@ -303,8 +365,10 @@ class TimeoutClass:
     
     LIMITS = {
         FAST: 30,
+        "short": 30,
         MEDIUM: 120,
         SLOW: 600,
+        "long": 600,
     }
     
     @classmethod

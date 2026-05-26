@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "extracted_iocs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      }
+    },
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ioc_type": { "type": "string" },
+          "ioc_value": { "type": "string" },
+          "evidence": { "type": "array" },
+          "match_count": { "type": "integer" }
+        }
+      }
+    },
+    "unmatched_iocs": { "type": "array" },
+    "summary_text": { "type": "string" }
+  }
+}

@@ -1,0 +1,576 @@
+{
+  "report_metadata": {
+    "title": "2026 Global Threat Report",
+    "campaign_name": "Multiple",
+    "attributed_actor": "SCATTERED SPIDER, BLOCKADE SPIDER, PUNK SPIDER, PRESSURE CHOLLIMA, FAMOUS CHOLLIMA, STARDUST CHOLLIMA, COZY BEAR, FANCY BEAR, MURKY PANDA, WARP PANDA, OPERATOR PANDA, GRACEFUL SPIDER, VICE SPIDER, IMPERIAL KITTEN",
+    "attribution_confidence": "high"
+  },
+  "iocs": [
+    {
+      "value": "CVE-2025-3248",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "high",
+      "context": "A code injection vulnerability in Langflow exploited by Cerber ransomware operators to deploy ransomware.",
+      "related_mitre": [
+        "T1190"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2025-25257",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "high",
+      "context": "An unauthenticated SQL injection vulnerability exploited by OPERATOR PANDA.",
+      "related_mitre": [
+        "T1190"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2025-31324",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "high",
+      "context": "A file upload vulnerability exploited by PHANTOM PANDA.",
+      "related_mitre": [
+        "T1190"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2025-55182",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "high",
+      "context": "An insecure deserialization vulnerability (React2Shell) exploited by VAULT PANDA and GENESIS PANDA.",
+      "related_mitre": [
+        "T1190"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2024-21887",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "high",
+      "context": "Part of an exploit chain used by WARP PANDA to exploit VPN appliances.",
+      "related_mitre": [
+        "T1190"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2023-46805",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "high",
+      "context": "Part of an exploit chain used by WARP PANDA to exploit VPN appliances.",
+      "related_mitre": [
+        "T1190"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2024-24919",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "medium",
+      "context": "A vulnerability in Check Point VPN appliances likely exploited by HOLLOW PANDA.",
+      "related_mitre": [
+        "T1190"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2024-3400",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "high",
+      "context": "A command injection vulnerability in Palo Alto Networks PAN-OS exploited by OPERATOR PANDA.",
+      "related_mitre": [
+        "T1190"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2025-59287",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "high",
+      "context": "A Windows Server Update Services (WSUS) RCE vulnerability exploited by VEILED PANDA.",
+      "related_mitre": [
+        "T1190"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2025-32706",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "high",
+      "context": "A zero-day local privilege escalation (LPE) vulnerability in the Windows CLFS driver exploited by VICE SPIDER.",
+      "related_mitre": [
+        "T1068"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2023-36874",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "medium",
+      "context": "An n-day LPE vulnerability in the Windows Error Reporting service leveraged by VICE SPIDER.",
+      "related_mitre": [
+        "T1068"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2022-24521",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "medium",
+      "context": "An n-day LPE vulnerability in the Windows CLFS driver leveraged by VICE SPIDER.",
+      "related_mitre": [
+        "T1068"
+      ],
+      "is_false_positive": false
+    },
+    {
+      "value": "CVE-2020-1472",
+      "ioc_type": "cve",
+      "confidence": "high",
+      "priority": "medium",
+      "context": "An n-day LPE vulnerability in Netlogon (ZeroLogon) leveraged by VICE SPIDER.",
+      "related_mitre": [
+        "T1068"
+      ],
+      "is_false_positive": false
+    }
+  ],
+  "mitre_mappings": [
+    {
+      "technique_id": "T1566",
+      "technique_name": "Phishing",
+      "tactic": "Initial Access",
+      "confidence": "inferred",
+      "report_context": "Adversaries used various social engineering methods, including email and vishing, to gain initial access and persuade victims to perform actions.",
+      "context_paths": [
+        "sophisticated-phishing-aitm"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1566.004",
+      "technique_name": "Spearphishing Voice",
+      "tactic": "Initial Access",
+      "confidence": "explicit",
+      "report_context": "CHATTY SPIDER leveraged voice phishing (vishing) campaigns to persuade employees to install Remote Monitoring and Management (RMM) tools.",
+      "context_paths": [
+        "bgh-ransomware-se"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1195",
+      "technique_name": "Supply Chain Compromise",
+      "tactic": "Initial Access",
+      "confidence": "inferred",
+      "report_context": "The report highlights supply chain attacks as a defining tactic, where threat actors compromise upstream providers, development ecosystems, and public code repositories.",
+      "context_paths": [
+        "supply-chain-compromise"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1195.002",
+      "technique_name": "Compromise Software Supply Chain",
+      "tactic": "Initial Access",
+      "confidence": "explicit",
+      "report_context": "PRESSURE CHOLLIMA compromised Safe{Wallet} to deliver trojanized software, and another actor compromised the Notepad++ update process.",
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1190",
+      "technique_name": "Exploit Public-Facing Application",
+      "tactic": "Initial Access",
+      "confidence": "inferred",
+      "report_context": "Multiple China-nexus and eCrime adversaries systematically exploited vulnerabilities in internet-facing edge devices like VPNs, firewalls, and web applications for initial access.",
+      "context_paths": [
+        "cloud-centric-ransomware",
+        "nation-state-espionage"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1078",
+      "technique_name": "Valid Accounts",
+      "tactic": "Initial Access",
+      "confidence": "inferred",
+      "report_context": "Adversaries operated through valid credentials and trusted identity flows to gain initial access, blending into normal activity.",
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1219",
+      "technique_name": "Remote Access Software",
+      "tactic": "Command and Control",
+      "confidence": "inferred",
+      "report_context": "CHATTY SPIDER persuaded victims to install remote monitoring and management (RMM) tooling to gain access.",
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1003.003",
+      "technique_name": "OS Credential Dumping: NTDS",
+      "tactic": "Credential Access",
+      "confidence": "explicit",
+      "report_context": "SCATTERED SPIDER mounted a domain controller's virtual disk to an unmanaged VM to copy the ntds.dit file.",
+      "context_paths": [
+        "bgh-ransomware-se"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1528",
+      "technique_name": "Steal Application Access Token",
+      "tactic": "Credential Access",
+      "confidence": "explicit",
+      "report_context": "A threat actor compromised Salesloft, which enabled OAuth token theft for customers' Drift integrations.",
+      "context_paths": [
+        "supply-chain-compromise"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1557",
+      "technique_name": "Adversary-in-the-Middle",
+      "tactic": "Credential Access",
+      "confidence": "inferred",
+      "report_context": "eCrime and targeted intrusion actors leveraged AiTM phishing kits to gain access to Microsoft 365 accounts by proxying authentication flows.",
+      "context_paths": [
+        "sophisticated-phishing-aitm"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1110.003",
+      "technique_name": "Brute Force: Password Spraying",
+      "tactic": "Credential Access",
+      "confidence": "explicit",
+      "report_context": "MURKY PANDA conducted high-volume password spraying attacks against Entra ID accounts from its ORB28 network.",
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1068",
+      "technique_name": "Exploitation for Privilege Escalation",
+      "tactic": "Privilege Escalation",
+      "confidence": "inferred",
+      "report_context": "eCrime adversary VICE SPIDER and others exploited multiple zero-day and n-day vulnerabilities in Windows components (CLFS, Netlogon, etc.) to achieve LPE.",
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1564.008",
+      "technique_name": "Hide Artifacts: Email Hiding Rules",
+      "tactic": "Defense Evasion",
+      "confidence": "inferred",
+      "report_context": "BLOCKADE SPIDER created mail deletion rules in Microsoft 365 to prevent legitimate users from receiving security alerts.",
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1070.004",
+      "technique_name": "Indicator Removal: File Deletion",
+      "tactic": "Defense Evasion",
+      "confidence": "inferred",
+      "report_context": "After a supply chain attack, PRESSURE CHOLLIMA restored the malicious JavaScript to its original version to evade detection.",
+      "context_paths": [
+        "supply-chain-compromise"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1098",
+      "technique_name": "Account Manipulation",
+      "tactic": "Persistence",
+      "confidence": "inferred",
+      "report_context": "BLOCKADE SPIDER modified Entra ID conditional access policies and registered a federated identity provider to maintain access and control.",
+      "context_paths": [
+        "cloud-centric-ransomware"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1543.002",
+      "technique_name": "Create or Modify System Process: Systemd Service",
+      "tactic": "Persistence",
+      "confidence": "inferred",
+      "report_context": "BLOCKADE SPIDER maintained persistent access to VMware vCenter using the OrBit Linux backdoor, which often uses systemd for persistence.",
+      "context_paths": [
+        "nation-state-espionage"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1071.004",
+      "technique_name": "Application Layer Protocol: DNS",
+      "tactic": "Command and Control",
+      "confidence": "explicit",
+      "report_context": "HOLLOW PANDA deployed ShadowPad malware configured to use DNS tunneling for command and control.",
+      "context_paths": [
+        "nation-state-espionage"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1567.002",
+      "technique_name": "Exfiltration Over Web Service: Exfiltration to Cloud Storage",
+      "tactic": "Exfiltration",
+      "confidence": "explicit",
+      "report_context": "CHATTY SPIDER pivoted to using Google Drive for data exfiltration after its initial attempt using WinSCP was blocked.",
+      "context_paths": [
+        "cloud-centric-ransomware"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1486",
+      "technique_name": "Data Encrypted for Impact",
+      "tactic": "Impact",
+      "confidence": "explicit",
+      "report_context": "Ransomware adversaries such as PUNK SPIDER and BLOCKADE SPIDER encrypted data on local systems, via SMB shares, and on VMware ESXi infrastructure.",
+      "context_paths": [
+        "bgh-ransomware-se",
+        "cloud-centric-ransomware"
+      ],
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1219",
+      "technique_name": "Remote Access Tools",
+      "tactic": "Execution",
+      "context_paths": [
+        "bgh-ransomware-se"
+      ],
+      "confidence": "inferred",
+      "report_context": "Backfilled from attack_graph path(s) 'bgh-ransomware-se'",
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1078",
+      "technique_name": "Valid Accounts",
+      "tactic": "Lateral Movement",
+      "context_paths": [
+        "bgh-ransomware-se"
+      ],
+      "confidence": "inferred",
+      "report_context": "Backfilled from attack_graph path(s) 'bgh-ransomware-se'",
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1078",
+      "technique_name": "Valid Accounts",
+      "tactic": "Defense Evasion",
+      "context_paths": [
+        "cloud-centric-ransomware"
+      ],
+      "confidence": "inferred",
+      "report_context": "Backfilled from attack_graph path(s) 'cloud-centric-ransomware'",
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1195.002",
+      "technique_name": "Compromise Software Supply Chain",
+      "tactic": "Execution",
+      "context_paths": [
+        "supply-chain-compromise"
+      ],
+      "confidence": "inferred",
+      "report_context": "Backfilled from attack_graph path(s) 'supply-chain-compromise'",
+      "mitre_validated": true
+    },
+    {
+      "technique_id": "T1078",
+      "technique_name": "Valid Accounts",
+      "tactic": "Persistence",
+      "context_paths": [
+        "sophisticated-phishing-aitm"
+      ],
+      "confidence": "inferred",
+      "report_context": "Backfilled from attack_graph path(s) 'sophisticated-phishing-aitm'",
+      "mitre_validated": true
+    }
+  ],
+  "attack_graph": {
+    "paths": [
+      {
+        "path_id": "bgh-ransomware-se",
+        "description": "A social engineering-led attack abusing unmanaged virtual systems to steal credentials and deploy ransomware.",
+        "steps": [
+          {
+            "technique_id": "T1566.004",
+            "tactic": "Initial Access",
+            "leads_to": [
+              "T1219"
+            ]
+          },
+          {
+            "technique_id": "T1219",
+            "tactic": "Execution",
+            "leads_to": [
+              "T1003.003"
+            ]
+          },
+          {
+            "technique_id": "T1003.003",
+            "tactic": "Credential Access",
+            "leads_to": [
+              "T1078"
+            ]
+          },
+          {
+            "technique_id": "T1078",
+            "tactic": "Lateral Movement",
+            "leads_to": [
+              "T1486"
+            ]
+          },
+          {
+            "technique_id": "T1486",
+            "tactic": "Impact",
+            "leads_to": []
+          }
+        ]
+      },
+      {
+        "path_id": "cloud-centric-ransomware",
+        "description": "Attack path exploiting edge devices then leveraging cloud identity manipulation for persistence, data exfiltration, and impact.",
+        "steps": [
+          {
+            "technique_id": "T1190",
+            "tactic": "Initial Access",
+            "leads_to": [
+              "T1098"
+            ]
+          },
+          {
+            "technique_id": "T1098",
+            "tactic": "Persistence",
+            "leads_to": [
+              "T1078"
+            ]
+          },
+          {
+            "technique_id": "T1078",
+            "tactic": "Defense Evasion",
+            "leads_to": [
+              "T1567.002",
+              "T1486"
+            ]
+          },
+          {
+            "technique_id": "T1567.002",
+            "tactic": "Exfiltration",
+            "leads_to": [
+              "T1486"
+            ]
+          },
+          {
+            "technique_id": "T1486",
+            "tactic": "Impact",
+            "leads_to": []
+          }
+        ]
+      },
+      {
+        "path_id": "nation-state-espionage",
+        "description": "Espionage campaign using rapid exploitation of perimeter devices for long-term C2 and intelligence collection.",
+        "steps": [
+          {
+            "technique_id": "T1190",
+            "tactic": "Initial Access",
+            "leads_to": [
+              "T1543.002"
+            ]
+          },
+          {
+            "technique_id": "T1543.002",
+            "tactic": "Persistence",
+            "leads_to": [
+              "T1071.004"
+            ]
+          },
+          {
+            "technique_id": "T1071.004",
+            "tactic": "Command and Control",
+            "leads_to": []
+          }
+        ]
+      },
+      {
+        "path_id": "supply-chain-compromise",
+        "description": "Compromise of a software developer to inject malicious code into a product and attack downstream customers.",
+        "steps": [
+          {
+            "technique_id": "T1195",
+            "tactic": "Initial Access",
+            "leads_to": [
+              "T1195.002"
+            ]
+          },
+          {
+            "technique_id": "T1195.002",
+            "tactic": "Execution",
+            "leads_to": [
+              "T1528"
+            ]
+          },
+          {
+            "technique_id": "T1528",
+            "tactic": "Credential Access",
+            "leads_to": [
+              "T1070.004"
+            ]
+          },
+          {
+            "technique_id": "T1070.004",
+            "tactic": "Defense Evasion",
+            "leads_to": []
+          }
+        ]
+      },
+      {
+        "path_id": "sophisticated-phishing-aitm",
+        "description": "A multi-layered trust abuse campaign using social engineering and AiTM to bypass MFA and gain access.",
+        "steps": [
+          {
+            "technique_id": "T1566",
+            "tactic": "Initial Access",
+            "leads_to": [
+              "T1557"
+            ]
+          },
+          {
+            "technique_id": "T1557",
+            "tactic": "Credential Access",
+            "leads_to": [
+              "T1078"
+            ]
+          },
+          {
+            "technique_id": "T1078",
+            "tactic": "Persistence",
+            "leads_to": []
+          }
+        ]
+      }
+    ],
+    "convergence_points": [
+      "T1486",
+      "T1078"
+    ],
+    "branch_points": [
+      "T1190",
+      "T1078"
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+# Build config for event-mill deployment
+# Usage: gcloud builds submit --project=YOUR_PROJECT_ID --config=build-event-mill.yaml .
+
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:latest'
+      - '-f'
+      - 'cloud_install/Dockerfile.cloudrun'
+      - '.'
+
+  # Push to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:latest'
+
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:latest'
+
+substitutions:
+  _REGION: northamerica-northeast2
+
+options:
+  logging: CLOUD_LOGGING_ONLY

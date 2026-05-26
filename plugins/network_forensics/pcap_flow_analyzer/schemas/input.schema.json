@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["bidirectional", "long_connections", "protocol_breakdown"],
+      "default": "bidirectional",
+      "description": "Analysis mode."
+    },
+    "top_n": {
+      "type": "integer",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 200
+    },
+    "min_duration_seconds": {
+      "type": "number",
+      "default": 300,
+      "description": "Minimum duration in seconds for long_connections mode."
+    },
+    "filter_ip": {
+      "type": "string",
+      "description": "Optional IP filter to scope analysis to a specific host."
+    }
+  }
+}

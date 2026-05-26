@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     active_pillar TEXT,
+    workspace_folder TEXT,
     description TEXT
 );
 
@@ -105,14 +106,15 @@ class SessionDatabase:
         with self._connection() as conn:
             conn.execute(
                 """
-                INSERT INTO sessions (session_id, created_at, updated_at, active_pillar, description)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO sessions (session_id, created_at, updated_at, active_pillar, workspace_folder, description)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.session_id,
                     session.created_at.isoformat(),
                     session.updated_at.isoformat(),
                     session.active_pillar,
+                    session.workspace_folder,
                     session.description,
                 ),
             )
@@ -135,6 +137,7 @@ class SessionDatabase:
                 created_at=datetime.fromisoformat(row["created_at"]),
                 updated_at=datetime.fromisoformat(row["updated_at"]),
                 active_pillar=row["active_pillar"],
+                workspace_folder=row["workspace_folder"] if "workspace_folder" in row.keys() else None,
                 description=row["description"] or "",
             )
     
@@ -144,12 +147,13 @@ class SessionDatabase:
             conn.execute(
                 """
                 UPDATE sessions
-                SET updated_at = ?, active_pillar = ?, description = ?
+                SET updated_at = ?, active_pillar = ?, workspace_folder = ?, description = ?
                 WHERE session_id = ?
                 """,
                 (
                     session.updated_at.isoformat(),
                     session.active_pillar,
+                    session.workspace_folder,
                     session.description,
                     session.session_id,
                 ),
@@ -169,6 +173,7 @@ class SessionDatabase:
                     created_at=datetime.fromisoformat(row["created_at"]),
                     updated_at=datetime.fromisoformat(row["updated_at"]),
                     active_pillar=row["active_pillar"],
+                    workspace_folder=row["workspace_folder"] if "workspace_folder" in row.keys() else None,
                     description=row["description"] or "",
                 )
                 for row in rows

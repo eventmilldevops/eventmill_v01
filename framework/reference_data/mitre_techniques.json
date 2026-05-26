@@ -1,0 +1,6401 @@
+{
+  "T0800": {
+    "matrix": "ics",
+    "name": "Activate Firmware Update Mode",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0800"
+  },
+  "T0801": {
+    "matrix": "ics",
+    "name": "Monitor Process State",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0801"
+  },
+  "T0802": {
+    "matrix": "ics",
+    "name": "Automated Collection",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0802"
+  },
+  "T0803": {
+    "matrix": "ics",
+    "name": "Block Command Message",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0803"
+  },
+  "T0804": {
+    "matrix": "ics",
+    "name": "Block Reporting Message",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0804"
+  },
+  "T0805": {
+    "matrix": "ics",
+    "name": "Block Serial COM",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0805"
+  },
+  "T0806": {
+    "matrix": "ics",
+    "name": "Brute Force I/O",
+    "tactics": [
+      "Impair Process Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0806"
+  },
+  "T0807": {
+    "matrix": "ics",
+    "name": "Command-Line Interface",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0807"
+  },
+  "T0809": {
+    "matrix": "ics",
+    "name": "Data Destruction",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0809"
+  },
+  "T0811": {
+    "matrix": "ics",
+    "name": "Data from Information Repositories",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0811"
+  },
+  "T0812": {
+    "matrix": "ics",
+    "name": "Default Credentials",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0812"
+  },
+  "T0813": {
+    "matrix": "ics",
+    "name": "Denial of Control",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0813"
+  },
+  "T0814": {
+    "matrix": "ics",
+    "name": "Denial of Service",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0814"
+  },
+  "T0815": {
+    "matrix": "ics",
+    "name": "Denial of View",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0815"
+  },
+  "T0816": {
+    "matrix": "ics",
+    "name": "Device Restart/Shutdown",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0816"
+  },
+  "T0817": {
+    "matrix": "ics",
+    "name": "Drive-by Compromise",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0817"
+  },
+  "T0819": {
+    "matrix": "ics",
+    "name": "Exploit Public-Facing Application",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0819"
+  },
+  "T0820": {
+    "matrix": "ics",
+    "name": "Exploitation for Evasion",
+    "tactics": [
+      "Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0820"
+  },
+  "T0821": {
+    "matrix": "ics",
+    "name": "Modify Controller Tasking",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0821"
+  },
+  "T0822": {
+    "matrix": "ics",
+    "name": "External Remote Services",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0822"
+  },
+  "T0823": {
+    "matrix": "ics",
+    "name": "Graphical User Interface",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0823"
+  },
+  "T0826": {
+    "matrix": "ics",
+    "name": "Loss of Availability",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0826"
+  },
+  "T0827": {
+    "matrix": "ics",
+    "name": "Loss of Control",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0827"
+  },
+  "T0828": {
+    "matrix": "ics",
+    "name": "Loss of Productivity and Revenue",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0828"
+  },
+  "T0829": {
+    "matrix": "ics",
+    "name": "Loss of View",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0829"
+  },
+  "T0830": {
+    "matrix": "ics",
+    "name": "Adversary-in-the-Middle",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0830"
+  },
+  "T0831": {
+    "matrix": "ics",
+    "name": "Manipulation of Control",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0831"
+  },
+  "T0832": {
+    "matrix": "ics",
+    "name": "Manipulation of View",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0832"
+  },
+  "T0834": {
+    "matrix": "ics",
+    "name": "Native API",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0834"
+  },
+  "T0835": {
+    "matrix": "ics",
+    "name": "Manipulate I/O Image",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0835"
+  },
+  "T0836": {
+    "matrix": "ics",
+    "name": "Modify Parameter",
+    "tactics": [
+      "Impair Process Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0836"
+  },
+  "T0837": {
+    "matrix": "ics",
+    "name": "Loss of Protection",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0837"
+  },
+  "T0838": {
+    "matrix": "ics",
+    "name": "Modify Alarm Settings",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0838"
+  },
+  "T0839": {
+    "matrix": "ics",
+    "name": "Module Firmware",
+    "tactics": [
+      "Persistence",
+      "Impair Process Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0839"
+  },
+  "T0840": {
+    "matrix": "ics",
+    "name": "Network Connection Enumeration",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0840"
+  },
+  "T0842": {
+    "matrix": "ics",
+    "name": "Network Sniffing",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0842"
+  },
+  "T0843": {
+    "matrix": "ics",
+    "name": "Program Download",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0843"
+  },
+  "T0845": {
+    "matrix": "ics",
+    "name": "Program Upload",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0845"
+  },
+  "T0846": {
+    "matrix": "ics",
+    "name": "Remote System Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0846"
+  },
+  "T0847": {
+    "matrix": "ics",
+    "name": "Replication Through Removable Media",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0847"
+  },
+  "T0848": {
+    "matrix": "ics",
+    "name": "Rogue Master",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0848"
+  },
+  "T0849": {
+    "matrix": "ics",
+    "name": "Masquerading",
+    "tactics": [
+      "Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0849"
+  },
+  "T0851": {
+    "matrix": "ics",
+    "name": "Rootkit",
+    "tactics": [
+      "Evasion",
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0851"
+  },
+  "T0852": {
+    "matrix": "ics",
+    "name": "Screen Capture",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0852"
+  },
+  "T0853": {
+    "matrix": "ics",
+    "name": "Scripting",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0853"
+  },
+  "T0855": {
+    "matrix": "ics",
+    "name": "Unauthorized Command Message",
+    "tactics": [
+      "Impair Process Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0855"
+  },
+  "T0856": {
+    "matrix": "ics",
+    "name": "Spoof Reporting Message",
+    "tactics": [
+      "Evasion",
+      "Impair Process Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0856"
+  },
+  "T0857": {
+    "matrix": "ics",
+    "name": "System Firmware",
+    "tactics": [
+      "Persistence",
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0857"
+  },
+  "T0858": {
+    "matrix": "ics",
+    "name": "Change Operating Mode",
+    "tactics": [
+      "Execution",
+      "Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0858"
+  },
+  "T0859": {
+    "matrix": "ics",
+    "name": "Valid Accounts",
+    "tactics": [
+      "Persistence",
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0859"
+  },
+  "T0860": {
+    "matrix": "ics",
+    "name": "Wireless Compromise",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0860"
+  },
+  "T0861": {
+    "matrix": "ics",
+    "name": "Point & Tag Identification",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0861"
+  },
+  "T0862": {
+    "matrix": "ics",
+    "name": "Supply Chain Compromise",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0862"
+  },
+  "T0863": {
+    "matrix": "ics",
+    "name": "User Execution",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0863"
+  },
+  "T0864": {
+    "matrix": "ics",
+    "name": "Transient Cyber Asset",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0864"
+  },
+  "T0865": {
+    "matrix": "ics",
+    "name": "Spearphishing Attachment",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0865"
+  },
+  "T0866": {
+    "matrix": "ics",
+    "name": "Exploitation of Remote Services",
+    "tactics": [
+      "Initial Access",
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0866"
+  },
+  "T0867": {
+    "matrix": "ics",
+    "name": "Lateral Tool Transfer",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0867"
+  },
+  "T0868": {
+    "matrix": "ics",
+    "name": "Detect Operating Mode",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0868"
+  },
+  "T0869": {
+    "matrix": "ics",
+    "name": "Standard Application Layer Protocol",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0869"
+  },
+  "T0871": {
+    "matrix": "ics",
+    "name": "Execution through API",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0871"
+  },
+  "T0872": {
+    "matrix": "ics",
+    "name": "Indicator Removal on Host",
+    "tactics": [
+      "Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0872"
+  },
+  "T0873": {
+    "matrix": "ics",
+    "name": "Project File Infection",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0873"
+  },
+  "T0874": {
+    "matrix": "ics",
+    "name": "Hooking",
+    "tactics": [
+      "Execution",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0874"
+  },
+  "T0877": {
+    "matrix": "ics",
+    "name": "I/O Image",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0877"
+  },
+  "T0878": {
+    "matrix": "ics",
+    "name": "Alarm Suppression",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0878"
+  },
+  "T0879": {
+    "matrix": "ics",
+    "name": "Damage to Property",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0879"
+  },
+  "T0880": {
+    "matrix": "ics",
+    "name": "Loss of Safety",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0880"
+  },
+  "T0881": {
+    "matrix": "ics",
+    "name": "Service Stop",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0881"
+  },
+  "T0882": {
+    "matrix": "ics",
+    "name": "Theft of Operational Information",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0882"
+  },
+  "T0883": {
+    "matrix": "ics",
+    "name": "Internet Accessible Device",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0883"
+  },
+  "T0884": {
+    "matrix": "ics",
+    "name": "Connection Proxy",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0884"
+  },
+  "T0885": {
+    "matrix": "ics",
+    "name": "Commonly Used Port",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0885"
+  },
+  "T0886": {
+    "matrix": "ics",
+    "name": "Remote Services",
+    "tactics": [
+      "Initial Access",
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0886"
+  },
+  "T0887": {
+    "matrix": "ics",
+    "name": "Wireless Sniffing",
+    "tactics": [
+      "Discovery",
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0887"
+  },
+  "T0888": {
+    "matrix": "ics",
+    "name": "Remote System Information Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0888"
+  },
+  "T0889": {
+    "matrix": "ics",
+    "name": "Modify Program",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0889"
+  },
+  "T0890": {
+    "matrix": "ics",
+    "name": "Exploitation for Privilege Escalation",
+    "tactics": [
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0890"
+  },
+  "T0891": {
+    "matrix": "ics",
+    "name": "Hardcoded Credentials",
+    "tactics": [
+      "Lateral Movement",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0891"
+  },
+  "T0892": {
+    "matrix": "ics",
+    "name": "Change Credential",
+    "tactics": [
+      "Inhibit Response Function"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0892"
+  },
+  "T0893": {
+    "matrix": "ics",
+    "name": "Data from Local System",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0893"
+  },
+  "T0894": {
+    "matrix": "ics",
+    "name": "System Binary Proxy Execution",
+    "tactics": [
+      "Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0894"
+  },
+  "T0895": {
+    "matrix": "ics",
+    "name": "Autorun Image",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T0895"
+  },
+  "T1001": {
+    "matrix": "enterprise",
+    "name": "Data Obfuscation",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1001"
+  },
+  "T1001.001": {
+    "matrix": "enterprise",
+    "name": "Junk Data",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1001/001"
+  },
+  "T1001.002": {
+    "matrix": "enterprise",
+    "name": "Steganography",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1001/002"
+  },
+  "T1001.003": {
+    "matrix": "enterprise",
+    "name": "Protocol or Service Impersonation",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1001/003"
+  },
+  "T1003": {
+    "matrix": "enterprise",
+    "name": "OS Credential Dumping",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1003"
+  },
+  "T1003.001": {
+    "matrix": "enterprise",
+    "name": "LSASS Memory",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1003/001"
+  },
+  "T1003.002": {
+    "matrix": "enterprise",
+    "name": "Security Account Manager",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1003/002"
+  },
+  "T1003.003": {
+    "matrix": "enterprise",
+    "name": "NTDS",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1003/003"
+  },
+  "T1003.004": {
+    "matrix": "enterprise",
+    "name": "LSA Secrets",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1003/004"
+  },
+  "T1003.005": {
+    "matrix": "enterprise",
+    "name": "Cached Domain Credentials",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1003/005"
+  },
+  "T1003.006": {
+    "matrix": "enterprise",
+    "name": "DCSync",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1003/006"
+  },
+  "T1003.007": {
+    "matrix": "enterprise",
+    "name": "Proc Filesystem",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1003/007"
+  },
+  "T1003.008": {
+    "matrix": "enterprise",
+    "name": "/etc/passwd and /etc/shadow",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1003/008"
+  },
+  "T1005": {
+    "matrix": "enterprise",
+    "name": "Data from Local System",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1005"
+  },
+  "T1006": {
+    "matrix": "enterprise",
+    "name": "Direct Volume Access",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1006"
+  },
+  "T1007": {
+    "matrix": "enterprise",
+    "name": "System Service Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1007"
+  },
+  "T1008": {
+    "matrix": "enterprise",
+    "name": "Fallback Channels",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1008"
+  },
+  "T1010": {
+    "matrix": "enterprise",
+    "name": "Application Window Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1010"
+  },
+  "T1011": {
+    "matrix": "enterprise",
+    "name": "Exfiltration Over Other Network Medium",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1011"
+  },
+  "T1011.001": {
+    "matrix": "enterprise",
+    "name": "Exfiltration Over Bluetooth",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1011/001"
+  },
+  "T1012": {
+    "matrix": "enterprise",
+    "name": "Query Registry",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1012"
+  },
+  "T1014": {
+    "matrix": "enterprise",
+    "name": "Rootkit",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1014"
+  },
+  "T1016": {
+    "matrix": "enterprise",
+    "name": "System Network Configuration Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1016"
+  },
+  "T1016.001": {
+    "matrix": "enterprise",
+    "name": "Internet Connection Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1016/001"
+  },
+  "T1016.002": {
+    "matrix": "enterprise",
+    "name": "Wi-Fi Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1016/002"
+  },
+  "T1018": {
+    "matrix": "enterprise",
+    "name": "Remote System Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1018"
+  },
+  "T1020": {
+    "matrix": "enterprise",
+    "name": "Automated Exfiltration",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1020"
+  },
+  "T1020.001": {
+    "matrix": "enterprise",
+    "name": "Traffic Duplication",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1020/001"
+  },
+  "T1021": {
+    "matrix": "enterprise",
+    "name": "Remote Services",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1021"
+  },
+  "T1021.001": {
+    "matrix": "enterprise",
+    "name": "Remote Desktop Protocol",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1021/001"
+  },
+  "T1021.002": {
+    "matrix": "enterprise",
+    "name": "SMB/Windows Admin Shares",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1021/002"
+  },
+  "T1021.003": {
+    "matrix": "enterprise",
+    "name": "Distributed Component Object Model",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1021/003"
+  },
+  "T1021.004": {
+    "matrix": "enterprise",
+    "name": "SSH",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1021/004"
+  },
+  "T1021.005": {
+    "matrix": "enterprise",
+    "name": "VNC",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1021/005"
+  },
+  "T1021.006": {
+    "matrix": "enterprise",
+    "name": "Windows Remote Management",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1021/006"
+  },
+  "T1021.007": {
+    "matrix": "enterprise",
+    "name": "Cloud Services",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1021/007"
+  },
+  "T1021.008": {
+    "matrix": "enterprise",
+    "name": "Direct Cloud VM Connections",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1021/008"
+  },
+  "T1025": {
+    "matrix": "enterprise",
+    "name": "Data from Removable Media",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1025"
+  },
+  "T1027": {
+    "matrix": "enterprise",
+    "name": "Obfuscated Files or Information",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027"
+  },
+  "T1027.001": {
+    "matrix": "enterprise",
+    "name": "Binary Padding",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/001"
+  },
+  "T1027.002": {
+    "matrix": "enterprise",
+    "name": "Software Packing",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/002"
+  },
+  "T1027.003": {
+    "matrix": "enterprise",
+    "name": "Steganography",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/003"
+  },
+  "T1027.004": {
+    "matrix": "enterprise",
+    "name": "Compile After Delivery",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/004"
+  },
+  "T1027.005": {
+    "matrix": "enterprise",
+    "name": "Indicator Removal from Tools",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/005"
+  },
+  "T1027.006": {
+    "matrix": "enterprise",
+    "name": "HTML Smuggling",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/006"
+  },
+  "T1027.007": {
+    "matrix": "enterprise",
+    "name": "Dynamic API Resolution",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/007"
+  },
+  "T1027.008": {
+    "matrix": "enterprise",
+    "name": "Stripped Payloads",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/008"
+  },
+  "T1027.009": {
+    "matrix": "enterprise",
+    "name": "Embedded Payloads",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/009"
+  },
+  "T1027.010": {
+    "matrix": "enterprise",
+    "name": "Command Obfuscation",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/010"
+  },
+  "T1027.011": {
+    "matrix": "enterprise",
+    "name": "Fileless Storage",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/011"
+  },
+  "T1027.012": {
+    "matrix": "enterprise",
+    "name": "LNK Icon Smuggling",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/012"
+  },
+  "T1027.013": {
+    "matrix": "enterprise",
+    "name": "Encrypted/Encoded File",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/013"
+  },
+  "T1027.014": {
+    "matrix": "enterprise",
+    "name": "Polymorphic Code",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/014"
+  },
+  "T1027.015": {
+    "matrix": "enterprise",
+    "name": "Compression",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/015"
+  },
+  "T1027.016": {
+    "matrix": "enterprise",
+    "name": "Junk Code Insertion",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/016"
+  },
+  "T1027.017": {
+    "matrix": "enterprise",
+    "name": "SVG Smuggling",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1027/017"
+  },
+  "T1029": {
+    "matrix": "enterprise",
+    "name": "Scheduled Transfer",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1029"
+  },
+  "T1030": {
+    "matrix": "enterprise",
+    "name": "Data Transfer Size Limits",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1030"
+  },
+  "T1033": {
+    "matrix": "enterprise",
+    "name": "System Owner/User Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1033"
+  },
+  "T1036": {
+    "matrix": "enterprise",
+    "name": "Masquerading",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036"
+  },
+  "T1036.001": {
+    "matrix": "enterprise",
+    "name": "Invalid Code Signature",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/001"
+  },
+  "T1036.002": {
+    "matrix": "enterprise",
+    "name": "Right-to-Left Override",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/002"
+  },
+  "T1036.003": {
+    "matrix": "enterprise",
+    "name": "Rename Legitimate Utilities",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/003"
+  },
+  "T1036.004": {
+    "matrix": "enterprise",
+    "name": "Masquerade Task or Service",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/004"
+  },
+  "T1036.005": {
+    "matrix": "enterprise",
+    "name": "Match Legitimate Resource Name or Location",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/005"
+  },
+  "T1036.006": {
+    "matrix": "enterprise",
+    "name": "Space after Filename",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/006"
+  },
+  "T1036.007": {
+    "matrix": "enterprise",
+    "name": "Double File Extension",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/007"
+  },
+  "T1036.008": {
+    "matrix": "enterprise",
+    "name": "Masquerade File Type",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/008"
+  },
+  "T1036.009": {
+    "matrix": "enterprise",
+    "name": "Break Process Trees",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/009"
+  },
+  "T1036.010": {
+    "matrix": "enterprise",
+    "name": "Masquerade Account Name",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/010"
+  },
+  "T1036.011": {
+    "matrix": "enterprise",
+    "name": "Overwrite Process Arguments",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/011"
+  },
+  "T1036.012": {
+    "matrix": "enterprise",
+    "name": "Browser Fingerprint",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1036/012"
+  },
+  "T1037": {
+    "matrix": "enterprise",
+    "name": "Boot or Logon Initialization Scripts",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1037"
+  },
+  "T1037.001": {
+    "matrix": "enterprise",
+    "name": "Logon Script (Windows)",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1037/001"
+  },
+  "T1037.002": {
+    "matrix": "enterprise",
+    "name": "Login Hook",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1037/002"
+  },
+  "T1037.003": {
+    "matrix": "enterprise",
+    "name": "Network Logon Script",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1037/003"
+  },
+  "T1037.004": {
+    "matrix": "enterprise",
+    "name": "RC Scripts",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1037/004"
+  },
+  "T1037.005": {
+    "matrix": "enterprise",
+    "name": "Startup Items",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1037/005"
+  },
+  "T1039": {
+    "matrix": "enterprise",
+    "name": "Data from Network Shared Drive",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1039"
+  },
+  "T1040": {
+    "matrix": "enterprise",
+    "name": "Network Sniffing",
+    "tactics": [
+      "Credential Access",
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1040"
+  },
+  "T1041": {
+    "matrix": "enterprise",
+    "name": "Exfiltration Over C2 Channel",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1041"
+  },
+  "T1046": {
+    "matrix": "enterprise",
+    "name": "Network Service Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1046"
+  },
+  "T1047": {
+    "matrix": "enterprise",
+    "name": "Windows Management Instrumentation",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1047"
+  },
+  "T1048": {
+    "matrix": "enterprise",
+    "name": "Exfiltration Over Alternative Protocol",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1048"
+  },
+  "T1048.001": {
+    "matrix": "enterprise",
+    "name": "Exfiltration Over Symmetric Encrypted Non-C2 Protocol",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1048/001"
+  },
+  "T1048.002": {
+    "matrix": "enterprise",
+    "name": "Exfiltration Over Asymmetric Encrypted Non-C2 Protocol",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1048/002"
+  },
+  "T1048.003": {
+    "matrix": "enterprise",
+    "name": "Exfiltration Over Unencrypted Non-C2 Protocol",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1048/003"
+  },
+  "T1049": {
+    "matrix": "enterprise",
+    "name": "System Network Connections Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1049"
+  },
+  "T1052": {
+    "matrix": "enterprise",
+    "name": "Exfiltration Over Physical Medium",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1052"
+  },
+  "T1052.001": {
+    "matrix": "enterprise",
+    "name": "Exfiltration over USB",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1052/001"
+  },
+  "T1053": {
+    "matrix": "enterprise",
+    "name": "Scheduled Task/Job",
+    "tactics": [
+      "Execution",
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1053"
+  },
+  "T1053.002": {
+    "matrix": "enterprise",
+    "name": "At",
+    "tactics": [
+      "Execution",
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1053/002"
+  },
+  "T1053.003": {
+    "matrix": "enterprise",
+    "name": "Cron",
+    "tactics": [
+      "Execution",
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1053/003"
+  },
+  "T1053.005": {
+    "matrix": "enterprise",
+    "name": "Scheduled Task",
+    "tactics": [
+      "Execution",
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1053/005"
+  },
+  "T1053.006": {
+    "matrix": "enterprise",
+    "name": "Systemd Timers",
+    "tactics": [
+      "Execution",
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1053/006"
+  },
+  "T1053.007": {
+    "matrix": "enterprise",
+    "name": "Container Orchestration Job",
+    "tactics": [
+      "Execution",
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1053/007"
+  },
+  "T1055": {
+    "matrix": "enterprise",
+    "name": "Process Injection",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055"
+  },
+  "T1055.001": {
+    "matrix": "enterprise",
+    "name": "Dynamic-link Library Injection",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/001"
+  },
+  "T1055.002": {
+    "matrix": "enterprise",
+    "name": "Portable Executable Injection",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/002"
+  },
+  "T1055.003": {
+    "matrix": "enterprise",
+    "name": "Thread Execution Hijacking",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/003"
+  },
+  "T1055.004": {
+    "matrix": "enterprise",
+    "name": "Asynchronous Procedure Call",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/004"
+  },
+  "T1055.005": {
+    "matrix": "enterprise",
+    "name": "Thread Local Storage",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/005"
+  },
+  "T1055.008": {
+    "matrix": "enterprise",
+    "name": "Ptrace System Calls",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/008"
+  },
+  "T1055.009": {
+    "matrix": "enterprise",
+    "name": "Proc Memory",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/009"
+  },
+  "T1055.011": {
+    "matrix": "enterprise",
+    "name": "Extra Window Memory Injection",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/011"
+  },
+  "T1055.012": {
+    "matrix": "enterprise",
+    "name": "Process Hollowing",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/012"
+  },
+  "T1055.013": {
+    "matrix": "enterprise",
+    "name": "Process Doppelg\u00e4nging",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/013"
+  },
+  "T1055.014": {
+    "matrix": "enterprise",
+    "name": "VDSO Hijacking",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/014"
+  },
+  "T1055.015": {
+    "matrix": "enterprise",
+    "name": "ListPlanting",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1055/015"
+  },
+  "T1056": {
+    "matrix": "enterprise",
+    "name": "Input Capture",
+    "tactics": [
+      "Collection",
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1056"
+  },
+  "T1056.001": {
+    "matrix": "enterprise",
+    "name": "Keylogging",
+    "tactics": [
+      "Collection",
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1056/001"
+  },
+  "T1056.002": {
+    "matrix": "enterprise",
+    "name": "GUI Input Capture",
+    "tactics": [
+      "Collection",
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1056/002"
+  },
+  "T1056.003": {
+    "matrix": "enterprise",
+    "name": "Web Portal Capture",
+    "tactics": [
+      "Collection",
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1056/003"
+  },
+  "T1056.004": {
+    "matrix": "enterprise",
+    "name": "Credential API Hooking",
+    "tactics": [
+      "Collection",
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1056/004"
+  },
+  "T1057": {
+    "matrix": "enterprise",
+    "name": "Process Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1057"
+  },
+  "T1059": {
+    "matrix": "enterprise",
+    "name": "Command and Scripting Interpreter",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059"
+  },
+  "T1059.001": {
+    "matrix": "enterprise",
+    "name": "PowerShell",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/001"
+  },
+  "T1059.002": {
+    "matrix": "enterprise",
+    "name": "AppleScript",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/002"
+  },
+  "T1059.003": {
+    "matrix": "enterprise",
+    "name": "Windows Command Shell",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/003"
+  },
+  "T1059.004": {
+    "matrix": "enterprise",
+    "name": "Unix Shell",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/004"
+  },
+  "T1059.005": {
+    "matrix": "enterprise",
+    "name": "Visual Basic",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/005"
+  },
+  "T1059.006": {
+    "matrix": "enterprise",
+    "name": "Python",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/006"
+  },
+  "T1059.007": {
+    "matrix": "enterprise",
+    "name": "JavaScript",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/007"
+  },
+  "T1059.008": {
+    "matrix": "enterprise",
+    "name": "Network Device CLI",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/008"
+  },
+  "T1059.009": {
+    "matrix": "enterprise",
+    "name": "Cloud API",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/009"
+  },
+  "T1059.010": {
+    "matrix": "enterprise",
+    "name": "AutoHotKey & AutoIT",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/010"
+  },
+  "T1059.011": {
+    "matrix": "enterprise",
+    "name": "Lua",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/011"
+  },
+  "T1059.012": {
+    "matrix": "enterprise",
+    "name": "Hypervisor CLI",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/012"
+  },
+  "T1059.013": {
+    "matrix": "enterprise",
+    "name": "Container CLI/API",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1059/013"
+  },
+  "T1068": {
+    "matrix": "enterprise",
+    "name": "Exploitation for Privilege Escalation",
+    "tactics": [
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1068"
+  },
+  "T1069": {
+    "matrix": "enterprise",
+    "name": "Permission Groups Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1069"
+  },
+  "T1069.001": {
+    "matrix": "enterprise",
+    "name": "Local Groups",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1069/001"
+  },
+  "T1069.002": {
+    "matrix": "enterprise",
+    "name": "Domain Groups",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1069/002"
+  },
+  "T1069.003": {
+    "matrix": "enterprise",
+    "name": "Cloud Groups",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1069/003"
+  },
+  "T1070": {
+    "matrix": "enterprise",
+    "name": "Indicator Removal",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070"
+  },
+  "T1070.001": {
+    "matrix": "enterprise",
+    "name": "Clear Windows Event Logs",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070/001"
+  },
+  "T1070.002": {
+    "matrix": "enterprise",
+    "name": "Clear Linux or Mac System Logs",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070/002"
+  },
+  "T1070.003": {
+    "matrix": "enterprise",
+    "name": "Clear Command History",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070/003"
+  },
+  "T1070.004": {
+    "matrix": "enterprise",
+    "name": "File Deletion",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070/004"
+  },
+  "T1070.005": {
+    "matrix": "enterprise",
+    "name": "Network Share Connection Removal",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070/005"
+  },
+  "T1070.006": {
+    "matrix": "enterprise",
+    "name": "Timestomp",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070/006"
+  },
+  "T1070.007": {
+    "matrix": "enterprise",
+    "name": "Clear Network Connection History and Configurations",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070/007"
+  },
+  "T1070.008": {
+    "matrix": "enterprise",
+    "name": "Clear Mailbox Data",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070/008"
+  },
+  "T1070.009": {
+    "matrix": "enterprise",
+    "name": "Clear Persistence",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070/009"
+  },
+  "T1070.010": {
+    "matrix": "enterprise",
+    "name": "Relocate Malware",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1070/010"
+  },
+  "T1071": {
+    "matrix": "enterprise",
+    "name": "Application Layer Protocol",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1071"
+  },
+  "T1071.001": {
+    "matrix": "enterprise",
+    "name": "Web Protocols",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1071/001"
+  },
+  "T1071.002": {
+    "matrix": "enterprise",
+    "name": "File Transfer Protocols",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1071/002"
+  },
+  "T1071.003": {
+    "matrix": "enterprise",
+    "name": "Mail Protocols",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1071/003"
+  },
+  "T1071.004": {
+    "matrix": "enterprise",
+    "name": "DNS",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1071/004"
+  },
+  "T1071.005": {
+    "matrix": "enterprise",
+    "name": "Publish/Subscribe Protocols",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1071/005"
+  },
+  "T1072": {
+    "matrix": "enterprise",
+    "name": "Software Deployment Tools",
+    "tactics": [
+      "Execution",
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1072"
+  },
+  "T1074": {
+    "matrix": "enterprise",
+    "name": "Data Staged",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1074"
+  },
+  "T1074.001": {
+    "matrix": "enterprise",
+    "name": "Local Data Staging",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1074/001"
+  },
+  "T1074.002": {
+    "matrix": "enterprise",
+    "name": "Remote Data Staging",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1074/002"
+  },
+  "T1078": {
+    "matrix": "enterprise",
+    "name": "Valid Accounts",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence",
+      "Privilege Escalation",
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1078"
+  },
+  "T1078.001": {
+    "matrix": "enterprise",
+    "name": "Default Accounts",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence",
+      "Privilege Escalation",
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1078/001"
+  },
+  "T1078.002": {
+    "matrix": "enterprise",
+    "name": "Domain Accounts",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence",
+      "Privilege Escalation",
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1078/002"
+  },
+  "T1078.003": {
+    "matrix": "enterprise",
+    "name": "Local Accounts",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence",
+      "Privilege Escalation",
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1078/003"
+  },
+  "T1078.004": {
+    "matrix": "enterprise",
+    "name": "Cloud Accounts",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence",
+      "Privilege Escalation",
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1078/004"
+  },
+  "T1080": {
+    "matrix": "enterprise",
+    "name": "Taint Shared Content",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1080"
+  },
+  "T1082": {
+    "matrix": "enterprise",
+    "name": "System Information Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1082"
+  },
+  "T1083": {
+    "matrix": "enterprise",
+    "name": "File and Directory Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1083"
+  },
+  "T1087": {
+    "matrix": "enterprise",
+    "name": "Account Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1087"
+  },
+  "T1087.001": {
+    "matrix": "enterprise",
+    "name": "Local Account",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1087/001"
+  },
+  "T1087.002": {
+    "matrix": "enterprise",
+    "name": "Domain Account",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1087/002"
+  },
+  "T1087.003": {
+    "matrix": "enterprise",
+    "name": "Email Account",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1087/003"
+  },
+  "T1087.004": {
+    "matrix": "enterprise",
+    "name": "Cloud Account",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1087/004"
+  },
+  "T1090": {
+    "matrix": "enterprise",
+    "name": "Proxy",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1090"
+  },
+  "T1090.001": {
+    "matrix": "enterprise",
+    "name": "Internal Proxy",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1090/001"
+  },
+  "T1090.002": {
+    "matrix": "enterprise",
+    "name": "External Proxy",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1090/002"
+  },
+  "T1090.003": {
+    "matrix": "enterprise",
+    "name": "Multi-hop Proxy",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1090/003"
+  },
+  "T1090.004": {
+    "matrix": "enterprise",
+    "name": "Domain Fronting",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1090/004"
+  },
+  "T1091": {
+    "matrix": "enterprise",
+    "name": "Replication Through Removable Media",
+    "tactics": [
+      "Lateral Movement",
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1091"
+  },
+  "T1092": {
+    "matrix": "enterprise",
+    "name": "Communication Through Removable Media",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1092"
+  },
+  "T1095": {
+    "matrix": "enterprise",
+    "name": "Non-Application Layer Protocol",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1095"
+  },
+  "T1098": {
+    "matrix": "enterprise",
+    "name": "Account Manipulation",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1098"
+  },
+  "T1098.001": {
+    "matrix": "enterprise",
+    "name": "Additional Cloud Credentials",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1098/001"
+  },
+  "T1098.002": {
+    "matrix": "enterprise",
+    "name": "Additional Email Delegate Permissions",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1098/002"
+  },
+  "T1098.003": {
+    "matrix": "enterprise",
+    "name": "Additional Cloud Roles",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1098/003"
+  },
+  "T1098.004": {
+    "matrix": "enterprise",
+    "name": "SSH Authorized Keys",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1098/004"
+  },
+  "T1098.005": {
+    "matrix": "enterprise",
+    "name": "Device Registration",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1098/005"
+  },
+  "T1098.006": {
+    "matrix": "enterprise",
+    "name": "Additional Container Cluster Roles",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1098/006"
+  },
+  "T1098.007": {
+    "matrix": "enterprise",
+    "name": "Additional Local or Domain Groups",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1098/007"
+  },
+  "T1102": {
+    "matrix": "enterprise",
+    "name": "Web Service",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1102"
+  },
+  "T1102.001": {
+    "matrix": "enterprise",
+    "name": "Dead Drop Resolver",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1102/001"
+  },
+  "T1102.002": {
+    "matrix": "enterprise",
+    "name": "Bidirectional Communication",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1102/002"
+  },
+  "T1102.003": {
+    "matrix": "enterprise",
+    "name": "One-Way Communication",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1102/003"
+  },
+  "T1104": {
+    "matrix": "enterprise",
+    "name": "Multi-Stage Channels",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1104"
+  },
+  "T1105": {
+    "matrix": "enterprise",
+    "name": "Ingress Tool Transfer",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1105"
+  },
+  "T1106": {
+    "matrix": "enterprise",
+    "name": "Native API",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1106"
+  },
+  "T1110": {
+    "matrix": "enterprise",
+    "name": "Brute Force",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1110"
+  },
+  "T1110.001": {
+    "matrix": "enterprise",
+    "name": "Password Guessing",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1110/001"
+  },
+  "T1110.002": {
+    "matrix": "enterprise",
+    "name": "Password Cracking",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1110/002"
+  },
+  "T1110.003": {
+    "matrix": "enterprise",
+    "name": "Password Spraying",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1110/003"
+  },
+  "T1110.004": {
+    "matrix": "enterprise",
+    "name": "Credential Stuffing",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1110/004"
+  },
+  "T1111": {
+    "matrix": "enterprise",
+    "name": "Multi-Factor Authentication Interception",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1111"
+  },
+  "T1112": {
+    "matrix": "enterprise",
+    "name": "Modify Registry",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1112"
+  },
+  "T1113": {
+    "matrix": "enterprise",
+    "name": "Screen Capture",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1113"
+  },
+  "T1114": {
+    "matrix": "enterprise",
+    "name": "Email Collection",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1114"
+  },
+  "T1114.001": {
+    "matrix": "enterprise",
+    "name": "Local Email Collection",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1114/001"
+  },
+  "T1114.002": {
+    "matrix": "enterprise",
+    "name": "Remote Email Collection",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1114/002"
+  },
+  "T1114.003": {
+    "matrix": "enterprise",
+    "name": "Email Forwarding Rule",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1114/003"
+  },
+  "T1115": {
+    "matrix": "enterprise",
+    "name": "Clipboard Data",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1115"
+  },
+  "T1119": {
+    "matrix": "enterprise",
+    "name": "Automated Collection",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1119"
+  },
+  "T1120": {
+    "matrix": "enterprise",
+    "name": "Peripheral Device Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1120"
+  },
+  "T1123": {
+    "matrix": "enterprise",
+    "name": "Audio Capture",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1123"
+  },
+  "T1124": {
+    "matrix": "enterprise",
+    "name": "System Time Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1124"
+  },
+  "T1125": {
+    "matrix": "enterprise",
+    "name": "Video Capture",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1125"
+  },
+  "T1127": {
+    "matrix": "enterprise",
+    "name": "Trusted Developer Utilities Proxy Execution",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1127"
+  },
+  "T1127.001": {
+    "matrix": "enterprise",
+    "name": "MSBuild",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1127/001"
+  },
+  "T1127.002": {
+    "matrix": "enterprise",
+    "name": "ClickOnce",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1127/002"
+  },
+  "T1127.003": {
+    "matrix": "enterprise",
+    "name": "JamPlus",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1127/003"
+  },
+  "T1129": {
+    "matrix": "enterprise",
+    "name": "Shared Modules",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1129"
+  },
+  "T1132": {
+    "matrix": "enterprise",
+    "name": "Data Encoding",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1132"
+  },
+  "T1132.001": {
+    "matrix": "enterprise",
+    "name": "Standard Encoding",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1132/001"
+  },
+  "T1132.002": {
+    "matrix": "enterprise",
+    "name": "Non-Standard Encoding",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1132/002"
+  },
+  "T1133": {
+    "matrix": "enterprise",
+    "name": "External Remote Services",
+    "tactics": [
+      "Persistence",
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1133"
+  },
+  "T1134": {
+    "matrix": "enterprise",
+    "name": "Access Token Manipulation",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1134"
+  },
+  "T1134.001": {
+    "matrix": "enterprise",
+    "name": "Token Impersonation/Theft",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1134/001"
+  },
+  "T1134.002": {
+    "matrix": "enterprise",
+    "name": "Create Process with Token",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1134/002"
+  },
+  "T1134.003": {
+    "matrix": "enterprise",
+    "name": "Make and Impersonate Token",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1134/003"
+  },
+  "T1134.004": {
+    "matrix": "enterprise",
+    "name": "Parent PID Spoofing",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1134/004"
+  },
+  "T1134.005": {
+    "matrix": "enterprise",
+    "name": "SID-History Injection",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1134/005"
+  },
+  "T1135": {
+    "matrix": "enterprise",
+    "name": "Network Share Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1135"
+  },
+  "T1136": {
+    "matrix": "enterprise",
+    "name": "Create Account",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1136"
+  },
+  "T1136.001": {
+    "matrix": "enterprise",
+    "name": "Local Account",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1136/001"
+  },
+  "T1136.002": {
+    "matrix": "enterprise",
+    "name": "Domain Account",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1136/002"
+  },
+  "T1136.003": {
+    "matrix": "enterprise",
+    "name": "Cloud Account",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1136/003"
+  },
+  "T1137": {
+    "matrix": "enterprise",
+    "name": "Office Application Startup",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1137"
+  },
+  "T1137.001": {
+    "matrix": "enterprise",
+    "name": "Office Template Macros",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1137/001"
+  },
+  "T1137.002": {
+    "matrix": "enterprise",
+    "name": "Office Test",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1137/002"
+  },
+  "T1137.003": {
+    "matrix": "enterprise",
+    "name": "Outlook Forms",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1137/003"
+  },
+  "T1137.004": {
+    "matrix": "enterprise",
+    "name": "Outlook Home Page",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1137/004"
+  },
+  "T1137.005": {
+    "matrix": "enterprise",
+    "name": "Outlook Rules",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1137/005"
+  },
+  "T1137.006": {
+    "matrix": "enterprise",
+    "name": "Add-ins",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1137/006"
+  },
+  "T1140": {
+    "matrix": "enterprise",
+    "name": "Deobfuscate/Decode Files or Information",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1140"
+  },
+  "T1176": {
+    "matrix": "enterprise",
+    "name": "Software Extensions",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1176"
+  },
+  "T1176.001": {
+    "matrix": "enterprise",
+    "name": "Browser Extensions",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1176/001"
+  },
+  "T1176.002": {
+    "matrix": "enterprise",
+    "name": "IDE Extensions",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1176/002"
+  },
+  "T1185": {
+    "matrix": "enterprise",
+    "name": "Browser Session Hijacking",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1185"
+  },
+  "T1187": {
+    "matrix": "enterprise",
+    "name": "Forced Authentication",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1187"
+  },
+  "T1189": {
+    "matrix": "enterprise",
+    "name": "Drive-by Compromise",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1189"
+  },
+  "T1190": {
+    "matrix": "enterprise",
+    "name": "Exploit Public-Facing Application",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1190"
+  },
+  "T1195": {
+    "matrix": "enterprise",
+    "name": "Supply Chain Compromise",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1195"
+  },
+  "T1195.001": {
+    "matrix": "enterprise",
+    "name": "Compromise Software Dependencies and Development Tools",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1195/001"
+  },
+  "T1195.002": {
+    "matrix": "enterprise",
+    "name": "Compromise Software Supply Chain",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1195/002"
+  },
+  "T1195.003": {
+    "matrix": "enterprise",
+    "name": "Compromise Hardware Supply Chain",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1195/003"
+  },
+  "T1197": {
+    "matrix": "enterprise",
+    "name": "BITS Jobs",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1197"
+  },
+  "T1199": {
+    "matrix": "enterprise",
+    "name": "Trusted Relationship",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1199"
+  },
+  "T1200": {
+    "matrix": "enterprise",
+    "name": "Hardware Additions",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1200"
+  },
+  "T1201": {
+    "matrix": "enterprise",
+    "name": "Password Policy Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1201"
+  },
+  "T1202": {
+    "matrix": "enterprise",
+    "name": "Indirect Command Execution",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1202"
+  },
+  "T1203": {
+    "matrix": "enterprise",
+    "name": "Exploitation for Client Execution",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1203"
+  },
+  "T1204": {
+    "matrix": "enterprise",
+    "name": "User Execution",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1204"
+  },
+  "T1204.001": {
+    "matrix": "enterprise",
+    "name": "Malicious Link",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1204/001"
+  },
+  "T1204.002": {
+    "matrix": "enterprise",
+    "name": "Malicious File",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1204/002"
+  },
+  "T1204.003": {
+    "matrix": "enterprise",
+    "name": "Malicious Image",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1204/003"
+  },
+  "T1204.004": {
+    "matrix": "enterprise",
+    "name": "Malicious Copy and Paste",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1204/004"
+  },
+  "T1204.005": {
+    "matrix": "enterprise",
+    "name": "Malicious Library",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1204/005"
+  },
+  "T1205": {
+    "matrix": "enterprise",
+    "name": "Traffic Signaling",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence",
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1205"
+  },
+  "T1205.001": {
+    "matrix": "enterprise",
+    "name": "Port Knocking",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence",
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1205/001"
+  },
+  "T1205.002": {
+    "matrix": "enterprise",
+    "name": "Socket Filters",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence",
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1205/002"
+  },
+  "T1207": {
+    "matrix": "enterprise",
+    "name": "Rogue Domain Controller",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1207"
+  },
+  "T1210": {
+    "matrix": "enterprise",
+    "name": "Exploitation of Remote Services",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1210"
+  },
+  "T1211": {
+    "matrix": "enterprise",
+    "name": "Exploitation for Defense Evasion",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1211"
+  },
+  "T1212": {
+    "matrix": "enterprise",
+    "name": "Exploitation for Credential Access",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1212"
+  },
+  "T1213": {
+    "matrix": "enterprise",
+    "name": "Data from Information Repositories",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1213"
+  },
+  "T1213.001": {
+    "matrix": "enterprise",
+    "name": "Confluence",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1213/001"
+  },
+  "T1213.002": {
+    "matrix": "enterprise",
+    "name": "Sharepoint",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1213/002"
+  },
+  "T1213.003": {
+    "matrix": "enterprise",
+    "name": "Code Repositories",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1213/003"
+  },
+  "T1213.004": {
+    "matrix": "enterprise",
+    "name": "Customer Relationship Management Software",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1213/004"
+  },
+  "T1213.005": {
+    "matrix": "enterprise",
+    "name": "Messaging Applications",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1213/005"
+  },
+  "T1213.006": {
+    "matrix": "enterprise",
+    "name": "Databases",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1213/006"
+  },
+  "T1216": {
+    "matrix": "enterprise",
+    "name": "System Script Proxy Execution",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1216"
+  },
+  "T1216.001": {
+    "matrix": "enterprise",
+    "name": "PubPrn",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1216/001"
+  },
+  "T1216.002": {
+    "matrix": "enterprise",
+    "name": "SyncAppvPublishingServer",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1216/002"
+  },
+  "T1217": {
+    "matrix": "enterprise",
+    "name": "Browser Information Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1217"
+  },
+  "T1218": {
+    "matrix": "enterprise",
+    "name": "System Binary Proxy Execution",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218"
+  },
+  "T1218.001": {
+    "matrix": "enterprise",
+    "name": "Compiled HTML File",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/001"
+  },
+  "T1218.002": {
+    "matrix": "enterprise",
+    "name": "Control Panel",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/002"
+  },
+  "T1218.003": {
+    "matrix": "enterprise",
+    "name": "CMSTP",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/003"
+  },
+  "T1218.004": {
+    "matrix": "enterprise",
+    "name": "InstallUtil",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/004"
+  },
+  "T1218.005": {
+    "matrix": "enterprise",
+    "name": "Mshta",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/005"
+  },
+  "T1218.007": {
+    "matrix": "enterprise",
+    "name": "Msiexec",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/007"
+  },
+  "T1218.008": {
+    "matrix": "enterprise",
+    "name": "Odbcconf",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/008"
+  },
+  "T1218.009": {
+    "matrix": "enterprise",
+    "name": "Regsvcs/Regasm",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/009"
+  },
+  "T1218.010": {
+    "matrix": "enterprise",
+    "name": "Regsvr32",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/010"
+  },
+  "T1218.011": {
+    "matrix": "enterprise",
+    "name": "Rundll32",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/011"
+  },
+  "T1218.012": {
+    "matrix": "enterprise",
+    "name": "Verclsid",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/012"
+  },
+  "T1218.013": {
+    "matrix": "enterprise",
+    "name": "Mavinject",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/013"
+  },
+  "T1218.014": {
+    "matrix": "enterprise",
+    "name": "MMC",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/014"
+  },
+  "T1218.015": {
+    "matrix": "enterprise",
+    "name": "Electron Applications",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1218/015"
+  },
+  "T1219": {
+    "matrix": "enterprise",
+    "name": "Remote Access Tools",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1219"
+  },
+  "T1219.001": {
+    "matrix": "enterprise",
+    "name": "IDE Tunneling",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1219/001"
+  },
+  "T1219.002": {
+    "matrix": "enterprise",
+    "name": "Remote Desktop Software",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1219/002"
+  },
+  "T1219.003": {
+    "matrix": "enterprise",
+    "name": "Remote Access Hardware",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1219/003"
+  },
+  "T1220": {
+    "matrix": "enterprise",
+    "name": "XSL Script Processing",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1220"
+  },
+  "T1221": {
+    "matrix": "enterprise",
+    "name": "Template Injection",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1221"
+  },
+  "T1222": {
+    "matrix": "enterprise",
+    "name": "File and Directory Permissions Modification",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1222"
+  },
+  "T1222.001": {
+    "matrix": "enterprise",
+    "name": "Windows File and Directory Permissions Modification",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1222/001"
+  },
+  "T1222.002": {
+    "matrix": "enterprise",
+    "name": "Linux and Mac File and Directory Permissions Modification",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1222/002"
+  },
+  "T1480": {
+    "matrix": "enterprise",
+    "name": "Execution Guardrails",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1480"
+  },
+  "T1480.001": {
+    "matrix": "enterprise",
+    "name": "Environmental Keying",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1480/001"
+  },
+  "T1480.002": {
+    "matrix": "enterprise",
+    "name": "Mutual Exclusion",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1480/002"
+  },
+  "T1482": {
+    "matrix": "enterprise",
+    "name": "Domain Trust Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1482"
+  },
+  "T1484": {
+    "matrix": "enterprise",
+    "name": "Domain or Tenant Policy Modification",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1484"
+  },
+  "T1484.001": {
+    "matrix": "enterprise",
+    "name": "Group Policy Modification",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1484/001"
+  },
+  "T1484.002": {
+    "matrix": "enterprise",
+    "name": "Trust Modification",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1484/002"
+  },
+  "T1485": {
+    "matrix": "enterprise",
+    "name": "Data Destruction",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1485"
+  },
+  "T1485.001": {
+    "matrix": "enterprise",
+    "name": "Lifecycle-Triggered Deletion",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1485/001"
+  },
+  "T1486": {
+    "matrix": "enterprise",
+    "name": "Data Encrypted for Impact",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1486"
+  },
+  "T1489": {
+    "matrix": "enterprise",
+    "name": "Service Stop",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1489"
+  },
+  "T1490": {
+    "matrix": "enterprise",
+    "name": "Inhibit System Recovery",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1490"
+  },
+  "T1491": {
+    "matrix": "enterprise",
+    "name": "Defacement",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1491"
+  },
+  "T1491.001": {
+    "matrix": "enterprise",
+    "name": "Internal Defacement",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1491/001"
+  },
+  "T1491.002": {
+    "matrix": "enterprise",
+    "name": "External Defacement",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1491/002"
+  },
+  "T1495": {
+    "matrix": "enterprise",
+    "name": "Firmware Corruption",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1495"
+  },
+  "T1496": {
+    "matrix": "enterprise",
+    "name": "Resource Hijacking",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1496"
+  },
+  "T1496.001": {
+    "matrix": "enterprise",
+    "name": "Compute Hijacking",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1496/001"
+  },
+  "T1496.002": {
+    "matrix": "enterprise",
+    "name": "Bandwidth Hijacking",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1496/002"
+  },
+  "T1496.003": {
+    "matrix": "enterprise",
+    "name": "SMS Pumping",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1496/003"
+  },
+  "T1496.004": {
+    "matrix": "enterprise",
+    "name": "Cloud Service Hijacking",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1496/004"
+  },
+  "T1497": {
+    "matrix": "enterprise",
+    "name": "Virtualization/Sandbox Evasion",
+    "tactics": [
+      "Defense Evasion",
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1497"
+  },
+  "T1497.001": {
+    "matrix": "enterprise",
+    "name": "System Checks",
+    "tactics": [
+      "Defense Evasion",
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1497/001"
+  },
+  "T1497.002": {
+    "matrix": "enterprise",
+    "name": "User Activity Based Checks",
+    "tactics": [
+      "Defense Evasion",
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1497/002"
+  },
+  "T1497.003": {
+    "matrix": "enterprise",
+    "name": "Time Based Checks",
+    "tactics": [
+      "Defense Evasion",
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1497/003"
+  },
+  "T1498": {
+    "matrix": "enterprise",
+    "name": "Network Denial of Service",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1498"
+  },
+  "T1498.001": {
+    "matrix": "enterprise",
+    "name": "Direct Network Flood",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1498/001"
+  },
+  "T1498.002": {
+    "matrix": "enterprise",
+    "name": "Reflection Amplification",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1498/002"
+  },
+  "T1499": {
+    "matrix": "enterprise",
+    "name": "Endpoint Denial of Service",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1499"
+  },
+  "T1499.001": {
+    "matrix": "enterprise",
+    "name": "OS Exhaustion Flood",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1499/001"
+  },
+  "T1499.002": {
+    "matrix": "enterprise",
+    "name": "Service Exhaustion Flood",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1499/002"
+  },
+  "T1499.003": {
+    "matrix": "enterprise",
+    "name": "Application Exhaustion Flood",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1499/003"
+  },
+  "T1499.004": {
+    "matrix": "enterprise",
+    "name": "Application or System Exploitation",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1499/004"
+  },
+  "T1505": {
+    "matrix": "enterprise",
+    "name": "Server Software Component",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1505"
+  },
+  "T1505.001": {
+    "matrix": "enterprise",
+    "name": "SQL Stored Procedures",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1505/001"
+  },
+  "T1505.002": {
+    "matrix": "enterprise",
+    "name": "Transport Agent",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1505/002"
+  },
+  "T1505.003": {
+    "matrix": "enterprise",
+    "name": "Web Shell",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1505/003"
+  },
+  "T1505.004": {
+    "matrix": "enterprise",
+    "name": "IIS Components",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1505/004"
+  },
+  "T1505.005": {
+    "matrix": "enterprise",
+    "name": "Terminal Services DLL",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1505/005"
+  },
+  "T1505.006": {
+    "matrix": "enterprise",
+    "name": "vSphere Installation Bundles",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1505/006"
+  },
+  "T1518": {
+    "matrix": "enterprise",
+    "name": "Software Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1518"
+  },
+  "T1518.001": {
+    "matrix": "enterprise",
+    "name": "Security Software Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1518/001"
+  },
+  "T1518.002": {
+    "matrix": "enterprise",
+    "name": "Backup Software Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1518/002"
+  },
+  "T1525": {
+    "matrix": "enterprise",
+    "name": "Implant Internal Image",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1525"
+  },
+  "T1526": {
+    "matrix": "enterprise",
+    "name": "Cloud Service Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1526"
+  },
+  "T1528": {
+    "matrix": "enterprise",
+    "name": "Steal Application Access Token",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1528"
+  },
+  "T1529": {
+    "matrix": "enterprise",
+    "name": "System Shutdown/Reboot",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1529"
+  },
+  "T1530": {
+    "matrix": "enterprise",
+    "name": "Data from Cloud Storage",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1530"
+  },
+  "T1531": {
+    "matrix": "enterprise",
+    "name": "Account Access Removal",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1531"
+  },
+  "T1534": {
+    "matrix": "enterprise",
+    "name": "Internal Spearphishing",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1534"
+  },
+  "T1535": {
+    "matrix": "enterprise",
+    "name": "Unused/Unsupported Cloud Regions",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1535"
+  },
+  "T1537": {
+    "matrix": "enterprise",
+    "name": "Transfer Data to Cloud Account",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1537"
+  },
+  "T1538": {
+    "matrix": "enterprise",
+    "name": "Cloud Service Dashboard",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1538"
+  },
+  "T1539": {
+    "matrix": "enterprise",
+    "name": "Steal Web Session Cookie",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1539"
+  },
+  "T1542": {
+    "matrix": "enterprise",
+    "name": "Pre-OS Boot",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1542"
+  },
+  "T1542.001": {
+    "matrix": "enterprise",
+    "name": "System Firmware",
+    "tactics": [
+      "Persistence",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1542/001"
+  },
+  "T1542.002": {
+    "matrix": "enterprise",
+    "name": "Component Firmware",
+    "tactics": [
+      "Persistence",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1542/002"
+  },
+  "T1542.003": {
+    "matrix": "enterprise",
+    "name": "Bootkit",
+    "tactics": [
+      "Persistence",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1542/003"
+  },
+  "T1542.004": {
+    "matrix": "enterprise",
+    "name": "ROMMONkit",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1542/004"
+  },
+  "T1542.005": {
+    "matrix": "enterprise",
+    "name": "TFTP Boot",
+    "tactics": [
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1542/005"
+  },
+  "T1543": {
+    "matrix": "enterprise",
+    "name": "Create or Modify System Process",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1543"
+  },
+  "T1543.001": {
+    "matrix": "enterprise",
+    "name": "Launch Agent",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1543/001"
+  },
+  "T1543.002": {
+    "matrix": "enterprise",
+    "name": "Systemd Service",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1543/002"
+  },
+  "T1543.003": {
+    "matrix": "enterprise",
+    "name": "Windows Service",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1543/003"
+  },
+  "T1543.004": {
+    "matrix": "enterprise",
+    "name": "Launch Daemon",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1543/004"
+  },
+  "T1543.005": {
+    "matrix": "enterprise",
+    "name": "Container Service",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1543/005"
+  },
+  "T1546": {
+    "matrix": "enterprise",
+    "name": "Event Triggered Execution",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546"
+  },
+  "T1546.001": {
+    "matrix": "enterprise",
+    "name": "Change Default File Association",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/001"
+  },
+  "T1546.002": {
+    "matrix": "enterprise",
+    "name": "Screensaver",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/002"
+  },
+  "T1546.003": {
+    "matrix": "enterprise",
+    "name": "Windows Management Instrumentation Event Subscription",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/003"
+  },
+  "T1546.004": {
+    "matrix": "enterprise",
+    "name": "Unix Shell Configuration Modification",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/004"
+  },
+  "T1546.005": {
+    "matrix": "enterprise",
+    "name": "Trap",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/005"
+  },
+  "T1546.006": {
+    "matrix": "enterprise",
+    "name": "LC_LOAD_DYLIB Addition",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/006"
+  },
+  "T1546.007": {
+    "matrix": "enterprise",
+    "name": "Netsh Helper DLL",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/007"
+  },
+  "T1546.008": {
+    "matrix": "enterprise",
+    "name": "Accessibility Features",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/008"
+  },
+  "T1546.009": {
+    "matrix": "enterprise",
+    "name": "AppCert DLLs",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/009"
+  },
+  "T1546.010": {
+    "matrix": "enterprise",
+    "name": "AppInit DLLs",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/010"
+  },
+  "T1546.011": {
+    "matrix": "enterprise",
+    "name": "Application Shimming",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/011"
+  },
+  "T1546.012": {
+    "matrix": "enterprise",
+    "name": "Image File Execution Options Injection",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/012"
+  },
+  "T1546.013": {
+    "matrix": "enterprise",
+    "name": "PowerShell Profile",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/013"
+  },
+  "T1546.014": {
+    "matrix": "enterprise",
+    "name": "Emond",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/014"
+  },
+  "T1546.015": {
+    "matrix": "enterprise",
+    "name": "Component Object Model Hijacking",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/015"
+  },
+  "T1546.016": {
+    "matrix": "enterprise",
+    "name": "Installer Packages",
+    "tactics": [
+      "Privilege Escalation",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/016"
+  },
+  "T1546.017": {
+    "matrix": "enterprise",
+    "name": "Udev Rules",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/017"
+  },
+  "T1546.018": {
+    "matrix": "enterprise",
+    "name": "Python Startup Hooks",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1546/018"
+  },
+  "T1547": {
+    "matrix": "enterprise",
+    "name": "Boot or Logon Autostart Execution",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547"
+  },
+  "T1547.001": {
+    "matrix": "enterprise",
+    "name": "Registry Run Keys / Startup Folder",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/001"
+  },
+  "T1547.002": {
+    "matrix": "enterprise",
+    "name": "Authentication Package",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/002"
+  },
+  "T1547.003": {
+    "matrix": "enterprise",
+    "name": "Time Providers",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/003"
+  },
+  "T1547.004": {
+    "matrix": "enterprise",
+    "name": "Winlogon Helper DLL",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/004"
+  },
+  "T1547.005": {
+    "matrix": "enterprise",
+    "name": "Security Support Provider",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/005"
+  },
+  "T1547.006": {
+    "matrix": "enterprise",
+    "name": "Kernel Modules and Extensions",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/006"
+  },
+  "T1547.007": {
+    "matrix": "enterprise",
+    "name": "Re-opened Applications",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/007"
+  },
+  "T1547.008": {
+    "matrix": "enterprise",
+    "name": "LSASS Driver",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/008"
+  },
+  "T1547.009": {
+    "matrix": "enterprise",
+    "name": "Shortcut Modification",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/009"
+  },
+  "T1547.010": {
+    "matrix": "enterprise",
+    "name": "Port Monitors",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/010"
+  },
+  "T1547.012": {
+    "matrix": "enterprise",
+    "name": "Print Processors",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/012"
+  },
+  "T1547.013": {
+    "matrix": "enterprise",
+    "name": "XDG Autostart Entries",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/013"
+  },
+  "T1547.014": {
+    "matrix": "enterprise",
+    "name": "Active Setup",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/014"
+  },
+  "T1547.015": {
+    "matrix": "enterprise",
+    "name": "Login Items",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1547/015"
+  },
+  "T1548": {
+    "matrix": "enterprise",
+    "name": "Abuse Elevation Control Mechanism",
+    "tactics": [
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1548"
+  },
+  "T1548.001": {
+    "matrix": "enterprise",
+    "name": "Setuid and Setgid",
+    "tactics": [
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1548/001"
+  },
+  "T1548.002": {
+    "matrix": "enterprise",
+    "name": "Bypass User Account Control",
+    "tactics": [
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1548/002"
+  },
+  "T1548.003": {
+    "matrix": "enterprise",
+    "name": "Sudo and Sudo Caching",
+    "tactics": [
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1548/003"
+  },
+  "T1548.004": {
+    "matrix": "enterprise",
+    "name": "Elevated Execution with Prompt",
+    "tactics": [
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1548/004"
+  },
+  "T1548.005": {
+    "matrix": "enterprise",
+    "name": "Temporary Elevated Cloud Access",
+    "tactics": [
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1548/005"
+  },
+  "T1548.006": {
+    "matrix": "enterprise",
+    "name": "TCC Manipulation",
+    "tactics": [
+      "Defense Evasion",
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1548/006"
+  },
+  "T1550": {
+    "matrix": "enterprise",
+    "name": "Use Alternate Authentication Material",
+    "tactics": [
+      "Defense Evasion",
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1550"
+  },
+  "T1550.001": {
+    "matrix": "enterprise",
+    "name": "Application Access Token",
+    "tactics": [
+      "Defense Evasion",
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1550/001"
+  },
+  "T1550.002": {
+    "matrix": "enterprise",
+    "name": "Pass the Hash",
+    "tactics": [
+      "Defense Evasion",
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1550/002"
+  },
+  "T1550.003": {
+    "matrix": "enterprise",
+    "name": "Pass the Ticket",
+    "tactics": [
+      "Defense Evasion",
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1550/003"
+  },
+  "T1550.004": {
+    "matrix": "enterprise",
+    "name": "Web Session Cookie",
+    "tactics": [
+      "Defense Evasion",
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1550/004"
+  },
+  "T1552": {
+    "matrix": "enterprise",
+    "name": "Unsecured Credentials",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1552"
+  },
+  "T1552.001": {
+    "matrix": "enterprise",
+    "name": "Credentials In Files",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1552/001"
+  },
+  "T1552.002": {
+    "matrix": "enterprise",
+    "name": "Credentials in Registry",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1552/002"
+  },
+  "T1552.003": {
+    "matrix": "enterprise",
+    "name": "Shell History",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1552/003"
+  },
+  "T1552.004": {
+    "matrix": "enterprise",
+    "name": "Private Keys",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1552/004"
+  },
+  "T1552.005": {
+    "matrix": "enterprise",
+    "name": "Cloud Instance Metadata API",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1552/005"
+  },
+  "T1552.006": {
+    "matrix": "enterprise",
+    "name": "Group Policy Preferences",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1552/006"
+  },
+  "T1552.007": {
+    "matrix": "enterprise",
+    "name": "Container API",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1552/007"
+  },
+  "T1552.008": {
+    "matrix": "enterprise",
+    "name": "Chat Messages",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1552/008"
+  },
+  "T1553": {
+    "matrix": "enterprise",
+    "name": "Subvert Trust Controls",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1553"
+  },
+  "T1553.001": {
+    "matrix": "enterprise",
+    "name": "Gatekeeper Bypass",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1553/001"
+  },
+  "T1553.002": {
+    "matrix": "enterprise",
+    "name": "Code Signing",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1553/002"
+  },
+  "T1553.003": {
+    "matrix": "enterprise",
+    "name": "SIP and Trust Provider Hijacking",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1553/003"
+  },
+  "T1553.004": {
+    "matrix": "enterprise",
+    "name": "Install Root Certificate",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1553/004"
+  },
+  "T1553.005": {
+    "matrix": "enterprise",
+    "name": "Mark-of-the-Web Bypass",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1553/005"
+  },
+  "T1553.006": {
+    "matrix": "enterprise",
+    "name": "Code Signing Policy Modification",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1553/006"
+  },
+  "T1554": {
+    "matrix": "enterprise",
+    "name": "Compromise Host Software Binary",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1554"
+  },
+  "T1555": {
+    "matrix": "enterprise",
+    "name": "Credentials from Password Stores",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1555"
+  },
+  "T1555.001": {
+    "matrix": "enterprise",
+    "name": "Keychain",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1555/001"
+  },
+  "T1555.002": {
+    "matrix": "enterprise",
+    "name": "Securityd Memory",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1555/002"
+  },
+  "T1555.003": {
+    "matrix": "enterprise",
+    "name": "Credentials from Web Browsers",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1555/003"
+  },
+  "T1555.004": {
+    "matrix": "enterprise",
+    "name": "Windows Credential Manager",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1555/004"
+  },
+  "T1555.005": {
+    "matrix": "enterprise",
+    "name": "Password Managers",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1555/005"
+  },
+  "T1555.006": {
+    "matrix": "enterprise",
+    "name": "Cloud Secrets Management Stores",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1555/006"
+  },
+  "T1556": {
+    "matrix": "enterprise",
+    "name": "Modify Authentication Process",
+    "tactics": [
+      "Credential Access",
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1556"
+  },
+  "T1556.001": {
+    "matrix": "enterprise",
+    "name": "Domain Controller Authentication",
+    "tactics": [
+      "Credential Access",
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1556/001"
+  },
+  "T1556.002": {
+    "matrix": "enterprise",
+    "name": "Password Filter DLL",
+    "tactics": [
+      "Credential Access",
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1556/002"
+  },
+  "T1556.003": {
+    "matrix": "enterprise",
+    "name": "Pluggable Authentication Modules",
+    "tactics": [
+      "Credential Access",
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1556/003"
+  },
+  "T1556.004": {
+    "matrix": "enterprise",
+    "name": "Network Device Authentication",
+    "tactics": [
+      "Credential Access",
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1556/004"
+  },
+  "T1556.005": {
+    "matrix": "enterprise",
+    "name": "Reversible Encryption",
+    "tactics": [
+      "Credential Access",
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1556/005"
+  },
+  "T1556.006": {
+    "matrix": "enterprise",
+    "name": "Multi-Factor Authentication",
+    "tactics": [
+      "Credential Access",
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1556/006"
+  },
+  "T1556.007": {
+    "matrix": "enterprise",
+    "name": "Hybrid Identity",
+    "tactics": [
+      "Credential Access",
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1556/007"
+  },
+  "T1556.008": {
+    "matrix": "enterprise",
+    "name": "Network Provider DLL",
+    "tactics": [
+      "Credential Access",
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1556/008"
+  },
+  "T1556.009": {
+    "matrix": "enterprise",
+    "name": "Conditional Access Policies",
+    "tactics": [
+      "Credential Access",
+      "Defense Evasion",
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1556/009"
+  },
+  "T1557": {
+    "matrix": "enterprise",
+    "name": "Adversary-in-the-Middle",
+    "tactics": [
+      "Credential Access",
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1557"
+  },
+  "T1557.001": {
+    "matrix": "enterprise",
+    "name": "LLMNR/NBT-NS Poisoning and SMB Relay",
+    "tactics": [
+      "Credential Access",
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1557/001"
+  },
+  "T1557.002": {
+    "matrix": "enterprise",
+    "name": "ARP Cache Poisoning",
+    "tactics": [
+      "Credential Access",
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1557/002"
+  },
+  "T1557.003": {
+    "matrix": "enterprise",
+    "name": "DHCP Spoofing",
+    "tactics": [
+      "Credential Access",
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1557/003"
+  },
+  "T1557.004": {
+    "matrix": "enterprise",
+    "name": "Evil Twin",
+    "tactics": [
+      "Credential Access",
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1557/004"
+  },
+  "T1558": {
+    "matrix": "enterprise",
+    "name": "Steal or Forge Kerberos Tickets",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1558"
+  },
+  "T1558.001": {
+    "matrix": "enterprise",
+    "name": "Golden Ticket",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1558/001"
+  },
+  "T1558.002": {
+    "matrix": "enterprise",
+    "name": "Silver Ticket",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1558/002"
+  },
+  "T1558.003": {
+    "matrix": "enterprise",
+    "name": "Kerberoasting",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1558/003"
+  },
+  "T1558.004": {
+    "matrix": "enterprise",
+    "name": "AS-REP Roasting",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1558/004"
+  },
+  "T1558.005": {
+    "matrix": "enterprise",
+    "name": "Ccache Files",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1558/005"
+  },
+  "T1559": {
+    "matrix": "enterprise",
+    "name": "Inter-Process Communication",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1559"
+  },
+  "T1559.001": {
+    "matrix": "enterprise",
+    "name": "Component Object Model",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1559/001"
+  },
+  "T1559.002": {
+    "matrix": "enterprise",
+    "name": "Dynamic Data Exchange",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1559/002"
+  },
+  "T1559.003": {
+    "matrix": "enterprise",
+    "name": "XPC Services",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1559/003"
+  },
+  "T1560": {
+    "matrix": "enterprise",
+    "name": "Archive Collected Data",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1560"
+  },
+  "T1560.001": {
+    "matrix": "enterprise",
+    "name": "Archive via Utility",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1560/001"
+  },
+  "T1560.002": {
+    "matrix": "enterprise",
+    "name": "Archive via Library",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1560/002"
+  },
+  "T1560.003": {
+    "matrix": "enterprise",
+    "name": "Archive via Custom Method",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1560/003"
+  },
+  "T1561": {
+    "matrix": "enterprise",
+    "name": "Disk Wipe",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1561"
+  },
+  "T1561.001": {
+    "matrix": "enterprise",
+    "name": "Disk Content Wipe",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1561/001"
+  },
+  "T1561.002": {
+    "matrix": "enterprise",
+    "name": "Disk Structure Wipe",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1561/002"
+  },
+  "T1562": {
+    "matrix": "enterprise",
+    "name": "Impair Defenses",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562"
+  },
+  "T1562.001": {
+    "matrix": "enterprise",
+    "name": "Disable or Modify Tools",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/001"
+  },
+  "T1562.002": {
+    "matrix": "enterprise",
+    "name": "Disable Windows Event Logging",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/002"
+  },
+  "T1562.003": {
+    "matrix": "enterprise",
+    "name": "Impair Command History Logging",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/003"
+  },
+  "T1562.004": {
+    "matrix": "enterprise",
+    "name": "Disable or Modify System Firewall",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/004"
+  },
+  "T1562.006": {
+    "matrix": "enterprise",
+    "name": "Indicator Blocking",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/006"
+  },
+  "T1562.007": {
+    "matrix": "enterprise",
+    "name": "Disable or Modify Cloud Firewall",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/007"
+  },
+  "T1562.008": {
+    "matrix": "enterprise",
+    "name": "Disable or Modify Cloud Logs",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/008"
+  },
+  "T1562.009": {
+    "matrix": "enterprise",
+    "name": "Safe Mode Boot",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/009"
+  },
+  "T1562.010": {
+    "matrix": "enterprise",
+    "name": "Downgrade Attack",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/010"
+  },
+  "T1562.011": {
+    "matrix": "enterprise",
+    "name": "Spoof Security Alerting",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/011"
+  },
+  "T1562.012": {
+    "matrix": "enterprise",
+    "name": "Disable or Modify Linux Audit System",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/012"
+  },
+  "T1562.013": {
+    "matrix": "enterprise",
+    "name": "Disable or Modify Network Device Firewall",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1562/013"
+  },
+  "T1563": {
+    "matrix": "enterprise",
+    "name": "Remote Service Session Hijacking",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1563"
+  },
+  "T1563.001": {
+    "matrix": "enterprise",
+    "name": "SSH Hijacking",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1563/001"
+  },
+  "T1563.002": {
+    "matrix": "enterprise",
+    "name": "RDP Hijacking",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1563/002"
+  },
+  "T1564": {
+    "matrix": "enterprise",
+    "name": "Hide Artifacts",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564"
+  },
+  "T1564.001": {
+    "matrix": "enterprise",
+    "name": "Hidden Files and Directories",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/001"
+  },
+  "T1564.002": {
+    "matrix": "enterprise",
+    "name": "Hidden Users",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/002"
+  },
+  "T1564.003": {
+    "matrix": "enterprise",
+    "name": "Hidden Window",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/003"
+  },
+  "T1564.004": {
+    "matrix": "enterprise",
+    "name": "NTFS File Attributes",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/004"
+  },
+  "T1564.005": {
+    "matrix": "enterprise",
+    "name": "Hidden File System",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/005"
+  },
+  "T1564.006": {
+    "matrix": "enterprise",
+    "name": "Run Virtual Instance",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/006"
+  },
+  "T1564.007": {
+    "matrix": "enterprise",
+    "name": "VBA Stomping",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/007"
+  },
+  "T1564.008": {
+    "matrix": "enterprise",
+    "name": "Email Hiding Rules",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/008"
+  },
+  "T1564.009": {
+    "matrix": "enterprise",
+    "name": "Resource Forking",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/009"
+  },
+  "T1564.010": {
+    "matrix": "enterprise",
+    "name": "Process Argument Spoofing",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/010"
+  },
+  "T1564.011": {
+    "matrix": "enterprise",
+    "name": "Ignore Process Interrupts",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/011"
+  },
+  "T1564.012": {
+    "matrix": "enterprise",
+    "name": "File/Path Exclusions",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/012"
+  },
+  "T1564.013": {
+    "matrix": "enterprise",
+    "name": "Bind Mounts",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/013"
+  },
+  "T1564.014": {
+    "matrix": "enterprise",
+    "name": "Extended Attributes",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1564/014"
+  },
+  "T1565": {
+    "matrix": "enterprise",
+    "name": "Data Manipulation",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1565"
+  },
+  "T1565.001": {
+    "matrix": "enterprise",
+    "name": "Stored Data Manipulation",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1565/001"
+  },
+  "T1565.002": {
+    "matrix": "enterprise",
+    "name": "Transmitted Data Manipulation",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1565/002"
+  },
+  "T1565.003": {
+    "matrix": "enterprise",
+    "name": "Runtime Data Manipulation",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1565/003"
+  },
+  "T1566": {
+    "matrix": "enterprise",
+    "name": "Phishing",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1566"
+  },
+  "T1566.001": {
+    "matrix": "enterprise",
+    "name": "Spearphishing Attachment",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1566/001"
+  },
+  "T1566.002": {
+    "matrix": "enterprise",
+    "name": "Spearphishing Link",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1566/002"
+  },
+  "T1566.003": {
+    "matrix": "enterprise",
+    "name": "Spearphishing via Service",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1566/003"
+  },
+  "T1566.004": {
+    "matrix": "enterprise",
+    "name": "Spearphishing Voice",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1566/004"
+  },
+  "T1567": {
+    "matrix": "enterprise",
+    "name": "Exfiltration Over Web Service",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1567"
+  },
+  "T1567.001": {
+    "matrix": "enterprise",
+    "name": "Exfiltration to Code Repository",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1567/001"
+  },
+  "T1567.002": {
+    "matrix": "enterprise",
+    "name": "Exfiltration to Cloud Storage",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1567/002"
+  },
+  "T1567.003": {
+    "matrix": "enterprise",
+    "name": "Exfiltration to Text Storage Sites",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1567/003"
+  },
+  "T1567.004": {
+    "matrix": "enterprise",
+    "name": "Exfiltration Over Webhook",
+    "tactics": [
+      "Exfiltration"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1567/004"
+  },
+  "T1568": {
+    "matrix": "enterprise",
+    "name": "Dynamic Resolution",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1568"
+  },
+  "T1568.001": {
+    "matrix": "enterprise",
+    "name": "Fast Flux DNS",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1568/001"
+  },
+  "T1568.002": {
+    "matrix": "enterprise",
+    "name": "Domain Generation Algorithms",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1568/002"
+  },
+  "T1568.003": {
+    "matrix": "enterprise",
+    "name": "DNS Calculation",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1568/003"
+  },
+  "T1569": {
+    "matrix": "enterprise",
+    "name": "System Services",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1569"
+  },
+  "T1569.001": {
+    "matrix": "enterprise",
+    "name": "Launchctl",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1569/001"
+  },
+  "T1569.002": {
+    "matrix": "enterprise",
+    "name": "Service Execution",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1569/002"
+  },
+  "T1569.003": {
+    "matrix": "enterprise",
+    "name": "Systemctl",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1569/003"
+  },
+  "T1570": {
+    "matrix": "enterprise",
+    "name": "Lateral Tool Transfer",
+    "tactics": [
+      "Lateral Movement"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1570"
+  },
+  "T1571": {
+    "matrix": "enterprise",
+    "name": "Non-Standard Port",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1571"
+  },
+  "T1572": {
+    "matrix": "enterprise",
+    "name": "Protocol Tunneling",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1572"
+  },
+  "T1573": {
+    "matrix": "enterprise",
+    "name": "Encrypted Channel",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1573"
+  },
+  "T1573.001": {
+    "matrix": "enterprise",
+    "name": "Symmetric Cryptography",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1573/001"
+  },
+  "T1573.002": {
+    "matrix": "enterprise",
+    "name": "Asymmetric Cryptography",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1573/002"
+  },
+  "T1574": {
+    "matrix": "enterprise",
+    "name": "Hijack Execution Flow",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574"
+  },
+  "T1574.001": {
+    "matrix": "enterprise",
+    "name": "DLL",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/001"
+  },
+  "T1574.004": {
+    "matrix": "enterprise",
+    "name": "Dylib Hijacking",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/004"
+  },
+  "T1574.005": {
+    "matrix": "enterprise",
+    "name": "Executable Installer File Permissions Weakness",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/005"
+  },
+  "T1574.006": {
+    "matrix": "enterprise",
+    "name": "Dynamic Linker Hijacking",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/006"
+  },
+  "T1574.007": {
+    "matrix": "enterprise",
+    "name": "Path Interception by PATH Environment Variable",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/007"
+  },
+  "T1574.008": {
+    "matrix": "enterprise",
+    "name": "Path Interception by Search Order Hijacking",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/008"
+  },
+  "T1574.009": {
+    "matrix": "enterprise",
+    "name": "Path Interception by Unquoted Path",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/009"
+  },
+  "T1574.010": {
+    "matrix": "enterprise",
+    "name": "Services File Permissions Weakness",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/010"
+  },
+  "T1574.011": {
+    "matrix": "enterprise",
+    "name": "Services Registry Permissions Weakness",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/011"
+  },
+  "T1574.012": {
+    "matrix": "enterprise",
+    "name": "COR_PROFILER",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/012"
+  },
+  "T1574.013": {
+    "matrix": "enterprise",
+    "name": "KernelCallbackTable",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/013"
+  },
+  "T1574.014": {
+    "matrix": "enterprise",
+    "name": "AppDomainManager",
+    "tactics": [
+      "Persistence",
+      "Privilege Escalation",
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1574/014"
+  },
+  "T1578": {
+    "matrix": "enterprise",
+    "name": "Modify Cloud Compute Infrastructure",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1578"
+  },
+  "T1578.001": {
+    "matrix": "enterprise",
+    "name": "Create Snapshot",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1578/001"
+  },
+  "T1578.002": {
+    "matrix": "enterprise",
+    "name": "Create Cloud Instance",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1578/002"
+  },
+  "T1578.003": {
+    "matrix": "enterprise",
+    "name": "Delete Cloud Instance",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1578/003"
+  },
+  "T1578.004": {
+    "matrix": "enterprise",
+    "name": "Revert Cloud Instance",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1578/004"
+  },
+  "T1578.005": {
+    "matrix": "enterprise",
+    "name": "Modify Cloud Compute Configurations",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1578/005"
+  },
+  "T1580": {
+    "matrix": "enterprise",
+    "name": "Cloud Infrastructure Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1580"
+  },
+  "T1583": {
+    "matrix": "enterprise",
+    "name": "Acquire Infrastructure",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1583"
+  },
+  "T1583.001": {
+    "matrix": "enterprise",
+    "name": "Domains",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1583/001"
+  },
+  "T1583.002": {
+    "matrix": "enterprise",
+    "name": "DNS Server",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1583/002"
+  },
+  "T1583.003": {
+    "matrix": "enterprise",
+    "name": "Virtual Private Server",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1583/003"
+  },
+  "T1583.004": {
+    "matrix": "enterprise",
+    "name": "Server",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1583/004"
+  },
+  "T1583.005": {
+    "matrix": "enterprise",
+    "name": "Botnet",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1583/005"
+  },
+  "T1583.006": {
+    "matrix": "enterprise",
+    "name": "Web Services",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1583/006"
+  },
+  "T1583.007": {
+    "matrix": "enterprise",
+    "name": "Serverless",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1583/007"
+  },
+  "T1583.008": {
+    "matrix": "enterprise",
+    "name": "Malvertising",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1583/008"
+  },
+  "T1584": {
+    "matrix": "enterprise",
+    "name": "Compromise Infrastructure",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1584"
+  },
+  "T1584.001": {
+    "matrix": "enterprise",
+    "name": "Domains",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1584/001"
+  },
+  "T1584.002": {
+    "matrix": "enterprise",
+    "name": "DNS Server",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1584/002"
+  },
+  "T1584.003": {
+    "matrix": "enterprise",
+    "name": "Virtual Private Server",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1584/003"
+  },
+  "T1584.004": {
+    "matrix": "enterprise",
+    "name": "Server",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1584/004"
+  },
+  "T1584.005": {
+    "matrix": "enterprise",
+    "name": "Botnet",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1584/005"
+  },
+  "T1584.006": {
+    "matrix": "enterprise",
+    "name": "Web Services",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1584/006"
+  },
+  "T1584.007": {
+    "matrix": "enterprise",
+    "name": "Serverless",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1584/007"
+  },
+  "T1584.008": {
+    "matrix": "enterprise",
+    "name": "Network Devices",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1584/008"
+  },
+  "T1585": {
+    "matrix": "enterprise",
+    "name": "Establish Accounts",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1585"
+  },
+  "T1585.001": {
+    "matrix": "enterprise",
+    "name": "Social Media Accounts",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1585/001"
+  },
+  "T1585.002": {
+    "matrix": "enterprise",
+    "name": "Email Accounts",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1585/002"
+  },
+  "T1585.003": {
+    "matrix": "enterprise",
+    "name": "Cloud Accounts",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1585/003"
+  },
+  "T1586": {
+    "matrix": "enterprise",
+    "name": "Compromise Accounts",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1586"
+  },
+  "T1586.001": {
+    "matrix": "enterprise",
+    "name": "Social Media Accounts",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1586/001"
+  },
+  "T1586.002": {
+    "matrix": "enterprise",
+    "name": "Email Accounts",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1586/002"
+  },
+  "T1586.003": {
+    "matrix": "enterprise",
+    "name": "Cloud Accounts",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1586/003"
+  },
+  "T1587": {
+    "matrix": "enterprise",
+    "name": "Develop Capabilities",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1587"
+  },
+  "T1587.001": {
+    "matrix": "enterprise",
+    "name": "Malware",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1587/001"
+  },
+  "T1587.002": {
+    "matrix": "enterprise",
+    "name": "Code Signing Certificates",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1587/002"
+  },
+  "T1587.003": {
+    "matrix": "enterprise",
+    "name": "Digital Certificates",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1587/003"
+  },
+  "T1587.004": {
+    "matrix": "enterprise",
+    "name": "Exploits",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1587/004"
+  },
+  "T1588": {
+    "matrix": "enterprise",
+    "name": "Obtain Capabilities",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1588"
+  },
+  "T1588.001": {
+    "matrix": "enterprise",
+    "name": "Malware",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1588/001"
+  },
+  "T1588.002": {
+    "matrix": "enterprise",
+    "name": "Tool",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1588/002"
+  },
+  "T1588.003": {
+    "matrix": "enterprise",
+    "name": "Code Signing Certificates",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1588/003"
+  },
+  "T1588.004": {
+    "matrix": "enterprise",
+    "name": "Digital Certificates",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1588/004"
+  },
+  "T1588.005": {
+    "matrix": "enterprise",
+    "name": "Exploits",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1588/005"
+  },
+  "T1588.006": {
+    "matrix": "enterprise",
+    "name": "Vulnerabilities",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1588/006"
+  },
+  "T1588.007": {
+    "matrix": "enterprise",
+    "name": "Artificial Intelligence",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1588/007"
+  },
+  "T1589": {
+    "matrix": "enterprise",
+    "name": "Gather Victim Identity Information",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1589"
+  },
+  "T1589.001": {
+    "matrix": "enterprise",
+    "name": "Credentials",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1589/001"
+  },
+  "T1589.002": {
+    "matrix": "enterprise",
+    "name": "Email Addresses",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1589/002"
+  },
+  "T1589.003": {
+    "matrix": "enterprise",
+    "name": "Employee Names",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1589/003"
+  },
+  "T1590": {
+    "matrix": "enterprise",
+    "name": "Gather Victim Network Information",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1590"
+  },
+  "T1590.001": {
+    "matrix": "enterprise",
+    "name": "Domain Properties",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1590/001"
+  },
+  "T1590.002": {
+    "matrix": "enterprise",
+    "name": "DNS",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1590/002"
+  },
+  "T1590.003": {
+    "matrix": "enterprise",
+    "name": "Network Trust Dependencies",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1590/003"
+  },
+  "T1590.004": {
+    "matrix": "enterprise",
+    "name": "Network Topology",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1590/004"
+  },
+  "T1590.005": {
+    "matrix": "enterprise",
+    "name": "IP Addresses",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1590/005"
+  },
+  "T1590.006": {
+    "matrix": "enterprise",
+    "name": "Network Security Appliances",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1590/006"
+  },
+  "T1591": {
+    "matrix": "enterprise",
+    "name": "Gather Victim Org Information",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1591"
+  },
+  "T1591.001": {
+    "matrix": "enterprise",
+    "name": "Determine Physical Locations",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1591/001"
+  },
+  "T1591.002": {
+    "matrix": "enterprise",
+    "name": "Business Relationships",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1591/002"
+  },
+  "T1591.003": {
+    "matrix": "enterprise",
+    "name": "Identify Business Tempo",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1591/003"
+  },
+  "T1591.004": {
+    "matrix": "enterprise",
+    "name": "Identify Roles",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1591/004"
+  },
+  "T1592": {
+    "matrix": "enterprise",
+    "name": "Gather Victim Host Information",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1592"
+  },
+  "T1592.001": {
+    "matrix": "enterprise",
+    "name": "Hardware",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1592/001"
+  },
+  "T1592.002": {
+    "matrix": "enterprise",
+    "name": "Software",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1592/002"
+  },
+  "T1592.003": {
+    "matrix": "enterprise",
+    "name": "Firmware",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1592/003"
+  },
+  "T1592.004": {
+    "matrix": "enterprise",
+    "name": "Client Configurations",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1592/004"
+  },
+  "T1593": {
+    "matrix": "enterprise",
+    "name": "Search Open Websites/Domains",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1593"
+  },
+  "T1593.001": {
+    "matrix": "enterprise",
+    "name": "Social Media",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1593/001"
+  },
+  "T1593.002": {
+    "matrix": "enterprise",
+    "name": "Search Engines",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1593/002"
+  },
+  "T1593.003": {
+    "matrix": "enterprise",
+    "name": "Code Repositories",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1593/003"
+  },
+  "T1594": {
+    "matrix": "enterprise",
+    "name": "Search Victim-Owned Websites",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1594"
+  },
+  "T1595": {
+    "matrix": "enterprise",
+    "name": "Active Scanning",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1595"
+  },
+  "T1595.001": {
+    "matrix": "enterprise",
+    "name": "Scanning IP Blocks",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1595/001"
+  },
+  "T1595.002": {
+    "matrix": "enterprise",
+    "name": "Vulnerability Scanning",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1595/002"
+  },
+  "T1595.003": {
+    "matrix": "enterprise",
+    "name": "Wordlist Scanning",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1595/003"
+  },
+  "T1596": {
+    "matrix": "enterprise",
+    "name": "Search Open Technical Databases",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1596"
+  },
+  "T1596.001": {
+    "matrix": "enterprise",
+    "name": "DNS/Passive DNS",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1596/001"
+  },
+  "T1596.002": {
+    "matrix": "enterprise",
+    "name": "WHOIS",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1596/002"
+  },
+  "T1596.003": {
+    "matrix": "enterprise",
+    "name": "Digital Certificates",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1596/003"
+  },
+  "T1596.004": {
+    "matrix": "enterprise",
+    "name": "CDNs",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1596/004"
+  },
+  "T1596.005": {
+    "matrix": "enterprise",
+    "name": "Scan Databases",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1596/005"
+  },
+  "T1597": {
+    "matrix": "enterprise",
+    "name": "Search Closed Sources",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1597"
+  },
+  "T1597.001": {
+    "matrix": "enterprise",
+    "name": "Threat Intel Vendors",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1597/001"
+  },
+  "T1597.002": {
+    "matrix": "enterprise",
+    "name": "Purchase Technical Data",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1597/002"
+  },
+  "T1598": {
+    "matrix": "enterprise",
+    "name": "Phishing for Information",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1598"
+  },
+  "T1598.001": {
+    "matrix": "enterprise",
+    "name": "Spearphishing Service",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1598/001"
+  },
+  "T1598.002": {
+    "matrix": "enterprise",
+    "name": "Spearphishing Attachment",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1598/002"
+  },
+  "T1598.003": {
+    "matrix": "enterprise",
+    "name": "Spearphishing Link",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1598/003"
+  },
+  "T1598.004": {
+    "matrix": "enterprise",
+    "name": "Spearphishing Voice",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1598/004"
+  },
+  "T1599": {
+    "matrix": "enterprise",
+    "name": "Network Boundary Bridging",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1599"
+  },
+  "T1599.001": {
+    "matrix": "enterprise",
+    "name": "Network Address Translation Traversal",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1599/001"
+  },
+  "T1600": {
+    "matrix": "enterprise",
+    "name": "Weaken Encryption",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1600"
+  },
+  "T1600.001": {
+    "matrix": "enterprise",
+    "name": "Reduce Key Space",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1600/001"
+  },
+  "T1600.002": {
+    "matrix": "enterprise",
+    "name": "Disable Crypto Hardware",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1600/002"
+  },
+  "T1601": {
+    "matrix": "enterprise",
+    "name": "Modify System Image",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1601"
+  },
+  "T1601.001": {
+    "matrix": "enterprise",
+    "name": "Patch System Image",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1601/001"
+  },
+  "T1601.002": {
+    "matrix": "enterprise",
+    "name": "Downgrade System Image",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1601/002"
+  },
+  "T1602": {
+    "matrix": "enterprise",
+    "name": "Data from Configuration Repository",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1602"
+  },
+  "T1602.001": {
+    "matrix": "enterprise",
+    "name": "SNMP (MIB Dump)",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1602/001"
+  },
+  "T1602.002": {
+    "matrix": "enterprise",
+    "name": "Network Device Configuration Dump",
+    "tactics": [
+      "Collection"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1602/002"
+  },
+  "T1606": {
+    "matrix": "enterprise",
+    "name": "Forge Web Credentials",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1606"
+  },
+  "T1606.001": {
+    "matrix": "enterprise",
+    "name": "Web Cookies",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1606/001"
+  },
+  "T1606.002": {
+    "matrix": "enterprise",
+    "name": "SAML Tokens",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1606/002"
+  },
+  "T1608": {
+    "matrix": "enterprise",
+    "name": "Stage Capabilities",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1608"
+  },
+  "T1608.001": {
+    "matrix": "enterprise",
+    "name": "Upload Malware",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1608/001"
+  },
+  "T1608.002": {
+    "matrix": "enterprise",
+    "name": "Upload Tool",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1608/002"
+  },
+  "T1608.003": {
+    "matrix": "enterprise",
+    "name": "Install Digital Certificate",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1608/003"
+  },
+  "T1608.004": {
+    "matrix": "enterprise",
+    "name": "Drive-by Target",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1608/004"
+  },
+  "T1608.005": {
+    "matrix": "enterprise",
+    "name": "Link Target",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1608/005"
+  },
+  "T1608.006": {
+    "matrix": "enterprise",
+    "name": "SEO Poisoning",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1608/006"
+  },
+  "T1609": {
+    "matrix": "enterprise",
+    "name": "Container Administration Command",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1609"
+  },
+  "T1610": {
+    "matrix": "enterprise",
+    "name": "Deploy Container",
+    "tactics": [
+      "Defense Evasion",
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1610"
+  },
+  "T1611": {
+    "matrix": "enterprise",
+    "name": "Escape to Host",
+    "tactics": [
+      "Privilege Escalation"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1611"
+  },
+  "T1612": {
+    "matrix": "enterprise",
+    "name": "Build Image on Host",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1612"
+  },
+  "T1613": {
+    "matrix": "enterprise",
+    "name": "Container and Resource Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1613"
+  },
+  "T1614": {
+    "matrix": "enterprise",
+    "name": "System Location Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1614"
+  },
+  "T1614.001": {
+    "matrix": "enterprise",
+    "name": "System Language Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1614/001"
+  },
+  "T1615": {
+    "matrix": "enterprise",
+    "name": "Group Policy Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1615"
+  },
+  "T1619": {
+    "matrix": "enterprise",
+    "name": "Cloud Storage Object Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1619"
+  },
+  "T1620": {
+    "matrix": "enterprise",
+    "name": "Reflective Code Loading",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1620"
+  },
+  "T1621": {
+    "matrix": "enterprise",
+    "name": "Multi-Factor Authentication Request Generation",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1621"
+  },
+  "T1622": {
+    "matrix": "enterprise",
+    "name": "Debugger Evasion",
+    "tactics": [
+      "Defense Evasion",
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1622"
+  },
+  "T1647": {
+    "matrix": "enterprise",
+    "name": "Plist File Modification",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1647"
+  },
+  "T1648": {
+    "matrix": "enterprise",
+    "name": "Serverless Execution",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1648"
+  },
+  "T1649": {
+    "matrix": "enterprise",
+    "name": "Steal or Forge Authentication Certificates",
+    "tactics": [
+      "Credential Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1649"
+  },
+  "T1650": {
+    "matrix": "enterprise",
+    "name": "Acquire Access",
+    "tactics": [
+      "Resource Development"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1650"
+  },
+  "T1651": {
+    "matrix": "enterprise",
+    "name": "Cloud Administration Command",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1651"
+  },
+  "T1652": {
+    "matrix": "enterprise",
+    "name": "Device Driver Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1652"
+  },
+  "T1653": {
+    "matrix": "enterprise",
+    "name": "Power Settings",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1653"
+  },
+  "T1654": {
+    "matrix": "enterprise",
+    "name": "Log Enumeration",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1654"
+  },
+  "T1656": {
+    "matrix": "enterprise",
+    "name": "Impersonation",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1656"
+  },
+  "T1657": {
+    "matrix": "enterprise",
+    "name": "Financial Theft",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1657"
+  },
+  "T1659": {
+    "matrix": "enterprise",
+    "name": "Content Injection",
+    "tactics": [
+      "Initial Access",
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1659"
+  },
+  "T1665": {
+    "matrix": "enterprise",
+    "name": "Hide Infrastructure",
+    "tactics": [
+      "Command And Control"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1665"
+  },
+  "T1666": {
+    "matrix": "enterprise",
+    "name": "Modify Cloud Resource Hierarchy",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1666"
+  },
+  "T1667": {
+    "matrix": "enterprise",
+    "name": "Email Bombing",
+    "tactics": [
+      "Impact"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1667"
+  },
+  "T1668": {
+    "matrix": "enterprise",
+    "name": "Exclusive Control",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1668"
+  },
+  "T1669": {
+    "matrix": "enterprise",
+    "name": "Wi-Fi Networks",
+    "tactics": [
+      "Initial Access"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1669"
+  },
+  "T1671": {
+    "matrix": "enterprise",
+    "name": "Cloud Application Integration",
+    "tactics": [
+      "Persistence"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1671"
+  },
+  "T1672": {
+    "matrix": "enterprise",
+    "name": "Email Spoofing",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1672"
+  },
+  "T1673": {
+    "matrix": "enterprise",
+    "name": "Virtual Machine Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1673"
+  },
+  "T1674": {
+    "matrix": "enterprise",
+    "name": "Input Injection",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1674"
+  },
+  "T1675": {
+    "matrix": "enterprise",
+    "name": "ESXi Administration Command",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1675"
+  },
+  "T1677": {
+    "matrix": "enterprise",
+    "name": "Poisoned Pipeline Execution",
+    "tactics": [
+      "Execution"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1677"
+  },
+  "T1678": {
+    "matrix": "enterprise",
+    "name": "Delay Execution",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1678"
+  },
+  "T1679": {
+    "matrix": "enterprise",
+    "name": "Selective Exclusion",
+    "tactics": [
+      "Defense Evasion"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1679"
+  },
+  "T1680": {
+    "matrix": "enterprise",
+    "name": "Local Storage Discovery",
+    "tactics": [
+      "Discovery"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1680"
+  },
+  "T1681": {
+    "matrix": "enterprise",
+    "name": "Search Threat Vendor Data",
+    "tactics": [
+      "Reconnaissance"
+    ],
+    "url": "https://attack.mitre.org/techniques/T1681"
+  }
+}

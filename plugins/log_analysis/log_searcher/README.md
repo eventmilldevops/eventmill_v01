@@ -13,6 +13,14 @@ Searches log files for matching lines using case-insensitive text or regex patte
 | Consumed | `text`, `log_stream` | Log files to search |
 | Produced | `json_events` | Structured search results |
 
+## Output Persistence
+
+On successful completion the framework automatically writes the full result to:
+```
+workspace/artifacts/log_searcher_<YYYYMMDD_HHMMSS>.json
+```
+The file is registered as a `json_events` session artifact containing matched lines, line numbers, context, and match count. Use `artifacts` to get its ID, then pass it to `log_investigator` or `log_pattern_analyzer` for deeper analysis. Use `export <artifact_id>` to push the JSON to `common/exports/log_searcher/` in cloud storage for external access or troubleshooting.
+
 ## Example Usage
 
 ### Simple Text Search

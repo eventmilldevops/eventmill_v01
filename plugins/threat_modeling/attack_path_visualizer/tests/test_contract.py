@@ -309,3 +309,157 @@ class TestSummarize:
         }, None)
         summary = plugin_instance.summarize_for_llm(result)
         assert len(summary) <= 2000
+
+
+# ---------------------------------------------------------------------------
+# Multi-role DAG tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def multi_role_mitre_mappings():
+    """Mitre mappings with T1078 appearing in two tactical roles."""
+    return [
+        {"technique_id": "T1566", "technique_name": "Phishing",
+         "tactic": "Initial Access"},
+        {"technique_id": "T1078", "technique_name": "Valid Accounts",
+         "tactic": "Initial Access"},
+        {"technique_id": "T1078", "technique_name": "Valid Accounts",
+         "tactic": "Persistence"},
+        {"technique_id": "T1059", "technique_name": "Command and Scripting Interpreter",
+         "tactic": "Execution"},
+    ]
+
+
+@pytest.fixture
+def multi_role_attack_graph():
+    """Attack graph where T1078 serves different roles in two paths."""
+    return {
+        "paths": [
+            {
+                "path_id": "phishing-path",
+                "description": "Phishing to execution via harvested creds",
+                "steps": [
+                    {"technique_id": "T1566", "tactic": "Initial Access",
+                     "leads_to": ["T1078"]},
+                    {"technique_id": "T1078", "tactic": "Initial Access",
+                     "leads_to": ["T1059"]},
+                    {"technique_id": "T1059", "tactic": "Execution",
+                     "leads_to": []},
+                ],
+            },
+            {
+                "path_id": "persistence-path",
+                "description": "Valid accounts reused for persistence",
+                "steps": [
+                    {"technique_id": "T1078", "tactic": "Persistence",
+                     "leads_to": ["T1059"]},
+                    {"technique_id": "T1059", "tactic": "Execution",
+                     "leads_to": []},
+                ],
+            },
+        ],
+        "convergence_points": ["T1059"],
+        "branch_points": [],
+    }
+
+
+class TestMultiRoleDAG:
+    """Verify multi-role technique mapping produces distinct DAG nodes."""
+
+    def test_dag_builder_creates_distinct_nodes(
+        self, multi_role_attack_graph, multi_role_mitre_mappings
+    ):
+        dag = _tool_mod._build_dag_from_attack_graph(
+            multi_role_attack_graph, multi_role_mitre_mappings
+        )
+        assert dag is not None
+        # T1078 should produce 2 nodes (Initial Access + Persistence)
+        t1078_nodes = [
+            n for n in dag.nodes.values()
+            if n.technique_id == "T1078"
+        ]
+        assert len(t1078_nodes) == 2
+        tactics = {n.tactic for n in t1078_nodes}
+        assert tactics == {"Initial Access", "Persistence"}
+
+    def test_dag_total_node_count(
+        self, multi_role_attack_graph, multi_role_mitre_mappings
+    ):
+        dag = _tool_mod._build_dag_from_attack_graph(
+            multi_role_attack_graph, multi_role_mitre_mappings
+        )
+        # T1566, T1078|initial-access, T1078|persistence, T1059 = 4 nodes
+        assert len(dag.nodes) == 4
+
+    def test_mermaid_contains_both_tactic_labels(
+        self, multi_role_attack_graph, multi_role_mitre_mappings
+    ):
+        dag = _tool_mod._build_dag_from_attack_graph(
+            multi_role_attack_graph, multi_role_mitre_mappings
+        )
+        _raw, mermaid = _tool_mod._render_mermaid_dag(dag, "multi-role test")
+        assert "Initial Access" in mermaid
+        assert "Persistence" in mermaid
+        assert "T1078" in mermaid
+        # No em-dash should appear in raw or markdown
+        assert "\u2014" not in _raw
+
+    def test_ascii_contains_both_tactic_labels(
+        self, multi_role_attack_graph, multi_role_mitre_mappings
+    ):
+        dag = _tool_mod._build_dag_from_attack_graph(
+            multi_role_attack_graph, multi_role_mitre_mappings
+        )
+        ascii_out = _tool_mod._render_ascii_dag(dag, "multi-role test")
+        assert "Initial Access" in ascii_out
+        assert "Persistence" in ascii_out
+        assert "T1078" in ascii_out
+        # No em-dash should appear in header/legend
+        assert "\u2014" not in ascii_out
+
+    def test_convergence_styling_uses_technique_id(
+        self, multi_role_attack_graph, multi_role_mitre_mappings
+    ):
+        dag = _tool_mod._build_dag_from_attack_graph(
+            multi_role_attack_graph, multi_role_mitre_mappings
+        )
+        _raw, mermaid = _tool_mod._render_mermaid_dag(dag, "test")
+        # T1059 is convergence point — should get orange styling
+        assert "fill:#ffe0b2" in mermaid
+
+    def test_entry_nodes_labeled_with_path_names(
+        self, multi_role_attack_graph, multi_role_mitre_mappings
+    ):
+        dag = _tool_mod._build_dag_from_attack_graph(
+            multi_role_attack_graph, multi_role_mitre_mappings
+        )
+        _raw, mermaid = _tool_mod._render_mermaid_dag(dag, "test")
+        # Entry nodes should have bold path name tags
+        assert "phishing-path" in mermaid
+        assert "persistence-path" in mermaid
+
+    def test_color_legend_subgraph_present(
+        self, multi_role_attack_graph, multi_role_mitre_mappings
+    ):
+        dag = _tool_mod._build_dag_from_attack_graph(
+            multi_role_attack_graph, multi_role_mitre_mappings
+        )
+        raw, mermaid = _tool_mod._render_mermaid_dag(dag, "test")
+        assert "Entry Point" in mermaid
+        assert "Mid-chain" in mermaid
+        assert "Exit / Terminal" in mermaid
+        assert "Convergence" in mermaid
+        assert "style LE fill:#bbdefb" in mermaid
+        assert "style legend fill:#f5f5f5" in mermaid
+        # raw_mermaid should NOT have fences
+        assert "```mermaid" not in raw
+        # markdown form should have fences
+        assert "```mermaid" in mermaid
+
+    def test_node_key_helper(self):
+        key = _tool_mod._node_key("T1078", "Initial Access")
+        assert key == "T1078|initial-access"
+        key2 = _tool_mod._node_key("T1078", "Persistence")
+        assert key2 == "T1078|persistence"
+        assert key != key2

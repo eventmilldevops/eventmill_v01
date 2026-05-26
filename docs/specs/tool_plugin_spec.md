@@ -1,7 +1,15 @@
 # Event Mill Tool Plugin Specification
 
-Version: 0.2.0
+Version: 0.3.0
 Aligned with: eventmill_v1_1.md (v0.2.0-draft)
+
+Changes from 0.2.0:
+- Added `QueryHints` dataclass for intent-based LLM routing
+- Added `query_with_document()` and `supports_native_document()` to `LLMQueryInterface`
+- Added `hints` parameter to `query_text()`
+- Added `storage_uri` field to `ArtifactRef`
+- Added `model_used`, `transport_path`, `fallback_reason` diagnostic fields to `LLMResponse`
+- See companion spec: `llm-dispatcher-native-document-handling.md`
 
 ---
 
@@ -286,9 +294,12 @@ class ArtifactRef:
     artifact_id: str
     artifact_type: str                   # From the artifact type enum
     file_path: str                       # Resolved path on the storage backend
-    source_tool: str | None              # None for user-provided artifacts
-    metadata: dict
+    storage_uri: str | None = None       # Cloud storage URI (e.g. gs://bucket/path.pdf)
+    source_tool: str | None = None       # None for user-provided artifacts
+    metadata: dict = field(default_factory=dict)
 ```
+
+The `storage_uri` field is populated when an artifact resides in cloud storage. Plugins MAY use this for display or logging but MUST NOT resolve it directly — the framework handles cloud transport via the LLM dispatcher.
 
 Plugins MUST treat missing optional attributes gracefully. Plugins MUST NOT assume any undocumented attributes exist.
 
@@ -296,7 +307,26 @@ Plugins MUST treat missing optional attributes gracefully. Plugins MUST NOT assu
 
 ## LLM Query Interface
 
-Plugins that require LLM capabilities (manifest `requires_llm: true`) use the `LLMQueryInterface` from the execution context:
+Plugins that require LLM capabilities (manifest `requires_llm: true`) use the `LLMQueryInterface` from the execution context.
+
+### QueryHints
+
+Plugins pass optional `QueryHints` to guide model selection without knowing provider details:
+
+```python
+@dataclass
+class QueryHints:
+    """Plugin hints to the LLMDispatcher about what kind of query this is."""
+    tier: str = "light"                    # "light" | "heavy"
+    needs_reasoning: bool = False          # biases toward deep-reasoning models
+    needs_structured_output: bool = False  # ensures JSON-mode capable model
+    prefers_native_file: bool = False      # prefer native file > text extraction
+    max_budget_cents: float | None = None  # cost ceiling per call (safety net)
+```
+
+All fields have sensible defaults. Plugins that do not pass hints get the same behavior as before (token-count-based routing).
+
+### LLMQueryInterface
 
 ```python
 class LLMQueryInterface(Protocol):
@@ -306,12 +336,13 @@ class LLMQueryInterface(Protocol):
         prompt: str,
         system_context: str | None = None,
         max_tokens: int = 4096,
-        grounding_data: list[str] | None = None
+        grounding_data: list[str] | None = None,
+        hints: QueryHints | None = None,
     ) -> LLMResponse:
-        """Send a text prompt to the connected LLM via MCP.
+        """Send a text prompt to the connected LLM.
         
         grounding_data: Additional context strings injected before the prompt.
-        These are typically reference data entries or compressed prior results.
+        hints: Optional routing hints for model selection.
         """
         ...
 
@@ -321,7 +352,7 @@ class LLMQueryInterface(Protocol):
         image_data: bytes,
         image_format: str,
         system_context: str | None = None,
-        max_tokens: int = 4096
+        max_tokens: int = 4096,
     ) -> LLMResponse:
         """Send a multimodal (text + image) prompt to the connected LLM.
         
@@ -330,14 +361,54 @@ class LLMQueryInterface(Protocol):
         """
         ...
 
+    def query_with_document(
+        self,
+        prompt: str,
+        artifact: ArtifactRef,
+        system_context: str | None = None,
+        max_tokens: int = 8192,
+        grounding_data: list[str] | None = None,
+        hints: QueryHints | None = None,
+    ) -> LLMResponse:
+        """Query with a document artifact.
+        
+        The dispatcher resolves the best ingestion path automatically:
+          1. Native document + remote URI (gs:// for Gemini) — zero-copy
+          2. Native document + inline bytes from local file
+          3. Fallback: returns ok=False so plugin can use text extraction
+        
+        The response's transport_path field records which path was used.
+        Plugins SHOULD prefer this method over manual text extraction for
+        PDF artifacts.
+        """
+        ...
 
+    def supports_native_document(self, mime_type: str) -> bool:
+        """Check if any connected model handles this MIME type natively.
+        
+        Returns True if at least one connected model supports native
+        ingestion of the given MIME type (e.g. "application/pdf").
+        Plugins MAY use this to choose between native ingestion and
+        text-extraction fallback paths.
+        """
+        ...
+```
+
+### LLMResponse
+
+```python
 @dataclass
 class LLMResponse:
     ok: bool
     text: str | None = None
     error: str | None = None
     token_usage: dict | None = None
+    model_used: str | None = None          # which model actually ran the query
+    transport_path: str | None = None      # "gs_uri", "inline_bytes", "text_fallback", or "text"
+    fallback_reason: str | None = None     # why the preferred path wasn't used
 ```
+
+The diagnostic fields (`model_used`, `transport_path`, `fallback_reason`) are informational. Plugins MAY log them for debugging but MUST NOT branch on specific model names.
 
 The framework owns the MCP client. Plugins MUST NOT create their own MCP connections. All LLM interaction goes through the context interface, which allows the framework to:
 
@@ -345,6 +416,8 @@ The framework owns the MCP client. Plugins MUST NOT create their own MCP connect
 - inject system context and reference data grounding
 - log LLM interactions at DEBUG level per the logging spec
 - handle timeouts and retries at the transport level
+- route queries to appropriate model tiers based on hints
+- resolve native document ingestion paths transparently
 
 ---
 

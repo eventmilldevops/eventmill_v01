@@ -1,0 +1,17 @@
+# Wiki.js on Cloud Run
+# Uses the official Wiki.js 2 image with Cloud SQL PostgreSQL
+#
+# Wiki.js listens on port 3000 by default.
+# Cloud Run routes HTTPS:443 → container:3000.
+#
+# Database connection is configured via environment variables
+# injected by the deploy script (DB_TYPE, DB_HOST, DB_NAME, etc.).
+# Cloud SQL Auth Proxy provides a Unix socket at /cloudsql/<connection-name>.
+
+FROM ghcr.io/requarks/wiki:2
+
+# Cloud Run expects the container to listen on the PORT env var
+# Wiki.js uses port 3000 by default; we keep it and tell Cloud Run via --port=3000
+ENV PORT=3000
+
+EXPOSE 3000

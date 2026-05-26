@@ -1,0 +1,33 @@
+# Wiki.js — Cloud Build pipeline
+# Builds the Wiki.js container and pushes to Artifact Registry.
+#
+# Usage:
+#   gcloud builds submit --project="your-project-id" \
+#     --config=cloud_install/cloudbuild-wikijs.yaml \
+#     --substitutions="_REGION=northamerica-northeast2" .
+
+steps:
+  # Build the Wiki.js container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/wikijs:latest'
+      - '-f'
+      - 'cloud_install/Dockerfile.wikijs'
+      - '.'
+
+  # Push latest image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/wikijs:latest'
+
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/wikijs:latest'
+
+substitutions:
+  _REGION: 'northamerica-northeast2'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

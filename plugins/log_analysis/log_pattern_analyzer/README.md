@@ -19,6 +19,14 @@ Three analysis modes for investigating unfamiliar log files:
 | Consumed | `text`, `log_stream` | Log files to analyze |
 | Produced | `json_events` | Structured analysis results |
 
+## Output Persistence
+
+On successful completion the framework automatically writes the full result to:
+```
+workspace/artifacts/log_pattern_analyzer_<YYYYMMDD_HHMMSS>.json
+```
+The file is registered as a `json_events` session artifact. Use `artifacts` to get its ID. The discover mode result includes AI-identified log type and recommended next steps. Use `export <artifact_id>` to push the JSON to `common/exports/log_pattern_analyzer/` in cloud storage for external access or troubleshooting.
+
 ## Available GROK Patterns
 
 `IP`, `IPV4`, `IPV6`, `MAC`, `EMAIL`, `UUID`, `HTTPSTATUS`, `HTTPMETHOD`, `LOGLEVEL`, `USER`, `USERNAME`, `PORT`, `PATH`, `URI`, `URIPATH`, `URL`, `TIMESTAMP`, `DATE`, `TIME`, `INT`, `NUMBER`, `WORD`, `HOSTNAME`, `SID`

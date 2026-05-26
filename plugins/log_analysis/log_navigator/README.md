@@ -17,6 +17,18 @@ Entry point for the analyst workflow. Three actions:
 | Consumed | — | — |
 | Produced | `text`, `log_stream` | Log files for downstream tools |
 
+## Output Persistence
+
+On successful completion the framework automatically writes the result to:
+```
+workspace/artifacts/log_navigator_<YYYYMMDD_HHMMSS>.md
+```
+- **list** action: directory listing saved as markdown
+- **read** action: the extracted file segment saved as markdown (useful for passing to `log_investigator` or `log_pattern_analyzer`)
+- **metadata** action: file stats saved as markdown
+
+The file is registered as a `text` session artifact. Use `artifacts` to get its ID.
+
 ## Example Usage
 
 ### List Directory

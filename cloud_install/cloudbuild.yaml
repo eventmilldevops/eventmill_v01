@@ -1,4 +1,4 @@
-# Event Mill v0.2.0 - Cloud Build CI/CD Pipeline
+# Event Mill v0.1.0 - Cloud Build CI/CD Pipeline
 # Builds and deploys to Cloud Run with ttyd web terminal
 #
 # Usage:
@@ -8,28 +8,29 @@
 
 steps:
   # Build the container image (commit-tagged + latest)
+  # Uses Artifact Registry (gcr.io is deprecated)
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
       - '-t'
-      - 'gcr.io/$PROJECT_ID/event-mill:$COMMIT_SHA'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:$COMMIT_SHA'
       - '-t'
-      - 'gcr.io/$PROJECT_ID/event-mill:latest'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:latest'
       - '-f'
       - 'cloud_install/Dockerfile.cloudrun'
       - '.'
 
-  # Push commit-tagged image
+  # Push commit-tagged image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'gcr.io/$PROJECT_ID/event-mill:$COMMIT_SHA'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:$COMMIT_SHA'
 
-  # Push latest image
+  # Push latest image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'gcr.io/$PROJECT_ID/event-mill:latest'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:latest'
 
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -39,7 +40,7 @@ steps:
       - 'deploy'
       - 'event-mill'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/event-mill:$COMMIT_SHA'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:$COMMIT_SHA'
       - '--region'
       - '${_REGION}'
       - '--platform'
@@ -47,27 +48,34 @@ steps:
       - '--port'
       - '8080'
       - '--memory'
-      - '512Mi'
+      - '2Gi'
       - '--cpu'
-      - '1'
+      - '2'
+      - '--no-cpu-throttling'
       - '--timeout'
       - '3600'
       - '--concurrency'
-      - '10'
+      - '5'
+      - '--session-affinity'
       - '--min-instances'
       - '0'
       - '--max-instances'
       - '3'
+      - '--service-account'
+      - 'eventmill-runner@$PROJECT_ID.iam.gserviceaccount.com'
+      - '--set-secrets'
+      - 'GEMINI_FLASH_API_KEY=eventmill-gemini-flash-api:latest,GEMINI_PRO_API_KEY=eventmill-gemini-pro-api:latest,TTYD_USERNAME=eventmill-ttyd-user:latest,TTYD_PASSWORD=eventmill-ttyd-cred:latest'
       - '--set-env-vars'
-      - 'EVENTMILL_LOG_LEVEL=INFO'
+      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,EVENTMILL_BUCKET_PREFIX=${_BUCKET_PREFIX},EVENTMILL_LOG_LEVEL=INFO'
       - '--allow-unauthenticated'
 
 images:
-  - 'gcr.io/$PROJECT_ID/event-mill:$COMMIT_SHA'
-  - 'gcr.io/$PROJECT_ID/event-mill:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:$COMMIT_SHA'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:latest'
 
 substitutions:
   _REGION: northamerica-northeast2
+  _BUCKET_PREFIX: ''   # set at submit time: --substitutions=_BUCKET_PREFIX=${GOOGLE_CLOUD_PROJECT}-eventmill
 
 options:
   logging: CLOUD_LOGGING_ONLY

@@ -11,7 +11,7 @@
     "pillar",
     "display_name",
     "description_short",
-    "description_llm",
+    "description_long",
     "author",
     "entry_point",
     "class_name",
@@ -58,7 +58,7 @@
       "maxLength": 240,
       "description": "One-line summary for CLI listings and compact UI."
     },
-    "description_llm": {
+    "description_long": {
       "type": "string",
       "minLength": 1,
       "description": "Detailed description optimized for LLM tool selection. Describes WHEN the tool should be used, what it does, and what it returns. This text is injected into the LLM prompt by the router."
@@ -224,6 +224,12 @@
       "items": { "type": "string", "pattern": "^[a-z0-9_]+$" },
       "uniqueItems": true,
       "description": "Tool names whose input this tool's output can feed. Advisory for the router, not enforced at runtime."
+    },
+    "chains_from": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+      "uniqueItems": true,
+      "description": "Tool names whose output this tool can accept as input. Advisory for the router, not enforced at runtime."
     }
   }
 }

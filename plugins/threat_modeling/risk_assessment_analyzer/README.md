@@ -32,6 +32,14 @@ Three actions for risk assessment analysis:
 | Consumed | `text`, `pdf` | Risk assessment documents |
 | Produced | `json_events`, `text` | Structured assessment results |
 
+## Output Persistence
+
+On successful completion the framework automatically writes the full result to:
+```
+workspace/artifacts/risk_assessment_analyzer_<YYYYMMDD_HHMMSS>.json
+```
+The file is registered as a `json_events` session artifact. Use `artifacts` to get its ID. The `analyze` action result includes extracted attack stages, which can be passed directly to `attack_path_visualizer`. Use `export <artifact_id>` to push the JSON to `common/exports/risk_assessment_analyzer/` in cloud storage for external access or troubleshooting.
+
 ## Chains
 
 - **From**: `threat_model_analyzer`

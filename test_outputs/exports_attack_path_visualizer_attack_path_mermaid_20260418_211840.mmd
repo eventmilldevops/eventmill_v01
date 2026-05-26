@@ -1,0 +1,60 @@
+%% Path: sophisticated-ransomware-path - eCrime actors use social engineering for initial access, then abuse virtualization infrastructure for credential theft and ransomware deployment.
+%% Path: china-nexus-edge-exploitation-path - China-nexus actors exploit perimeter devices for initial access and use custom malware with stealth features for long-term intelligence collection.
+%% Path: advanced-phishing-trust-abuse-path - State-nexus actors abuse user and platform trust via AiTM phishing to steal credentials and access tokens for cloud environments.
+%% Path: software-supply-chain-path - Adversaries compromise software development or distribution channels to deliver malicious payloads to downstream victims.
+
+flowchart TB
+    subgraph attack["THREAT-INTEL Attack Graph"]
+    direction TB
+    N0(["<b>sophisticated-ransomware-path</b><br/>Initial Access<br/><small>T1566.004 - Spearphishing Voice</small>"])
+    N1(["Defense Evasion<br/><small>T1078 - Valid Accounts</small>"])
+    N2(["Defense Evasion<br/><small>T1562 - Impair Defenses</small>"])
+    N3(["Credential Access<br/><small>T1003.003 - NTDS</small>"])
+    N4(["Impact<br/><small>T1486 - Data Encrypted for Impact</small>"])
+    N5(["<b>china-nexus-edge-exploitation-path</b><br/>Initial Access<br/><small>T1190 - Exploit Public-Facing Applicat</small>"])
+    N6(["Persistence<br/><small>T1574.001 - DLL Search Order Hijacking</small>"])
+    N7(["Command and Control<br/><small>T1572 - Protocol Tunneling</small>"])
+    N8(["<b>advanced-phishing-trust-abuse-path</b><br/>Initial Access<br/><small>T1566.002 - Spearphishing Link</small>"])
+    N9(["Credential Access<br/><small>T1528 - Steal Application Access Token</small>"])
+    N10(["Persistence<br/><small>T1078 - Valid Accounts</small>"])
+    N11(["<b>software-supply-chain-path</b><br/>Initial Access<br/><small>T1195.002 - Compromise Software Supply Cha</small>"])
+    N12(["Execution<br/><small>T1059 - Command and Scripting Interpre</small>"])
+    N0 --> N1
+    N1 --> N2
+    N2 --> N3
+    N3 --> N4
+    N5 --> N6
+    N6 --> N7
+    N8 --> N9
+    N9 --> N10
+    N11 --> N12
+    end
+
+    subgraph legend[" "]
+    direction LR
+    LE["Entry Point"]
+    LM["Mid-chain"]
+    LX["Exit / Terminal"]
+    LC["Convergence"]
+    LG["Has Controls"]
+    end
+
+    style N0 fill:#bbdefb,stroke:#1565c0
+    style N1 fill:#ffffcc,stroke:#cccc00
+    style N2 fill:#ffffcc,stroke:#cccc00
+    style N3 fill:#ffffcc,stroke:#cccc00
+    style N4 fill:#ffcdd2,stroke:#b71c1c
+    style N5 fill:#bbdefb,stroke:#1565c0
+    style N6 fill:#ffffcc,stroke:#cccc00
+    style N7 fill:#ffcdd2,stroke:#b71c1c
+    style N8 fill:#bbdefb,stroke:#1565c0
+    style N9 fill:#ffffcc,stroke:#cccc00
+    style N10 fill:#ffcdd2,stroke:#b71c1c
+    style N11 fill:#bbdefb,stroke:#1565c0
+    style N12 fill:#ffcdd2,stroke:#b71c1c
+    style LE fill:#bbdefb,stroke:#1565c0
+    style LM fill:#ffffcc,stroke:#cccc00
+    style LX fill:#ffcdd2,stroke:#b71c1c
+    style LC fill:#ffe0b2,stroke:#e65100
+    style LG fill:#ccffcc,stroke:#00cc00
+    style legend fill:#f5f5f5,stroke:#999

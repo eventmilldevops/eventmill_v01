@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "hunt": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "summary_text": {
+      "type": "string",
+      "description": "Human-readable hunt output for AI enhancement."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low", "info"]
+    }
+  }
+}

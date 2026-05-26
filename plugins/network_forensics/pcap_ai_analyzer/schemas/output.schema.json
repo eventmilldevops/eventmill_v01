@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "mode": { "type": "string" },
+    "condition_orange": { "type": "boolean" },
+    "static_output": { "type": "string" },
+    "ai_analysis": { "type": "string" },
+    "combined_output": { "type": "string" }
+  }
+}

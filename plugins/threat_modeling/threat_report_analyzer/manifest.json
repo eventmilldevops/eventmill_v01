@@ -1,0 +1,30 @@
+{
+  "tool_name": "threat_report_analyzer",
+  "version": "1.0.0",
+  "pillar": "threat_modeling",
+  "display_name": "Threat Report Analyzer",
+  "description_short": "Summarize threat intelligence reports from the common bucket into context for analysis tools.",
+  "description_long": "Reads threat intelligence reports (MITRE ATT&CK, CAPEC, CISA advisories, vendor bulletins) from the common bucket and generates 1500-2000 word markdown summaries for use as context in other analysis tools. Supports listing available reports, summarizing specific reports, and searching across report content.",
+  "author": "Event Mill Contributors",
+  "entry_point": "tool.py",
+  "class_name": "ThreatReportAnalyzer",
+  "artifacts_consumed": [],
+  "artifacts_produced": ["text"],
+  "capabilities": [
+    "threat_modeling:report_discovery",
+    "threat_modeling:report_summarization",
+    "threat_modeling:report_search"
+  ],
+  "input_schema": "schemas/input.schema.json",
+  "output_schema": "schemas/output.schema.json",
+  "timeout_class": "long",
+  "cost_hint": "medium",
+  "model_tier": "heavy",
+  "safe_for_auto_invoke": false,
+  "requires_llm": true,
+  "dependencies": [],
+  "stability": "stable",
+  "tags": ["threat_intelligence", "mitre", "capec", "summarization", "context"],
+  "chains_to": ["risk_assessment_analyzer", "attack_path_visualizer"],
+  "chains_from": []
+}

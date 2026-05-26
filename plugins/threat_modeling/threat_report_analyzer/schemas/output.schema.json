@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Threat Report Analyzer Output",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "description": "Action that was performed"
+    },
+    "reports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "name": {"type": "string"},
+          "size_bytes": {"type": "integer"},
+          "last_modified": {"type": "string"}
+        },
+        "required": ["path", "name"]
+      },
+      "description": "Available reports (for list_reports action)"
+    },
+    "summaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "report_path": {"type": "string"},
+          "word_count": {"type": "integer"},
+          "summary": {"type": "string"},
+          "key_findings": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "relevant_techniques": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        },
+        "required": ["report_path", "summary"]
+      },
+      "description": "Generated summaries (for summarize action)"
+    },
+    "search_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "report_path": {"type": "string"},
+          "matches": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["report_path"]
+      },
+      "description": "Search results (for search_reports action)"
+    },
+    "error_code": {
+      "type": "string",
+      "description": "Error code if action failed"
+    },
+    "message": {
+      "type": "string",
+      "description": "Status or error message"
+    }
+  },
+  "required": ["action", "message"]
+}

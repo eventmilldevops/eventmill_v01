@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Threat Report Analyzer Input",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["list_reports", "summarize", "search_reports"],
+      "description": "Action to perform"
+    },
+    "report_path": {
+      "type": "string",
+      "description": "Path to report in common bucket (e.g., 'mitre/attack-stix.json' or 'capec/capec-stix.xml')"
+    },
+    "query": {
+      "type": "string",
+      "description": "Search query for search_reports action"
+    },
+    "max_word_count": {
+      "type": "integer",
+      "default": 2000,
+      "minimum": 500,
+      "maximum": 4000,
+      "description": "Maximum words in the generated summary (default: 2000)"
+    },
+    "focus_areas": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Optional focus areas to emphasize (e.g., ['attack_techniques', 'mitigations', 'threat_actors'])"
+    }
+  },
+  "required": ["action"],
+  "allOf": [
+    {
+      "if": {"properties": {"action": {"const": "summarize"}}},
+      "then": {"required": ["report_path"]}
+    },
+    {
+      "if": {"properties": {"action": {"const": "search_reports"}}},
+      "then": {"required": ["query"]}
+    }
+  ]
+}

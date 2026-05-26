@@ -35,6 +35,7 @@
   "output_schema": "schemas/output.schema.json",
   "timeout_class": "medium",
   "cost_hint": "moderate",
+  "model_tier": "light",
   "safe_for_auto_invoke": true,
   "requires_auth": false,
   "requires_llm": true,

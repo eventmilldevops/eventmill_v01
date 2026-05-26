@@ -1,0 +1,31 @@
+{
+  "tool_name": "pcap_flow_analyzer",
+  "version": "1.0.0",
+  "pillar": "network_forensics",
+  "display_name": "PCAP Flow Analyzer",
+  "description_short": "Deep-dive TCP/UDP flow analysis with protocol reconstruction.",
+  "description_long": "Analyzes network flows in the loaded PcapSession with protocol-aware reconstruction. Aggregates bidirectional flows between host pairs, computes byte ratios, identifies long-duration connections, and provides per-protocol breakdowns for DNS, HTTP, and TLS. Designed for detailed forensic examination of specific conversations flagged by summary or threat hunt tools.",
+  "author": "Event Mill Contributors",
+  "entry_point": "tool.py",
+  "class_name": "PcapFlowAnalyzer",
+  "artifacts_consumed": ["pcap", "json_events"],
+  "artifacts_produced": ["json_events"],
+  "capabilities": [
+    "network_forensics:flow_analysis",
+    "network_forensics:bidirectional_stats",
+    "network_forensics:protocol_breakdown",
+    "network_forensics:long_connections"
+  ],
+  "input_schema": "schemas/input.schema.json",
+  "output_schema": "schemas/output.schema.json",
+  "timeout_class": "medium",
+  "cost_hint": "low",
+  "model_tier": "light",
+  "safe_for_auto_invoke": true,
+  "requires_llm": false,
+  "dependencies": ["pcap_metadata_summary"],
+  "stability": "stable",
+  "tags": ["flow", "tcp", "udp", "bidirectional", "protocol", "reconstruction"],
+  "chains_to": ["pcap_threat_hunter", "pcap_ai_analyzer"],
+  "chains_from": ["pcap_metadata_summary", "pcap_ip_search"]
+}

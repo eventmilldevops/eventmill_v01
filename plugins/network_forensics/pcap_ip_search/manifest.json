@@ -1,0 +1,30 @@
+{
+  "tool_name": "pcap_ip_search",
+  "version": "1.0.0",
+  "pillar": "network_forensics",
+  "display_name": "PCAP IP/IOC Search",
+  "description_short": "Search loaded PCAP data for IPs, domains, ports, or IOCs.",
+  "description_long": "Searches the in-memory PcapSession for specific indicators of compromise (IPs, domains, ports) across conversations, DNS queries, HTTP requests, and TLS handshakes. Also provides chronological timeline filtering by IP address to reconstruct activity for a specific host.",
+  "author": "Event Mill Contributors",
+  "entry_point": "tool.py",
+  "class_name": "PcapIpSearch",
+  "artifacts_consumed": ["pcap"],
+  "artifacts_produced": ["json_events"],
+  "capabilities": [
+    "network_forensics:ioc_search",
+    "network_forensics:ip_timeline",
+    "network_forensics:ip_filter"
+  ],
+  "input_schema": "schemas/input.schema.json",
+  "output_schema": "schemas/output.schema.json",
+  "timeout_class": "fast",
+  "cost_hint": "low",
+  "model_tier": "light",
+  "safe_for_auto_invoke": true,
+  "requires_llm": false,
+  "dependencies": ["pcap_metadata_summary"],
+  "stability": "stable",
+  "tags": ["ioc", "search", "ip", "timeline", "domain", "port"],
+  "chains_to": ["pcap_flow_analyzer", "pcap_threat_hunter"],
+  "chains_from": ["pcap_metadata_summary"]
+}

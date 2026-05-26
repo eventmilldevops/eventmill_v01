@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "hunt": {
+      "type": "string",
+      "enum": ["talkers", "ports", "beacons", "dns", "tls", "lateral", "exfil"],
+      "description": "Which threat hunt to execute."
+    },
+    "top_n": {
+      "type": "integer",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 200,
+      "description": "Number of top entries to return (for talkers)."
+    },
+    "sort_by": {
+      "type": "string",
+      "enum": ["bytes", "connections", "packets"],
+      "default": "bytes",
+      "description": "Sort field for talkers."
+    },
+    "min_connections": {
+      "type": "integer",
+      "default": 10,
+      "minimum": 3,
+      "description": "Minimum connections to analyze (for beacons)."
+    },
+    "max_jitter_pct": {
+      "type": "number",
+      "default": 15.0,
+      "description": "Maximum jitter percentage to flag as beacon."
+    },
+    "min_ratio": {
+      "type": "number",
+      "default": 10.0,
+      "description": "Minimum outbound/inbound byte ratio for exfil detection."
+    },
+    "min_bytes_out": {
+      "type": "integer",
+      "default": 1048576,
+      "description": "Minimum outbound bytes to consider for exfil (default 1 MB)."
+    }
+  },
+  "required": ["hunt"]
+}

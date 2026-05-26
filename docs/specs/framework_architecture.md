@@ -1,7 +1,7 @@
 # Event Mill Framework Architecture and Tool Communication
 
-Version: 0.1.0
-Aligned with: eventmill_v1_1.md (v0.2.0-draft)
+Version: 0.2.0
+Aligned with: eventmill_v1_1.md (v0.2.0-draft), tool_plugin_spec.md (v0.3.0)
 
 ---
 
@@ -58,12 +58,16 @@ event_mill/
 │   │       ├── artifact_rules.json     # Artifact type to pillar strength
 │   │       └── adjacency.json          # Cross-pillar adjacency map
 │   │
-│   ├── llm/                            # LLM Orchestration via MCP
+│   ├── llm/                            # LLM Orchestration
 │   │   ├── __init__.py
-│   │   ├── client.py                   # MCP client wrapper (single instance per session)
-│   │   ├── context_builder.py          # Prompt construction from reference data + tool context
-│   │   ├── query_interface.py          # LLMQueryInterface implementation
-│   │   └── response_parser.py          # LLM response normalization
+│   │   ├── client.py                   # MCPLLMClient, LLMDispatcher (routes by QueryHints)
+│   │   ├── backends/                   # Provider-specific backend implementations
+│   │   │   ├── __init__.py             # Explicit BACKEND_REGISTRY
+│   │   │   ├── base.py                 # LLMBackend ABC, ModelCapabilities, DocumentPart
+│   │   │   └── gemini.py               # GeminiBackend (GCS URI + inline bytes)
+│   │   └── providers/                  # Declarative capability manifests
+│   │       ├── __init__.py
+│   │       └── gcp_gemini.json         # Gemini tiers, file handling, document strategies
 │   │
 │   ├── artifacts/                      # Artifact Registry
 │   │   ├── __init__.py
@@ -155,7 +159,8 @@ event_mill/
 | **CLI** | User I/O, command dispatch | Session state, tool catalog | User commands to session manager |
 | **Session Manager** | Session lifecycle, SQLite | — | Session DB (sessions, artifacts, tool_executions) |
 | **Router** | Pillar selection, tool filtering | Plugin registry, session state, config | Routing decisions (logged, not persisted) |
-| **LLM Client** | MCP connection, prompt dispatch | Reference data, tool context | MCP messages (external) |
+| **LLM Dispatcher** | Model routing, native doc dispatch | QueryHints, provider manifest | GenAI SDK calls (external) |
+| **LLM Backend** | Provider SDK connection, retry logic | API keys, model capabilities | API requests (external) |
 | **Artifact Registry** | Artifact tracking, immutability | Storage backend | Session DB (artifacts table) |
 | **Plugin Loader** | Discovery, validation, import | Plugin directories, manifest files | Plugin registry (in-memory) |
 | **Plugin Executor** | Timeout enforcement, context injection | Plugin registry, session state | Session DB (tool_executions), artifact registry |
@@ -191,7 +196,7 @@ Analyst Input
       │                         │ ExecutionContext
       │                         ▼
       │                  ┌──────────────┐
-      │                  │   Plugin     │──── LLMQueryInterface ──▶ MCP Client ──▶ Model
+      │                  │   Plugin     │──── LLMQueryInterface ──▶ LLM Dispatcher ──▶ Backend ──▶ Model
       │                  │  (tool.py)   │──── StorageBackend ─────▶ Artifact files
       │                  └──────┬───────┘
       │                         │ ToolResult

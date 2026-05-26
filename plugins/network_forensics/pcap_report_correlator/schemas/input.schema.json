@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["extract", "correlate", "full"],
+      "default": "full",
+      "description": "extract: only extract IOCs from report. correlate: match IOCs against PCAP. full: both stages."
+    },
+    "report_text": {
+      "type": "string",
+      "description": "The threat report or Markdown content to extract IOCs from."
+    },
+    "report_file": {
+      "type": "string",
+      "description": "Path to a file containing the threat report."
+    },
+    "iocs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      },
+      "description": "Pre-extracted IOCs to correlate directly (skip extraction stage)."
+    },
+    "use_ai_extraction": {
+      "type": "boolean",
+      "default": false,
+      "description": "Use LLM-enhanced IOC extraction (requires LLM connection)."
+    }
+  }
+}

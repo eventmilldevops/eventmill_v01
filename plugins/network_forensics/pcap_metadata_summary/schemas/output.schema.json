@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string"
+    },
+    "filename": {
+      "type": "string",
+      "description": "Name of the loaded PCAP file."
+    },
+    "file_size": {
+      "type": "integer",
+      "description": "Raw file size in bytes."
+    },
+    "packet_count": {
+      "type": "integer"
+    },
+    "duration_seconds": {
+      "type": "number"
+    },
+    "protocols": {
+      "type": "object",
+      "description": "Protocol name to packet count mapping."
+    },
+    "unique_ip_count": {
+      "type": "integer"
+    },
+    "internal_ip_count": {
+      "type": "integer"
+    },
+    "external_ip_count": {
+      "type": "integer"
+    },
+    "dns_query_count": {
+      "type": "integer"
+    },
+    "http_request_count": {
+      "type": "integer"
+    },
+    "tls_handshake_count": {
+      "type": "integer"
+    },
+    "conversations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "dns_queries": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "http_requests": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "tls_handshakes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

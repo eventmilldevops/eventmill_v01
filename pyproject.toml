@@ -39,6 +39,7 @@ dependencies = [
     "mcp>=1.0.0",
     "jsonschema>=4.20.0",
     "python-dotenv>=1.0.0",
+    "google-genai>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -52,18 +53,27 @@ dev = [
 gcp = [
     "google-cloud-storage>=2.10.0",
     "google-cloud-secret-manager>=2.16.0",
+    "google-cloud-logging>=3.8.0",
+    "google-cloud-build>=3.22.0",
 ]
 plugins-log-analysis = [
     "pdfplumber>=0.10.0",
     "beautifulsoup4>=4.12.0",
     "stix2>=3.0.0",
+    "python-docx>=1.1.0",
 ]
 plugins-network-forensics = [
     "scapy>=2.5.0",
     "dpkt>=1.9.8",
+    "fpdf2>=2.8.0",
+    "matplotlib>=3.8.0",
+    "networkx>=3.2",
+]
+plugins-threat-modeling = [
+    "pypdf>=4.0.0",
 ]
 all = [
-    "eventmill[dev,gcp,plugins-log-analysis,plugins-network-forensics]",
+    "eventmill[dev,gcp,plugins-log-analysis,plugins-network-forensics,plugins-threat-modeling]",
 ]
 
 [project.urls]

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "total_entries": { "type": "integer" },
+    "time_range": { "type": "string" },
+    "actions": {
+      "type": "object",
+      "additionalProperties": { "type": "integer" }
+    },
+    "top_sources": { "type": "array" },
+    "top_destinations": { "type": "array" },
+    "top_ports": { "type": "array" },
+    "deny_hotspots": { "type": "array" },
+    "scan_indicators": { "type": "array" },
+    "summary_text": { "type": "string" }
+  }
+}

@@ -29,6 +29,7 @@ class Session:
     created_at: datetime
     updated_at: datetime
     active_pillar: str | None = None
+    workspace_folder: str | None = None
     description: str = ""
     
     def to_dict(self) -> dict[str, Any]:
@@ -37,6 +38,7 @@ class Session:
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "active_pillar": self.active_pillar,
+            "workspace_folder": self.workspace_folder,
             "description": self.description,
         }
     
@@ -47,6 +49,7 @@ class Session:
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             active_pillar=data.get("active_pillar"),
+            workspace_folder=data.get("workspace_folder"),
             description=data.get("description", ""),
         )
 
@@ -59,6 +62,7 @@ class Artifact:
     session_id: str
     artifact_type: str
     file_path: str
+    storage_uri: str | None = None
     source_tool: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -69,6 +73,7 @@ class Artifact:
             "session_id": self.session_id,
             "artifact_type": self.artifact_type,
             "file_path": self.file_path,
+            "storage_uri": self.storage_uri,
             "source_tool": self.source_tool,
             "created_at": self.created_at.isoformat(),
             "metadata": self.metadata,
@@ -81,6 +86,7 @@ class Artifact:
             session_id=data["session_id"],
             artifact_type=data["artifact_type"],
             file_path=data["file_path"],
+            storage_uri=data.get("storage_uri"),
             source_tool=data.get("source_tool"),
             created_at=datetime.fromisoformat(data["created_at"]),
             metadata=data.get("metadata", {}),

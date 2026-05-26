@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Type
 
@@ -181,8 +182,11 @@ class PluginLoader:
                 f"Entry point not found: {entry_point_path}"
             )
         
+        # Use a flat module name to avoid parent-package lookup failures
+        # (dotted names require parent packages in sys.modules)
+        module_name = f"eventmill_plugin_{manifest.pillar}_{manifest.tool_name}"
         spec = importlib.util.spec_from_file_location(
-            f"eventmill.plugins.{manifest.pillar}.{manifest.tool_name}",
+            module_name,
             entry_point_path,
         )
         if spec is None or spec.loader is None:
@@ -191,6 +195,7 @@ class PluginLoader:
             )
         
         module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
         spec.loader.exec_module(module)
         
         # Get the plugin class

@@ -1,0 +1,17 @@
+flowchart TB
+    subgraph attack["THREAT-INTEL Attack Path"]
+    direction TB
+    S0(["Initial Access<br/><small>T1566</small>"])
+    S1(["Impact<br/><small>T1486</small>"])
+    S2(["Inhibit Response Function<br/><small>T0815</small>"])
+    S3(["<br/><small>T0880</small>"])
+    S0 --> S1
+    S1 --> S2
+    S2 --> S3
+    end
+
+    %% Styling
+    style S0 fill:#ffffcc,stroke:#cccc00
+    style S1 fill:#ffffcc,stroke:#cccc00
+    style S2 fill:#ffffcc,stroke:#cccc00
+    style S3 fill:#ffffcc,stroke:#cccc00

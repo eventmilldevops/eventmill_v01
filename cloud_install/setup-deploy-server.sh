@@ -1,5 +1,5 @@
 #!/bin/bash
-# Event Mill v0.2.0 - Deploy Server Bootstrap
+# Event Mill v0.1.0 - Deploy Server Bootstrap
 # Run once on the dedicated Linux deploy server to set up prerequisites.
 #
 # What this does:
@@ -17,7 +17,7 @@ REPO_URL="https://github.com/dleecefft/eventmill_v01.git"
 INSTALL_DIR="${EVENTMILL_INSTALL_DIR:-${HOME}/eventmill_v01}"
 CONFIG_DIR="${HOME}/.eventmill"
 
-echo "⚙ Event Mill v0.2.0 — Deploy Server Setup"
+echo "⚙ Event Mill v0.1.0 — Deploy Server Setup"
 echo "============================================"
 echo "Repo:       ${REPO_URL}"
 echo "Install to: ${INSTALL_DIR}"
@@ -79,20 +79,32 @@ if [ ! -f "${CONFIG_DIR}/deploy.env" ]; then
 # Source this file before running deploy scripts:
 #   source ~/.eventmill/deploy.env
 
-# Required
+# Required: GCP project ID
 export GOOGLE_CLOUD_PROJECT="your-project-id"
+
+# Required: Bucket prefix — must match the value used when running provision-gcp-project.sh
+# Buckets created will be: {prefix}-log-analysis, {prefix}-threat-modeling,
+#                          {prefix}-network-forensics, {prefix}-common
+# Default convention: {project_id}-eventmill (set after GOOGLE_CLOUD_PROJECT is known)
+export EVENTMILL_BUCKET_PREFIX="${GOOGLE_CLOUD_PROJECT}-eventmill"
 
 # Region (default: northamerica-northeast2)
 export CLOUD_RUN_REGION="northamerica-northeast2"
 
-# GCS bucket for log artifacts (optional)
-export GCS_LOG_BUCKET="digevtrecintake"
+# Legacy single-bucket override (backward compatibility only — leave empty for new deployments)
+export GCS_LOG_BUCKET=""
 
 # Secret names in GCP Secret Manager
-export EVENTMILL_SECRET_GEMINI="eventmill-gemini-api"
+# Dual Gemini keys — display names match the env vars for traceability
+export EVENTMILL_SECRET_GEMINI_FLASH="eventmill-gemini-flash-api"
+export EVENTMILL_SECRET_GEMINI_PRO="eventmill-gemini-pro-api"
 export EVENTMILL_SECRET_GCS_SA="eventmill-gcs-sa"
 export EVENTMILL_SECRET_TTYD_USER="eventmill-ttyd-user"
 export EVENTMILL_SECRET_TTYD_CRED="eventmill-ttyd-cred"
+
+# ttyd web terminal credentials (used by deploy-cloudrun.sh quick deploy only)
+export TTYD_USERNAME="analyst"
+export TTYD_PASSWORD="changeme"
 
 # Log level for the deployed service
 export EVENTMILL_LOG_LEVEL="INFO"

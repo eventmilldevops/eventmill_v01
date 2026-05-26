@@ -100,14 +100,16 @@
         "technique_name": "Exploit Public-Facing Application",
         "tactic": "Initial Access",
         "confidence": "explicit",
-        "report_context": "Exploited CVE-2025-21345 in the RMM platform to gain initial foothold on MSP management servers."
+        "report_context": "Exploited CVE-2025-21345 in the RMM platform to gain initial foothold on MSP management servers.",
+        "context_paths": ["vuln-exploit-path"]
       },
       {
         "technique_id": "T1195.002",
         "technique_name": "Compromise Software Supply Chain",
         "tactic": "Initial Access",
         "confidence": "explicit",
-        "report_context": "Trojanized legitimate MSP software update packages to distribute DUSTLOADER to downstream customers."
+        "report_context": "Trojanized legitimate MSP software update packages to distribute DUSTLOADER to downstream customers.",
+        "context_paths": ["supply-chain-path"]
       },
       {
         "technique_id": "T1566.002",
@@ -170,6 +172,7 @@
       },
       "high_priority_count": 6,
       "mitre_technique_count": 9,
+      "unique_technique_count": 9,
       "confidence_distribution": {
         "low": 0,
         "medium": 2,

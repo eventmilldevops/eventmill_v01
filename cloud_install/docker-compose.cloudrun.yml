@@ -1,4 +1,4 @@
-# Event Mill v0.2.0 - Local testing of Cloud Run image
+# Event Mill v0.1.0 - Local testing of Cloud Run image
 # Simulates the Cloud Run environment locally via Docker Compose
 #
 # Usage:
@@ -17,21 +17,30 @@ services:
       - "8080:8080"
     environment:
       - PORT=8080
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # LLM keys — dual-tier model (Flash=light, Pro=heavy)
+      - GEMINI_FLASH_API_KEY=${GEMINI_FLASH_API_KEY:-}
+      - GEMINI_PRO_API_KEY=${GEMINI_PRO_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Storage — must match the GCS bucket prefix used during provisioning
+      - EVENTMILL_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX:-eventmill}
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
       - GCS_LOG_BUCKET=${GCS_LOG_BUCKET:-}
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/sa-key.json
+      # GCS credentials — set GOOGLE_APPLICATION_CREDENTIALS on host or use ADC volume below
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
       - EVENTMILL_WORKSPACE=/app/workspace
       - EVENTMILL_LOG_LEVEL=${EVENTMILL_LOG_LEVEL:-DEBUG}
       - TTYD_USERNAME=${TTYD_USERNAME:-admin}
       - TTYD_PASSWORD=${TTYD_PASSWORD:-changeme}
     volumes:
-      # Mount workspace for persistence across restarts
+      # Workspace persistence across restarts
       - ../workspace:/app/workspace
-      # Mount GCS service account key if available (read-only)
-      # Uncomment and set GOOGLE_APPLICATION_CREDENTIALS in your shell:
-      # - ${GOOGLE_APPLICATION_CREDENTIALS}:/app/credentials/sa-key.json:ro
+      # GCS credentials: choose ONE approach and uncomment:
+      #
+      # Option A — Application Default Credentials (run: gcloud auth application-default login)
+      # - ${HOME}/.config/gcloud:/home/eventmill/.config/gcloud:ro
+      #
+      # Option B — Service account key file (set GOOGLE_APPLICATION_CREDENTIALS on host)
+      # - ${GOOGLE_APPLICATION_CREDENTIALS:-/dev/null}:/app/credentials/sa-key.json:ro
     security_opt:
       - no-new-privileges:true
     stdin_open: true

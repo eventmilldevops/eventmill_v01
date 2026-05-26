@@ -1,0 +1,31 @@
+{
+  "tool_name": "firewall_log_aggregator",
+  "version": "1.0.0",
+  "pillar": "network_forensics",
+  "display_name": "Firewall Log Aggregator",
+  "description_short": "Parses and aggregates firewall logs for statistical analysis.",
+  "description_long": "Ingests firewall logs (syslog, CSV, JSON) from vendors including Palo Alto, Fortinet, pfSense, iptables, and Windows Firewall. Aggregates traffic by source/destination, port, action (allow/deny), and time window. Produces top-talker summaries, deny hotspots, and port-scan indicators to feed into threat hunt workflows.",
+  "author": "Event Mill Contributors",
+  "entry_point": "tool.py",
+  "class_name": "FirewallLogAggregator",
+  "artifacts_consumed": ["log_file", "text"],
+  "artifacts_produced": ["json_events", "text"],
+  "capabilities": [
+    "network_forensics:firewall_ingestion",
+    "network_forensics:deny_analysis",
+    "network_forensics:traffic_aggregation",
+    "network_forensics:port_scan_detection"
+  ],
+  "input_schema": "schemas/input.schema.json",
+  "output_schema": "schemas/output.schema.json",
+  "timeout_class": "medium",
+  "cost_hint": "low",
+  "model_tier": "none",
+  "safe_for_auto_invoke": true,
+  "requires_llm": false,
+  "dependencies": [],
+  "stability": "stable",
+  "tags": ["firewall", "syslog", "palo_alto", "fortinet", "pfsense", "iptables"],
+  "chains_to": ["pcap_threat_hunter", "pcap_ai_analyzer"],
+  "chains_from": []
+}
