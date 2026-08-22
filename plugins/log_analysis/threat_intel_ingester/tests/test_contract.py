@@ -164,7 +164,7 @@ class TestManifestLoads:
     def test_manifest_has_required_fields(self, manifest: dict):
         required = [
             "tool_name", "version", "pillar", "display_name",
-            "description_short", "description_llm", "author",
+            "description_short", "description_long", "author",
             "entry_point", "class_name", "artifacts_consumed",
             "artifacts_produced", "capabilities", "input_schema",
             "output_schema", "timeout_class", "safe_for_auto_invoke",
