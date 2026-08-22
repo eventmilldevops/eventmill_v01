@@ -39,13 +39,13 @@ Run the bootstrap script once on the Linux deploy server:
 
 ```bash
 # Download and run directly, or clone first
-curl -sL https://raw.githubusercontent.com/dleecefft/eventmill_v01/main/cloud_install/setup-deploy-server.sh | bash
+curl -sL https://raw.githubusercontent.com/eventmilldevops/eventmill_v01/main/cloud_install/setup-deploy-server.sh | bash
 ```
 
 Or manually:
 
 ```bash
-git clone https://github.com/dleecefft/eventmill_v01.git ~/eventmill_v01
+git clone https://github.com/eventmilldevops/eventmill_v01.git ~/eventmill_v01
 bash ~/eventmill_v01/cloud_install/setup-deploy-server.sh
 ```
 

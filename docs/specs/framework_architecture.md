@@ -24,7 +24,7 @@ This is a **reference** document. Where it conflicts with `tool_plugin_spec.md` 
 ## 1. Repository Directory Structure
 
 ```text
-event_mill/
+eventmill_v01/
 ├── README.md
 ├── LICENSE
 ├── pyproject.toml

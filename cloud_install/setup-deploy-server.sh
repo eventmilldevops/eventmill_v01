@@ -13,7 +13,7 @@
 
 set -e
 
-REPO_URL="https://github.com/dleecefft/eventmill_v01.git"
+REPO_URL="https://github.com/eventmilldevops/eventmill_v01.git"
 INSTALL_DIR="${EVENTMILL_INSTALL_DIR:-${HOME}/eventmill_v01}"
 CONFIG_DIR="${HOME}/.eventmill"
 

@@ -77,10 +77,10 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dleecefft/event_mill"
-Documentation = "https://github.com/dleecefft/event_mill/tree/main/docs"
-Repository = "https://github.com/dleecefft/event_mill"
-Issues = "https://github.com/dleecefft/event_mill/issues"
+Homepage = "https://github.com/eventmilldevops/eventmill_v01"
+Documentation = "https://github.com/eventmilldevops/eventmill_v01/tree/main/docs"
+Repository = "https://github.com/eventmilldevops/eventmill_v01"
+Issues = "https://github.com/eventmilldevops/eventmill_v01/issues"
 
 [project.scripts]
 eventmill = "framework.cli.shell:main"

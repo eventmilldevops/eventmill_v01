@@ -67,8 +67,8 @@ Event Mill uses a three-layer architecture:
 
 ```bash
 # Clone the repository
-git clone https://github.com/dleecefft/event_mill.git
-cd event_mill
+git clone https://github.com/eventmilldevops/eventmill_v01.git
+cd eventmill_v01
 
 # Install with pip
 pip install -e .[all]
@@ -102,7 +102,7 @@ python -m framework.cli.shell
 ## Directory Structure
 
 ```
-event_mill/
+eventmill_v01/
 ├── framework/              # Framework layer
 │   ├── cli/               # Metasploit-style command shell
 │   ├── session/           # Session management (SQLite)
