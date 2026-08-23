@@ -30,8 +30,20 @@ python scripts/generate_tool_catalog.py  # regenerate the tool catalog
 Run the shell locally: `python -m framework.cli.shell` (or the `eventmill`
 console script).
 
-> **Unverified:** the commands above are read from `pyproject.toml` and the
-> `scripts/` directory, not executed. Confirm before relying on them.
+Verified as of 2026-08-23: `pytest` (376 passing), `validate_manifests.py`,
+and `validate_schemas.py` (32 valid) all run. `ruff`, `black` and `mypy` are in
+the `dev` extra but were **not installed** in the environment they were checked
+from, so they are still unconfirmed — install with `pip install -e ".[dev]"`
+before trusting a clean lint.
+
+> **`validate_manifests.py` currently exits non-zero with 15 errors**, all
+> `'stable' is not one of ['experimental','verified','core','deprecated']`.
+> This is pre-existing and unrelated to any recent change: 15 of 16 manifests
+> declare `stability: "stable"`, which is not a defined level. Per
+> `tool_plugin_spec.md`, `stability` governs visibility and auto-invoke policy,
+> so mapping it to `verified` or `core` is a behaviour decision, not a typo fix.
+> Nothing in the build or deploy path runs the validator, so it does not block
+> a release. Do not "fix" it by widening the enum without asking.
 >
 > Known inconsistency: `asyncio_mode = "auto"` is commented out in
 > `[tool.pytest.ini_options]` with the note "Uncomment when pytest-asyncio is
@@ -58,6 +70,50 @@ resolution to GCS and logging to JSON for Cloud Logging.
 
 ---
 
+## LLM models — read before changing anything under `framework/llm/`
+
+Two tiers, declared in `framework/llm/providers/gcp_gemini.json`. That file is
+the single source of truth for model ids, token limits and capabilities; do not
+hardcode any of them elsewhere.
+
+| Tier | Model | Input | Output |
+|---|---|---|---|
+| light | `gemini-3.5-flash` | 1,048,576 | 65,536 |
+| heavy | `gemini-3.1-pro-preview` | 1,048,576 | 65,536 |
+
+**The tiers are capacity-identical.** Tier selects reasoning depth and cost, and
+nothing else. Any logic that picks a tier based on how much data there is, is
+wrong by construction — that was the original `max_tokens > 3500` heuristic,
+now demoted to a last resort for framework-level callers with no hints.
+
+Tier precedence: **per-call `QueryHints` > manifest `model_tier` > token
+heuristic.** The manifest default is applied by `TierScopedLLMClient`, one wrapper
+per plugin execution, so plugins need no code for the common case.
+
+Non-obvious things that have already caused bugs here:
+
+- **PDF page cost is not a constant.** Under Gemini 3.x it is set by
+  `media_resolution`: `low` 280, `medium` 560 (default), `high` 1120 tokens per
+  page, plus native text which is free. A 1000-page PDF is 1.12M tokens at
+  `high` and does not fit the 1M window; `query_with_document()` refuses that up
+  front rather than failing mid-call.
+- **Default thinking effort moved to `medium` in 3.x.** Bulk extraction should
+  pass `thinking_level="low"` or it pays reasoning cost per chunk for
+  pattern-matching work.
+- **`temperature`, `top_p`, `top_k` are deprecated in 3.x.** The code sets none
+  of them. Do not add them back.
+- **The heavy tier is a Preview endpoint** and can be retired with ~2 weeks'
+  notice. On `NOT_FOUND` the dispatcher retries against the tier's
+  `fallback_model_id`. `EVENTMILL_MODEL_HEAVY` repoints it without a code change.
+- **Use `models.generate_content()`, not the Interactions API.** The Interactions
+  gateway caps input at 32,768 tokens regardless of the model's real context
+  window — a documented trap that looks like a model limitation.
+- `google-genai >= 1.69.0` is required for `media_resolution` and
+  `thinking_level`. The container resolves 2.x, whose breaking changes are
+  confined to the Interactions API.
+
+---
+
 ## Cloud deployment — read before touching `cloud_install/`
 
 Full detail: `cloud_install/README.md`. What follows is only the material that
@@ -71,8 +127,11 @@ export CLOUD_RUN_REGION="..."        # NO SAFE DEFAULT
 export EVENTMILL_BUCKET_PREFIX="..." # NO SAFE DEFAULT
 ```
 
-Persist them in `~/.eventmill/deploy.env`. Tenant-specific values are
-deliberately not committed here.
+Persist them in `~/.eventmill/deploy.env`. `provision-gcp-project.sh` and
+`deploy-cloudrun-secrets.sh` load that file automatically, with anything already
+exported in your shell taking precedence. `gcloud builds submit` cannot read it,
+so the Cloud Build path still needs an explicit `source` plus `--substitutions`.
+Tenant-specific values are deliberately not committed here.
 
 Why this is the single most important line in this file:
 
@@ -85,7 +144,10 @@ Why this is the single most important line in this file:
   reads buckets that do not exist. Silent, and therefore worse.
 
 Both defaulted implicitly in v1, and every region/bucket failure during the
-first tenant bring-up traced back to that.
+first tenant bring-up traced back to that. Every script now refuses to run
+without an explicit region, and the `deploy.env` template ships
+`CLOUD_RUN_REGION` blank on purpose — a pre-filled region silently satisfies
+the check and reintroduces the bug.
 
 ### IAM model
 
