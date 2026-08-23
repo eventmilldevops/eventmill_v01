@@ -93,3 +93,6 @@ Thumbs.db
 
 # Archive stuff
 *.bak
+
+# Claude Code agent scratch memory (per-machine, not shared state)
+.claude/agent-memory/

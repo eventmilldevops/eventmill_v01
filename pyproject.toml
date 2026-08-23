@@ -42,6 +42,9 @@ dependencies = [
     # 1.69+ required for GenerateContentConfig.media_resolution and
     # ThinkingConfig.thinking_level (Gemini 3.x controls).
     "google-genai>=1.69.0",
+    # Framework, not plugin: the dispatcher's PDF context guard and the
+    # shell's artifact registration both need a page count.
+    "pypdf>=4.0.0",
 ]
 
 [project.optional-dependencies]
@@ -71,9 +74,7 @@ plugins-network-forensics = [
     "matplotlib>=3.8.0",
     "networkx>=3.2",
 ]
-plugins-threat-modeling = [
-    "pypdf>=4.0.0",
-]
+plugins-threat-modeling = []
 all = [
     "eventmill[dev,gcp,plugins-log-analysis,plugins-network-forensics,plugins-threat-modeling]",
 ]

@@ -497,15 +497,19 @@ plugin receives `llm_query=None` and `llm_enabled=False`.
 
 1. Per-call `QueryHints(tier=...)` passed by the plugin
 2. The plugin's manifest `model_tier`
-3. A `max_tokens > 3500` heuristic (last resort, for direct framework callers)
+3. `light` — the default for framework callers that express no preference
+
+`QueryHints.tier` defaults to `None` ("no opinion"), so hints that set only
+`thinking_level` or `media_resolution` fall through to the manifest tier. Output
+size never selects a tier: both tiers are capacity-identical.
 
 Override per call only when a specific query genuinely differs from the plugin's norm —
 for example `threat_report_analyzer` summarizes chunks on `light` and synthesizes the final
 report on `heavy`. Plugins MUST NOT select a provider or model id; tiers are the only
 model-selection vocabulary available to a plugin.
 
-Output tokens are clamped to the selected tier's declared cap
-(`framework/llm/providers/<provider>.json`), so requesting more than a tier can emit
+Output tokens are clamped to the declared cap of the model that actually runs
+(`framework/llm/providers/<provider>.json`), so requesting more than it can emit
 degrades rather than failing the call.
 
 ---

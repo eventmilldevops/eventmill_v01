@@ -13,6 +13,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -26,8 +27,16 @@ TIER_MODEL_ENV_OVERRIDE = {
     "heavy": "EVENTMILL_MODEL_HEAVY",
 }
 
+# Paired with the above: a substitute model rarely shares the manifest model's
+# output cap, and clamping against the wrong cap fails at the provider.
+TIER_MAX_OUTPUT_ENV_OVERRIDE = {
+    "light": "EVENTMILL_MAX_OUTPUT_LIGHT",
+    "heavy": "EVENTMILL_MAX_OUTPUT_HEAVY",
+}
+
 # Caps used when no provider manifest is available. Gemini 3.x tiers are
 # capacity-identical (1,048,576 in / 65,536 out) — tier is quality/cost, not size.
+_DEFAULT_MAX_OUTPUT_TOKENS = 65536
 _FALLBACK_MAX_OUTPUT_TOKENS = {"light": 65536, "heavy": 65536}
 
 
@@ -57,6 +66,7 @@ def manifest_path(provider_id: str = DEFAULT_PROVIDER_ID) -> Path:
     return Path(__file__).parent / f"{provider_id}.json"
 
 
+@lru_cache(maxsize=4)
 def load_provider_manifest(
     provider_id: str = DEFAULT_PROVIDER_ID,
 ) -> dict[str, Any] | None:
@@ -64,6 +74,10 @@ def load_provider_manifest(
 
     Returns None (and logs) if the manifest is missing or malformed —
     callers fall back to built-in defaults rather than failing to start.
+
+    Cached: the PDF guard alone consults it several times per call, and the
+    manifest does not change while the process runs. Call
+    load_provider_manifest.cache_clear() if a test rewrites the file.
     """
     path = manifest_path(provider_id)
     try:
@@ -95,18 +109,35 @@ def load_tier_specs(
     for tier, cfg in (manifest.get("tiers") or {}).items():
         model_id = cfg.get("model_id", "")
         override_env = TIER_MODEL_ENV_OVERRIDE.get(tier)
-        if override_env:
-            model_id = os.environ.get(override_env) or model_id
+        overridden = False
+        if override_env and os.environ.get(override_env):
+            model_id = os.environ[override_env]
+            overridden = True
         if not model_id:
             logger.warning("Provider %s tier %s has no model_id", provider_id, tier)
             continue
+        max_output = cfg.get(
+            "max_output_tokens",
+            _FALLBACK_MAX_OUTPUT_TOKENS.get(tier, _DEFAULT_MAX_OUTPUT_TOKENS),
+        )
+        cap_env = TIER_MAX_OUTPUT_ENV_OVERRIDE.get(tier)
+        cap_raw = os.environ.get(cap_env) if cap_env else None
+        if cap_raw:
+            try:
+                max_output = int(cap_raw)
+            except ValueError:
+                logger.warning("%s=%r is not an integer — ignoring", cap_env, cap_raw)
+        elif overridden:
+            logger.warning(
+                "%s pins tier %s to %s, but the output cap still comes from the "
+                "manifest (%d). Set %s if the substitute model differs.",
+                override_env, tier, model_id, max_output, cap_env,
+            )
         specs[tier] = TierSpec(
             tier=tier,
             model_id=model_id,
             api_key_env=cfg.get("api_key_env", ""),
-            max_output_tokens=cfg.get(
-                "max_output_tokens", _FALLBACK_MAX_OUTPUT_TOKENS.get(tier, 8192),
-            ),
+            max_output_tokens=max_output,
             max_context_tokens=cfg.get("max_context_tokens", 1_048_576),
             cost_tier=cfg.get("cost_tier", "low"),
             capabilities=tuple(cfg.get("capabilities", [])),
@@ -155,16 +186,6 @@ def tokens_per_pdf_page(
     return handling.get("tokens_per_page", _FALLBACK_TOKENS_PER_PAGE["medium"])
 
 
-def max_output_tokens_for_tier(
-    tier: str, provider_id: str = DEFAULT_PROVIDER_ID,
-) -> int:
-    """Output-token cap for a tier, with a conservative built-in fallback."""
-    spec = load_tier_specs(provider_id).get(tier)
-    if spec:
-        return spec.max_output_tokens
-    return _FALLBACK_MAX_OUTPUT_TOKENS.get(tier, 8192)
-
-
 __all__ = [
     "DEFAULT_MEDIA_RESOLUTION",
     "DEFAULT_PROVIDER_ID",
@@ -172,7 +193,6 @@ __all__ = [
     "load_provider_manifest",
     "load_tier_specs",
     "manifest_path",
-    "max_output_tokens_for_tier",
     "pdf_handling",
     "default_media_resolution",
     "tokens_per_pdf_page",

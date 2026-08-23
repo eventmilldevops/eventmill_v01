@@ -20,7 +20,7 @@
   "output_schema": "schemas/output.schema.json",
   "timeout_class": "medium",
   "cost_hint": "low",
-  "model_tier": "light",
+  "model_tier": "none",
   "safe_for_auto_invoke": true,
   "requires_llm": false,
   "dependencies": ["pcap_metadata_summary"],

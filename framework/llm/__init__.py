@@ -9,7 +9,6 @@ from .client import (
     ContextBuilder,
     LLMDispatcher,
     MCPLLMClient,
-    TieredLLMClient,
     TierScopedLLMClient,
 )
 from .providers import TierSpec, load_tier_specs
@@ -18,7 +17,6 @@ __all__ = [
     "ContextBuilder",
     "MCPLLMClient",
     "LLMDispatcher",
-    "TieredLLMClient",
     "TierScopedLLMClient",
     "TierSpec",
     "load_tier_specs",

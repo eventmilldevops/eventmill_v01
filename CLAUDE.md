@@ -86,8 +86,10 @@ Plugins receive a read-only `ExecutionContext`. The one write they may perform i
 ### LLM tier selection
 
 Tier precedence, in order: **per-call `QueryHints` > manifest `model_tier` >
-`max_tokens > 3500` heuristic.** The heuristic is a last resort for
-framework-level callers only; plugins should never rely on it.
+light.** Output size never selects a tier — the two tiers are capacity-identical,
+so plugin manifests are what drive model selection. A `QueryHints` whose `tier`
+is `None` expresses no opinion and falls through to the manifest default; that is
+why `tier` defaults to `None` rather than `"light"`.
 
 `TierScopedLLMClient` wraps the shared dispatcher once per plugin execution and
 supplies the manifest's tier when a call passes no hints — so the common case
@@ -95,7 +97,8 @@ needs no code in the plugin. `LLMDispatcher` stays plugin-agnostic.
 
 `framework/llm/providers/gcp_gemini.json` is the **single source of truth** for
 model ids, token limits, per-tier capabilities and PDF page cost. Do not hardcode
-any of those elsewhere; `framework/llm/backends/gemini.py` reads it rather than repeating it.
+any of those elsewhere. `framework/llm/client.py` reads it — for tier caps, native
+document capability, and PDF page cost alike — rather than repeating any of it.
 
 The two tiers are **capacity-identical** (1,048,576 in / 65,536 out). Tier means
 reasoning depth and cost, never how much fits — any logic that picks a tier from

@@ -169,7 +169,7 @@
       "type": "string",
       "enum": ["light", "heavy", "none"],
       "default": "light",
-      "description": "Default LLM tier for this plugin's queries. light=fast/cheap bulk work (Flash); heavy=deep reasoning (Pro); none=the plugin performs no LLM work and receives no llm_query. The framework applies this as the default tier for every LLM call the plugin makes; a plugin MAY override it per call by passing QueryHints(tier=...). Precedence: per-call QueryHints > manifest model_tier > max_tokens heuristic."
+      "description": "Default LLM tier for this plugin's queries. light=fast/cheap bulk work (Flash); heavy=deep reasoning (Pro); none=the plugin performs no LLM work and receives no llm_query. The framework applies this as the default tier for every LLM call the plugin makes; a plugin MAY override it per call by passing QueryHints(tier=...). Precedence: per-call QueryHints > manifest model_tier > light. Output size never selects a tier."
     },
     "safe_for_auto_invoke": {
       "type": "boolean",

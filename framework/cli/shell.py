@@ -238,15 +238,26 @@ class EventMillShell(cmd.Cmd):
             })
 
         if not models and os.environ.get("GEMINI_API_KEY"):
-            # Legacy single-key setup. Bind to light so bare 'connect' yields
-            # a routable dispatcher rather than one that raises on every query.
-            light = self._tier_specs.get("light")
-            models.append({
-                "id": light.model_id if light else "gemini-2.5-flash",
-                "name": "Gemini (default)",
-                "tier": "light",
-                "env_var": "GEMINI_API_KEY",
-            })
+            # Legacy single-key setup. Bind it to both tiers — one key reaches
+            # both models, so plugin manifests still drive model selection
+            # instead of everything collapsing onto Flash.
+            for tier in ("light", "heavy"):
+                spec = self._tier_specs.get(tier)
+                if not spec:
+                    continue
+                models.append({
+                    "id": spec.model_id,
+                    "name": spec.label(),
+                    "tier": tier,
+                    "env_var": "GEMINI_API_KEY",
+                })
+            if not models:
+                models.append({
+                    "id": "gemini-3.5-flash",
+                    "name": "Gemini (default)",
+                    "tier": "light",
+                    "env_var": "GEMINI_API_KEY",
+                })
 
         return models
 
@@ -743,6 +754,32 @@ class EventMillShell(cmd.Cmd):
         else:
             print("  Tip: set a pillar to enable bucket-based file resolution.")
     
+    @staticmethod
+    def _artifact_metadata(file_path: Path) -> dict[str, Any]:
+        """Metadata captured when a file is loaded.
+
+        The PDF page count is recorded here because it cannot be recovered
+        later: once an artifact resolves to GCS there is no local file to
+        read, and the dispatcher's context-overflow guard needs it to size
+        the request before sending it.
+        """
+        metadata: dict[str, Any] = {"original_filename": file_path.name}
+        try:
+            metadata["size_bytes"] = file_path.stat().st_size
+        except OSError as e:
+            logger.warning("Could not stat %s: %s", file_path, e)
+
+        if file_path.suffix.lower() != ".pdf":
+            return metadata
+
+        metadata["mime_type"] = "application/pdf"
+        try:
+            from pypdf import PdfReader
+            metadata["pages"] = len(PdfReader(str(file_path)).pages)
+        except Exception as e:
+            logger.warning("Could not read page count from %s: %s", file_path, e)
+        return metadata
+
     def _register_local_artifact(
         self,
         file_path: Path,
@@ -751,17 +788,18 @@ class EventMillShell(cmd.Cmd):
         use_dpkt: bool = False,
     ) -> None:
         """Register a local file as an artifact in the current session."""
+        metadata = self._artifact_metadata(file_path)
         artifact = self.session_manager.register_artifact(
             artifact_type=artifact_type,
             file_path=str(file_path.resolve()),
-            metadata={"original_filename": file_path.name},
+            metadata=metadata,
         )
         
         if self.artifact_registry:
             self.artifact_registry.register(
                 artifact_type=artifact_type,
                 source_path=file_path,
-                metadata={"original_filename": file_path.name},
+                metadata=dict(metadata),
                 copy_file=False,
             )
         
@@ -1908,8 +1946,8 @@ class EventMillShell(cmd.Cmd):
         print("  'connect'            — bind all models (tiered auto-routing)")
         print("  'connect <model_id>' — bind a specific model only")
         print("  Routing: plugin manifest model_tier, overridable per call")
-        print("           by the plugin; unhinted framework calls fall back to")
-        print(f"           max_tokens > {LLMDispatcher.LIGHT_THRESHOLD} → heavy")
+        print("           by the plugin; framework calls with no preference")
+        print("           use the light tier")
     
     def do_connect(self, arg: str) -> None:
         """Connect to LLM.
@@ -1966,8 +2004,7 @@ class EventMillShell(cmd.Cmd):
             if len(connected_clients) > 1:
                 print(f"")
                 print("  Auto-routing: each plugin's manifest model_tier, overridable")
-                print("                per call; unhinted calls fall back to "
-                      f"max_tokens > {LLMDispatcher.LIGHT_THRESHOLD} → heavy")
+                print("                per call; calls with no preference use light")
             return
 
         # Specific model requested — single-client mode
@@ -2013,14 +2050,14 @@ class EventMillShell(cmd.Cmd):
                     connected_clients[m["tier"]] = fallback_client
                     print(f"  ✓ {m['name']} available as quota fallback")
 
-        if len(connected_clients) > 1:
-            self.llm_client = LLMDispatcher(
-                clients=connected_clients,
-                preferred_tier=selected_model["tier"],
-                tier_specs=self._tier_specs,
-            )
-        else:
-            self.llm_client = primary_client
+        # Always dispatch, even with a single client. A bare MCPLLMClient
+        # skips token clamping, the PDF context guard, the retired-model
+        # retry, and native document handling entirely.
+        self.llm_client = LLMDispatcher(
+            clients=connected_clients,
+            preferred_tier=selected_model["tier"],
+            tier_specs=self._tier_specs,
+        )
 
         log_user_activity("connect_llm", {
             "model_id": selected_model["id"],

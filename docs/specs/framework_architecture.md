@@ -61,10 +61,9 @@ eventmill_v01/
 │   ├── llm/                            # LLM Orchestration
 │   │   ├── __init__.py
 │   │   ├── client.py                   # MCPLLMClient, LLMDispatcher (routes by QueryHints)
-│   │   ├── backends/                   # Provider-specific backend implementations
-│   │   │   ├── __init__.py             # Explicit BACKEND_REGISTRY
-│   │   │   ├── base.py                 # LLMBackend ABC, ModelCapabilities, DocumentPart
-│   │   │   └── gemini.py               # GeminiBackend (GCS URI + inline bytes)
+│   │   ├── backends/                   # Provider-neutral request parts
+│   │   │   ├── __init__.py
+│   │   │   └── base.py                 # DocumentPart
 │   │   └── providers/                  # Declarative capability manifests
 │   │       ├── __init__.py
 │   │       └── gcp_gemini.json         # Gemini tiers, file handling, document strategies

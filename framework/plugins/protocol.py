@@ -48,7 +48,9 @@ class QueryHints:
     Plugins pass these to guide model selection without knowing provider details.
     All fields are optional — the dispatcher uses sensible defaults.
     """
-    tier: str = "light"                    # "light" | "heavy"
+    # None means "no opinion" — the plugin's manifest model_tier (or the
+    # analyst's pinned tier) decides. Set it only to override that.
+    tier: str | None = None                # "light" | "heavy" | None
     needs_reasoning: bool = False          # biases toward deep-reasoning models
     needs_structured_output: bool = False  # ensures JSON-mode capable model
     prefers_native_file: bool = False      # prefer native file > text extraction

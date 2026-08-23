@@ -469,23 +469,24 @@ class LLMDispatcher:
 
     Tier selection precedence:
 
-        1. Explicit QueryHints (tier / needs_reasoning) — plugins get these
+        1. Explicit QueryHints.tier / needs_reasoning — plugins get these
            from their manifest's model_tier via TierScopedLLMClient.
         2. The tier the analyst pinned with 'connect <model_id>'.
-        3. Token-count heuristic (last resort, for direct framework callers):
-           max_tokens <= LIGHT_THRESHOLD  →  light / Flash  (fast, cheap)
-           max_tokens >  LIGHT_THRESHOLD  →  heavy / Pro    (powerful, expensive)
+        3. Light, for direct framework callers that express no preference.
 
-    If the preferred tier is not connected the other tier is used as fallback.
+    Output size does not select a tier. Both Gemini 3.x tiers are
+    capacity-identical, so tier signals reasoning depth and cost only —
+    plugin manifests drive the choice.
+
+    If the preferred tier is not connected the other tier is used as fallback,
+    so a heavy-tier plugin still runs when only Flash is bound.
     """
-
-    LIGHT_THRESHOLD: int = 3500
 
     def __init__(self, clients: dict[str, MCPLLMClient],
                  preferred_tier: str | None = None,
                  tier_specs: dict[str, TierSpec] | None = None) -> None:
         self._clients = clients
-        # When set, this tier is preferred over the token-count heuristic.
+        # When set, this tier is preferred for callers that pass no hints.
         # Lets explicit 'connect gemini-3.5-flash' keep Flash as primary.
         self._preferred_tier = preferred_tier
         # Per-tier capability specs from the provider manifest. Used to clamp
@@ -493,6 +494,13 @@ class LLMDispatcher:
         self._tier_specs = (
             tier_specs if tier_specs is not None else load_tier_specs()
         )
+        # Output caps keyed by model id, so clamping follows the model that
+        # actually runs — an EVENTMILL_MODEL_* override or a retired-model
+        # substitution changes the model without changing the tier.
+        self._caps_by_model = {
+            spec.model_id: spec.max_output_tokens
+            for spec in self._tier_specs.values()
+        }
 
     # --- Protocol compatibility -------------------------------------------------
 
@@ -522,27 +530,29 @@ class LLMDispatcher:
 
         Routing priority:
         1. Explicit tier from hints.tier or hints.needs_reasoning — this is
-           where a plugin's manifest model_tier arrives.
+           where a plugin's manifest model_tier arrives. Hints that set
+           neither (e.g. thinking_level only) express no tier opinion and
+           fall through.
         2. The tier pinned by 'connect <model_id>'.
-        3. Token-count heuristic — last resort, for direct framework callers
-           that pass no hints.
+        3. Light — the default for framework callers with no preference.
         4. Any connected backend as final fallback.
 
         When a document MIME type is supplied, tiers whose provider manifest
         does not declare native support for it are demoted in the order.
         """
-        if hints is not None:
+        if hints is not None and (hints.needs_reasoning or hints.tier):
             if hints.needs_reasoning or hints.tier == "heavy":
                 order = ("heavy", "light")
             else:
                 order = ("light", "heavy")
         elif self._preferred_tier in ("light", "heavy"):
-            # User explicitly chose a model — honour that over token-count heuristic
+            # User explicitly chose a model — honour that.
             other = "light" if self._preferred_tier == "heavy" else "heavy"
             order = (self._preferred_tier, other)
         else:
-            prefer_heavy = max_tokens > self.LIGHT_THRESHOLD
-            order = ("heavy", "light") if prefer_heavy else ("light", "heavy")
+            # No opinion from the caller and nothing pinned. Light is the
+            # cheap default; anything needing depth says so in its manifest.
+            order = ("light", "heavy")
 
         if document_mime:
             order = self._prefer_native_capable(order, document_mime)
@@ -585,21 +595,43 @@ class LLMDispatcher:
                 return tier
         return None
 
-    def _clamp_tokens(self, client: MCPLLMClient, max_tokens: int) -> int:
-        """Clamp max_tokens to what the selected tier can actually emit.
+    def _output_cap(self, client: MCPLLMClient) -> int | None:
+        """Output-token cap of the model this client actually runs.
 
-        Without this, a call sized for Pro (e.g. 16384) that lands on Flash
-        (8192 cap) is rejected by the provider.
+        Keyed by model id first so an EVENTMILL_MODEL_* override or a
+        retired-model substitution is clamped against its own cap rather
+        than the cap of the tier it is registered under. Falls back to the
+        tier spec for a model the manifest does not describe.
         """
+        cap = self._caps_by_model.get(client.model_id)
+        if cap:
+            return cap
         tier = self._tier_of(client)
         spec = self._tier_specs.get(tier) if tier else None
-        if spec is None or max_tokens <= spec.max_output_tokens:
+        if spec is None:
+            return None
+        if client.model_id != spec.model_id:
+            logger.warning(
+                "No declared output cap for %s — assuming the %s tier cap "
+                "(%d). Set EVENTMILL_MAX_OUTPUT_%s if it differs.",
+                client.model_id, tier, spec.max_output_tokens, tier.upper(),
+            )
+        return spec.max_output_tokens
+
+    def _clamp_tokens(self, client: MCPLLMClient, max_tokens: int) -> int:
+        """Clamp max_tokens to what the selected model can actually emit.
+
+        Without this, a call sized for one model that lands on a
+        lower-capacity one is rejected by the provider.
+        """
+        cap = self._output_cap(client)
+        if cap is None or max_tokens <= cap:
             return max_tokens
         logger.warning(
-            "Clamping max_tokens %d → %d for %s (tier=%s output cap)",
-            max_tokens, spec.max_output_tokens, client.model_id, tier,
+            "Clamping max_tokens %d → %d for %s (model output cap)",
+            max_tokens, cap, client.model_id,
         )
-        return spec.max_output_tokens
+        return cap
 
     @staticmethod
     def _is_quota_error(error: str) -> bool:
@@ -659,6 +691,9 @@ class LLMDispatcher:
         substitute._genai_client = client._genai_client
         substitute._api_key_env_var = client._api_key_env_var
         substitute._connected = client._connected
+        # Carry the spend forward — total_tokens_used sums over the live
+        # clients, so dropping the original would undercount the session.
+        substitute._total_tokens_used = client._total_tokens_used
         # Register it so subsequent calls in this session skip the failed id.
         if tier:
             self._clients[tier] = substitute
@@ -768,6 +803,17 @@ class LLMDispatcher:
                     max_tokens=self._clamp_tokens(fallback, max_tokens),
                     hints=hints,
                 )
+        elif not result.ok:
+            substitute = self._retry_on_retired_model(client, result.error or "")
+            if substitute:
+                result = substitute.query_multimodal(
+                    prompt=prompt,
+                    image_data=image_data,
+                    image_format=image_format,
+                    system_context=system_context,
+                    max_tokens=self._clamp_tokens(substitute, max_tokens),
+                    hints=hints,
+                )
         return result
 
     def query_with_document(
@@ -830,7 +876,7 @@ class LLMDispatcher:
         full_prompt = client._build_prompt(prompt, grounding_data)
 
         # Delegate to the client's internal GenAI SDK for native doc handling
-        return self._execute_document_query(
+        result = self._execute_document_query(
             client=client,
             prompt=full_prompt,
             doc=doc,
@@ -838,6 +884,20 @@ class LLMDispatcher:
             max_tokens=self._clamp_tokens(client, max_tokens),
             hints=hints,
         )
+        # This path defaults to the heavy tier, which is a Preview endpoint —
+        # it is the most likely of the three to meet a retired model id.
+        if not result.ok:
+            substitute = self._retry_on_retired_model(client, result.error or "")
+            if substitute:
+                result = self._execute_document_query(
+                    client=substitute,
+                    prompt=full_prompt,
+                    doc=doc,
+                    system_context=system_context,
+                    max_tokens=self._clamp_tokens(substitute, max_tokens),
+                    hints=hints,
+                )
+        return result
 
     def _pdf_context_overflow(
         self, client: MCPLLMClient, artifact: ArtifactRef,
@@ -852,19 +912,32 @@ class LLMDispatcher:
 
         Returns None when the request fits, or when the page count is unknown.
         """
+        handling = pdf_handling()
+        max_pages = handling.get("max_pages", 1000)
+        max_mb = handling.get("max_size_mb", 50)
+
+        size_mb = self._pdf_size_mb(artifact)
+        if size_mb is not None and size_mb > max_mb:
+            return LLMResponse(
+                ok=False,
+                error=(
+                    f"PDF is {size_mb:,.1f} MB, above the provider limit of "
+                    f"{max_mb} MB. Split the document."
+                ),
+                model_used=client.model_id,
+                fallback_reason="pdf_exceeds_provider_size_limit",
+            )
+
         pages = self._pdf_page_count(artifact)
         if not pages:
             return None
 
-        handling = pdf_handling()
-        max_pages = handling.get("max_pages", 1000)
-        max_mb = handling.get("max_size_mb", 50)
         if pages > max_pages:
             return LLMResponse(
                 ok=False,
                 error=(
                     f"PDF has {pages:,} pages, above the provider limit of "
-                    f"{max_pages:,} pages / {max_mb} MB"
+                    f"{max_pages:,} pages"
                 ),
                 model_used=client.model_id,
                 fallback_reason="pdf_exceeds_provider_page_limit",
@@ -915,41 +988,75 @@ class LLMDispatcher:
 
     @staticmethod
     def _pdf_page_count(artifact: ArtifactRef) -> int | None:
-        """Page count from artifact metadata, or by reading the file.
+        """Page count from artifact metadata, or by reading a local file.
 
-        Returns None when it cannot be determined — the guard then defers to
-        the provider rather than blocking a request it cannot size.
+        Artifacts that live only in GCS cannot be read here, so the page
+        count is recorded at registration time. Returns None when it cannot
+        be determined — the guard then defers to the provider rather than
+        blocking a request it cannot size, and says so at warning level so a
+        silent no-op is visible.
         """
         pages = artifact.metadata.get("pages") or artifact.metadata.get("page_count")
         if isinstance(pages, int) and pages > 0:
             return pages
-        if not artifact.file_path:
-            return None
-        try:
-            from pypdf import PdfReader
-            return len(PdfReader(artifact.file_path).pages)
-        except Exception as e:
-            logger.debug("Could not determine PDF page count: %s", e)
-            return None
+        if artifact.file_path and os.path.exists(artifact.file_path):
+            try:
+                from pypdf import PdfReader
+                return len(PdfReader(artifact.file_path).pages)
+            except Exception as e:
+                logger.warning(
+                    "Could not read page count from %s: %s", artifact.file_path, e,
+                )
+                return None
+        logger.warning(
+            "PDF %s carries no page count and has no readable local file "
+            "(storage_uri=%s) — the context-overflow guard cannot size it.",
+            artifact.artifact_id, artifact.storage_uri or "none",
+        )
+        return None
+
+    @staticmethod
+    def _pdf_size_mb(artifact: ArtifactRef) -> float | None:
+        """Size in MB from artifact metadata, or by stat-ing a local file."""
+        size_bytes = artifact.metadata.get("size_bytes")
+        if isinstance(size_bytes, int) and size_bytes > 0:
+            return size_bytes / (1024 * 1024)
+        if artifact.file_path and os.path.exists(artifact.file_path):
+            try:
+                return os.path.getsize(artifact.file_path) / (1024 * 1024)
+            except OSError:
+                return None
+        return None
 
     def supports_native_document(self, mime_type: str) -> bool:
         """Check if any connected model handles this MIME type natively."""
-        native_types = {"application/pdf"}
-        if mime_type not in native_types:
+        if mime_type not in _NATIVE_CAPABILITY_BY_MIME:
             return False
-        return any(c.connected for c in self._clients.values())
+        return any(
+            c.connected and self._model_supports_native_doc(c, mime_type)
+            for c in self._clients.values()
+        )
 
     # --- Internal helpers ------------------------------------------------------
 
-    @staticmethod
-    def _model_supports_native_doc(client: MCPLLMClient, mime_type: str) -> bool:
+    def _model_supports_native_doc(
+        self, client: MCPLLMClient, mime_type: str,
+    ) -> bool:
         """Check if a client's model supports native ingestion of a MIME type.
 
-        For Gemini models (the MVP provider), PDFs are always supported.
+        Reads the tier's declared capabilities so this agrees with
+        _prefer_native_capable — the provider manifest is the only source of
+        truth. With no manifest loaded, defer to the known-native set rather
+        than blocking a request the provider can serve.
         """
-        if mime_type == "application/pdf":
+        capability = _NATIVE_CAPABILITY_BY_MIME.get(mime_type)
+        if not capability:
+            return False
+        tier = self._tier_of(client)
+        spec = self._tier_specs.get(tier) if tier else None
+        if spec is None:
             return True
-        return False
+        return capability in spec.capabilities
 
     @staticmethod
     def _execute_document_query(
@@ -1044,10 +1151,6 @@ class LLMDispatcher:
             )
 
 
-# Backward compatibility alias
-TieredLLMClient = LLMDispatcher
-
-
 class TierScopedLLMClient:
     """Applies a plugin's manifest model_tier as the default for its queries.
 
@@ -1069,7 +1172,17 @@ class TierScopedLLMClient:
         )
 
     def _with_default(self, hints: QueryHints | None) -> QueryHints:
-        return hints if hints is not None else QueryHints(tier=self.default_tier)
+        """Fill in the manifest tier when the caller expressed no opinion.
+
+        Only the tier field is supplied. Hints that set other fields —
+        thinking_level, media_resolution — keep the manifest tier instead of
+        silently demoting the plugin to light.
+        """
+        if hints is None:
+            return QueryHints(tier=self.default_tier)
+        if hints.tier is None and not hints.needs_reasoning:
+            return replace(hints, tier=self.default_tier)
+        return hints
 
     # --- Pass-through properties -----------------------------------------------
 
@@ -1131,9 +1244,9 @@ class TierScopedLLMClient:
         hints: QueryHints | None = None,
     ) -> LLMResponse:
         # Native document work needs the file path preference regardless of tier.
-        resolved = hints or QueryHints(
-            tier=self.default_tier, prefers_native_file=True,
-        )
+        resolved = self._with_default(hints)
+        if hints is None:
+            resolved = replace(resolved, prefers_native_file=True)
         inner_call = getattr(self._inner, "query_with_document", None)
         if inner_call is None:
             return LLMResponse(

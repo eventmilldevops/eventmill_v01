@@ -377,6 +377,13 @@ class LLMBackend(ABC):
 
 ## 8. GeminiBackend (MVP Implementation)
 
+> **Not built as designed.** The backend abstraction below was written but never
+> wired up: `LLMDispatcher` holds `MCPLLMClient` instances directly, and no
+> `GeminiBackend` was ever instantiated. It was removed on 2026-08-23; the
+> dispatcher owns transport selection and reads capabilities from the provider
+> manifest. Only `DocumentPart` survives, in `backends/base.py`. The rest of this
+> section records the original intent.
+
 ```python
 # framework/llm/backends/gemini.py
 

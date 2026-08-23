@@ -281,10 +281,14 @@ response = context.llm_query.query_text(
 )
 ```
 
-Precedence: **per-call `QueryHints` > manifest `model_tier` > `max_tokens > 3500` heuristic.**
-The heuristic is a last resort for framework-level callers; plugins should not rely on it.
+Precedence: **per-call `QueryHints` > manifest `model_tier` > light.**
 Note that both tiers have identical capacity (1,048,576 input / 65,536 output tokens) —
-tier selects reasoning quality, speed, and cost, never how much fits.
+tier selects reasoning quality, speed, and cost, never how much fits, so output size
+never selects a tier.
+
+`QueryHints.tier` defaults to `None`, meaning "no opinion". Hints that tune the request
+without choosing a tier — `thinking_level`, `media_resolution` — keep your manifest's
+`model_tier` instead of silently demoting the call to `light`.
 
 ### Controlling cost and latency
 

@@ -2,7 +2,10 @@
 Tests for LLM tier routing.
 
 Pins the precedence rule the framework depends on:
-    per-call QueryHints > manifest model_tier > max_tokens heuristic
+    per-call QueryHints > manifest model_tier > light
+
+Output size never selects a tier - both Gemini 3.x tiers are
+capacity-identical, so tier means reasoning depth and cost only.
 """
 
 from __future__ import annotations
@@ -47,6 +50,9 @@ class FakeClient:
         if self._fail_with:
             return LLMResponse(ok=False, error=self._fail_with)
         return LLMResponse(ok=True, text=f"answer from {self.model_id}")
+
+    def _build_prompt(self, prompt, grounding_data=None):
+        return prompt
 
 
 def _specs() -> dict[str, TierSpec]:
@@ -98,8 +104,9 @@ class TestRoutingPrecedence:
         assert clients["light"].calls
         assert not clients["heavy"].calls
 
-    def test_explicit_heavy_hint_beats_token_heuristic(self, dispatcher, clients):
-        # 100 is far below LIGHT_THRESHOLD.
+    def test_explicit_heavy_hint_routes_heavy_at_low_token_counts(
+        self, dispatcher, clients,
+    ):
         dispatcher.query_text("p", max_tokens=100, hints=QueryHints(tier="heavy"))
         assert clients["heavy"].calls
         assert not clients["light"].calls
@@ -112,21 +119,29 @@ class TestRoutingPrecedence:
         assert clients["heavy"].calls
         assert not clients["light"].calls
 
-    def test_token_heuristic_is_last_resort(self, dispatcher, clients):
+    def test_unhinted_calls_default_to_light_at_any_size(self, dispatcher, clients):
+        """Output size must not select a tier - the tiers are the same size."""
         dispatcher.query_text("p", max_tokens=100)
-        assert clients["light"].calls
-
-        dispatcher.query_text("p", max_tokens=LLMDispatcher.LIGHT_THRESHOLD + 1)
-        assert clients["heavy"].calls
-
-    def test_pinned_tier_beats_token_heuristic(self, clients):
-        pinned = LLMDispatcher(
-            clients=clients, preferred_tier="light", tier_specs=_specs(),
-        )
-        # Would route heavy on token count, but the analyst pinned light.
-        pinned.query_text("p", max_tokens=16384)
-        assert clients["light"].calls
+        dispatcher.query_text("p", max_tokens=60_000)
+        assert len(clients["light"].calls) == 2
         assert not clients["heavy"].calls
+
+    def test_hints_without_a_tier_express_no_opinion(self, clients):
+        """thinking_level alone must not override the analyst's pinned tier."""
+        pinned = LLMDispatcher(
+            clients=clients, preferred_tier="heavy", tier_specs=_specs(),
+        )
+        pinned.query_text("p", max_tokens=100, hints=QueryHints(thinking_level="low"))
+        assert clients["heavy"].calls
+        assert not clients["light"].calls
+
+    def test_pinned_tier_beats_the_light_default(self, clients):
+        pinned = LLMDispatcher(
+            clients=clients, preferred_tier="heavy", tier_specs=_specs(),
+        )
+        pinned.query_text("p", max_tokens=16384)
+        assert clients["heavy"].calls
+        assert not clients["light"].calls
 
     def test_hints_beat_pinned_tier(self, clients):
         pinned = LLMDispatcher(
@@ -146,7 +161,6 @@ class TestTierScopedClient:
         self, dispatcher, clients,
     ):
         scoped = TierScopedLLMClient(dispatcher, default_tier="light")
-        # 4096 > LIGHT_THRESHOLD — without the manifest default this went heavy.
         scoped.query_text("p", max_tokens=4096)
         assert clients["light"].calls
         assert not clients["heavy"].calls
@@ -179,6 +193,30 @@ class TestTierScopedClient:
         assert not clients["light"].calls
 
 
+    def test_partial_hints_keep_the_manifest_tier(self, dispatcher, clients):
+        """Hints that say nothing about tier must not demote a heavy plugin.
+
+        QueryHints carries tier-irrelevant fields (thinking_level,
+        media_resolution). Setting one of those alone used to route the
+        plugin to light, because tier defaulted to "light" rather than None.
+        """
+        scoped = TierScopedLLMClient(dispatcher, default_tier="heavy")
+        scoped.query_text("p", max_tokens=100, hints=QueryHints(thinking_level="low"))
+        assert clients["heavy"].calls
+        assert not clients["light"].calls
+
+    def test_partial_hints_are_otherwise_preserved(self, dispatcher, clients):
+        scoped = TierScopedLLMClient(dispatcher, default_tier="heavy")
+        scoped.query_text(
+            "p", max_tokens=100,
+            hints=QueryHints(thinking_level="low", media_resolution="low"),
+        )
+        sent = clients["heavy"].calls[0]["hints"]
+        assert sent.tier == "heavy"
+        assert sent.thinking_level == "low"
+        assert sent.media_resolution == "low"
+
+
 # ---------------------------------------------------------------------------
 # Output-token clamping
 # ---------------------------------------------------------------------------
@@ -206,6 +244,17 @@ class TestTokenClamping:
         loose = LLMDispatcher(clients=clients, tier_specs={})
         loose.query_text("p", max_tokens=999_999, hints=QueryHints(tier="light"))
         assert clients["light"].calls[0]["max_tokens"] == 999_999
+
+    def test_clamps_to_the_model_that_actually_runs(self):
+        """An env override can point a tier at a model with a different cap.
+
+        The heavy tier here runs light's model, so it must clamp to 8,192 -
+        clamping to the heavy tier's 65,536 would be rejected by the provider.
+        """
+        clients = {"light": FakeClient("flash"), "heavy": FakeClient("flash")}
+        d = LLMDispatcher(clients=clients, tier_specs=_asymmetric_specs())
+        d.query_text("p", max_tokens=16384, hints=QueryHints(tier="heavy"))
+        assert clients["heavy"].calls[0]["max_tokens"] == 8192
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +460,38 @@ class TestPdfContextGuard:
         assert r is not None and not r.ok
         assert r.fallback_reason == "pdf_exceeds_provider_page_limit"
 
+    def test_above_provider_size_limit_refused(self, dispatcher):
+        art = ArtifactRef(
+            "a1", "pdf_report", "",
+            metadata={
+                "mime_type": "application/pdf",
+                "pages": 40,
+                "size_bytes": 200 * 1024 * 1024,
+            },
+        )
+        r = dispatcher._pdf_context_overflow(
+            dispatcher._clients["heavy"], art, QueryHints(),
+        )
+        assert r is not None and not r.ok
+        assert r.fallback_reason == "pdf_exceeds_provider_size_limit"
+
+    def test_page_count_comes_from_metadata_when_present(self):
+        """A GCS-resolved artifact has no local file to read."""
+        art = ArtifactRef(
+            "a1", "pdf_report", "/nonexistent.pdf",
+            storage_uri="gs://bucket/report.pdf",
+            metadata={"mime_type": "application/pdf", "pages": 42},
+        )
+        assert LLMDispatcher._pdf_page_count(art) == 42
+
+    def test_page_count_unknown_for_unsizable_artifact(self):
+        art = ArtifactRef(
+            "a1", "pdf_report", "",
+            storage_uri="gs://bucket/report.pdf",
+            metadata={"mime_type": "application/pdf"},
+        )
+        assert LLMDispatcher._pdf_page_count(art) is None
+
     def test_unknown_page_count_defers_to_provider(self, dispatcher):
         art = ArtifactRef(
             "a1", "pdf_report", "",
@@ -465,3 +546,83 @@ class TestRetiredModelFallback:
     def test_non_not_found_errors_do_not_substitute(self, clients):
         d = LLMDispatcher(clients=clients, tier_specs=_specs())
         assert d._retry_on_retired_model(clients["heavy"], "500 INTERNAL") is None
+
+    def test_multimodal_retries_on_a_retired_model(self, clients, monkeypatch):
+        clients["heavy"]._fail_with = "404 NOT_FOUND"
+        d = LLMDispatcher(clients=clients, tier_specs=_specs())
+        substitute = FakeClient("flash")
+        monkeypatch.setattr(d, "_retry_on_retired_model", lambda c, e: substitute)
+
+        result = d.query_multimodal(
+            "p", b"data", "png", hints=QueryHints(tier="heavy"),
+        )
+        assert result.ok
+        assert substitute.calls[0]["kind"] == "multimodal"
+
+    def test_document_query_retries_on_a_retired_model(self, clients, monkeypatch):
+        """The document path defaults to the Preview model, so it needs this most."""
+        d = LLMDispatcher(clients=clients, tier_specs=_specs())
+        substitute = FakeClient("flash")
+        monkeypatch.setattr(d, "_retry_on_retired_model", lambda c, e: substitute)
+
+        attempts = []
+
+        def fake_exec(client, prompt, doc, system_context, max_tokens, hints=None):
+            attempts.append(client)
+            if len(attempts) == 1:
+                return LLMResponse(ok=False, error="404 NOT_FOUND")
+            return LLMResponse(ok=True, text="ok")
+
+        monkeypatch.setattr(d, "_execute_document_query", fake_exec)
+        art = ArtifactRef(
+            "a1", "pdf_report", "", metadata={"mime_type": "application/pdf"},
+        )
+        result = d.query_with_document("p", art)
+
+        assert result.ok
+        assert attempts[0] is clients["heavy"]
+        assert attempts[1] is substitute
+
+
+# ---------------------------------------------------------------------------
+# Native document capability
+# ---------------------------------------------------------------------------
+
+
+class TestNativeDocumentCapability:
+    """The provider manifest decides, not a hardcoded MIME list."""
+
+    @staticmethod
+    def _specs_where_only_heavy_is_native():
+        return {
+            "light": TierSpec("light", "flash", "K_LIGHT", 65536, 1_048_576,
+                              "low", ("text",)),
+            "heavy": TierSpec("heavy", "pro", "K_HEAVY", 65536, 1_048_576,
+                              "high", ("text", "native_pdf")),
+        }
+
+    def test_capability_follows_the_manifest(self, clients):
+        d = LLMDispatcher(
+            clients=clients, tier_specs=self._specs_where_only_heavy_is_native(),
+        )
+        assert d._model_supports_native_doc(clients["heavy"], "application/pdf")
+        assert not d._model_supports_native_doc(clients["light"], "application/pdf")
+
+    def test_supported_when_any_connected_tier_declares_it(self, clients):
+        d = LLMDispatcher(
+            clients=clients, tier_specs=self._specs_where_only_heavy_is_native(),
+        )
+        assert d.supports_native_document("application/pdf")
+
+    def test_unsupported_when_no_tier_declares_it(self, clients):
+        specs = {
+            "light": TierSpec("light", "flash", "K_LIGHT", 65536, 1_048_576,
+                              "low", ("text",)),
+            "heavy": TierSpec("heavy", "pro", "K_HEAVY", 65536, 1_048_576,
+                              "high", ("text",)),
+        }
+        d = LLMDispatcher(clients=clients, tier_specs=specs)
+        assert not d.supports_native_document("application/pdf")
+
+    def test_unknown_mime_type_is_never_native(self, dispatcher):
+        assert not dispatcher.supports_native_document("application/zip")

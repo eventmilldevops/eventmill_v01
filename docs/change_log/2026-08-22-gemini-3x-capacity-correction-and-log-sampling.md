@@ -38,13 +38,18 @@ how much fits. Any sizing decision made on tier grounds was meaningless.
 | `tokens_per_page` | 258 | **560** (default resolution) |
 | PDF 1000 pages / 50 MB | ✅ | ✅ unchanged, still correct |
 
-The light output cap mattered immediately: `_clamp_tokens()` (added 2026-08-22, earlier
-session) clamps against these numbers, so every light-tier response was being truncated at
-8,192 tokens.
+The light output cap would have mattered: `_clamp_tokens()` (added 2026-08-22, earlier
+session in this same branch) clamps against these numbers, so a light-tier response would
+have been truncated at 8,192 tokens. Both changes are unmerged, so no released build ever
+behaved that way. Note also that the 50 MB limit was declared but not enforced until
+2026-08-23.
 
 `framework/llm/backends/gemini.py` duplicated the same stale values in
-`_default_capabilities()`. It now reads `load_tier_specs()`, so the manifest is the single
-source of truth.
+`_default_capabilities()` and was changed to read `load_tier_specs()`. That fix was inert:
+`GeminiBackend` was never instantiated, so `_default_capabilities()` never ran, while the
+*live* duplicates in `client.py` (`_model_supports_native_doc`, `supports_native_document`)
+kept hardcoding `application/pdf`. Resolved 2026-08-23 by removing the unused backend
+abstraction and having the dispatcher read the manifest.
 
 ### PDF page cost is no longer a constant
 
@@ -71,7 +76,10 @@ Native text extracted from a PDF is not billed — only the per-page image token
 ### `framework/plugins/protocol.py`
 
 `QueryHints` gains `media_resolution` and `thinking_level`, both defaulting to `None`
-("provider default"), so no existing call site changes behavior.
+("provider default"). Two call sites do change behavior, because `needs_reasoning=True`
+now implies `high` thinking: `shell.py`'s `ask:` and `threat_report_analyzer`'s synthesis
+pass. That is intended — both are the reasoning-shaped calls — but it is a latency and
+cost change, not a no-op.
 
 ### `framework/llm/client.py`
 
@@ -86,11 +94,15 @@ Native text extracted from a PDF is not billed — only the per-page image token
 - **New `_pdf_context_overflow()`** — estimates `pages × tokens_per_page` for the chosen
   resolution and refuses a PDF that cannot fit, naming the resolution that would work.
   Also enforces the 1000-page provider limit. Defers to the provider when the page count
-  cannot be determined.
+  cannot be determined — which, as first written, was every GCS-resolved artifact, since
+  the page count came only from a local file read. Corrected 2026-08-23: the count is
+  recorded at artifact registration, and the 50 MB limit is enforced rather than merely
+  quoted.
 - **New `_is_model_not_found()` / `_retry_on_retired_model()`** — the heavy tier is a Preview
   endpoint that Google may retire with ~2 weeks' notice. On `NOT_FOUND` the dispatcher
   retries against the tier's `fallback_model_id`, reusing the live connection, and registers
-  the substitute so later calls skip the dead id.
+  the substitute so later calls skip the dead id. Initially wired on `query_text` only;
+  extended to `query_multimodal` and `query_with_document` on 2026-08-23.
 - PDFs default to the manifest's `media_resolution` explicitly rather than relying on an
   implicit provider choice.
 - `MCPLLMClient` default model id updated to `gemini-3.5-flash`.
@@ -103,7 +115,8 @@ that is pattern-matching rather than reasoning:
 - `threat_intel_ingester/tool.py` — per-chunk IOC extraction
 - `threat_report_analyzer/tool.py` — per-chunk summarization
 
-Synthesis and reasoning call sites keep the default.
+Synthesis and reasoning call sites do not set `thinking_level` explicitly — but they do
+set `needs_reasoning=True`, which `_build_config()` now reads as `high`.
 
 ### `pyproject.toml`
 

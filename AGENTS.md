@@ -84,11 +84,18 @@ hardcode any of them elsewhere.
 **The tiers are capacity-identical.** Tier selects reasoning depth and cost, and
 nothing else. Any logic that picks a tier based on how much data there is, is
 wrong by construction — that was the original `max_tokens > 3500` heuristic,
-now demoted to a last resort for framework-level callers with no hints.
+now removed.
 
-Tier precedence: **per-call `QueryHints` > manifest `model_tier` > token
-heuristic.** The manifest default is applied by `TierScopedLLMClient`, one wrapper
-per plugin execution, so plugins need no code for the common case.
+Tier precedence: **per-call `QueryHints` > manifest `model_tier` > light.** The
+manifest default is applied by `TierScopedLLMClient`, one wrapper per plugin
+execution, so plugins need no code for the common case. Hints that set no `tier`
+(for example `thinking_level` alone) keep the manifest default rather than
+overriding it.
+
+Both tiers connect by default. A single legacy `GEMINI_API_KEY` binds to both,
+and even a one-model `connect <model_id>` is wrapped in `LLMDispatcher` — a bare
+client would skip token clamping, the PDF context guard, the retired-model retry,
+and native document handling.
 
 Non-obvious things that have already caused bugs here:
 

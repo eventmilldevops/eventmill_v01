@@ -5,6 +5,13 @@
 
 ---
 
+> **Superseded in part (2026-08-23).** `QueryHints.tier` now defaults to `None`
+> rather than `"light"`, so hints that set no tier keep the manifest default; the
+> `max_tokens > 3500` heuristic has been removed in favour of a plain `light`
+> default; and `_clamp_tokens()` clamps to the cap of the model that actually
+> runs rather than the tier's. See
+> `2026-08-23-llm-tiering-review-fixes.md`.
+
 ## Summary
 
 `model_tier` was declared in all 16 plugin manifests but read by nothing. Tier selection
@@ -60,7 +67,10 @@ model discovery and token clamping:
   the preferred order is connected it accepts any connected client instead of raising.
 - **Added `_clamp_tokens()`** — clamps `max_tokens` to the selected tier's declared output
   cap. `pcap_ai_analyzer` requests 16384, which Gemini Flash (8192) cannot emit; on a quota
-  fallback that call previously became a provider error.
+  fallback that call previously became a provider error. (That rationale expired later the
+  same day: the capacity correction put light at 65,536, so the clamp no longer fires
+  against the real manifest. It still guards `EVENTMILL_MODEL_*` overrides and
+  retired-model substitutions.)
 - **Added `_prefer_native_capable()`** — the long-unused `document_mime` parameter now
   demotes tiers whose provider manifest lacks native support for the MIME type.
 - `MCPLLMClient.query_text()` / `query_multimodal()` accept and ignore `hints`, so
