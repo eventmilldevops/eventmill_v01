@@ -25,8 +25,20 @@ from ..session.models import Pillar, ToolExecutionStatus
 from ..plugins.loader import PluginLoader, LoadedPlugin
 from ..routing.router import Router, RouterConfig
 from ..artifacts.registry import ArtifactRegistry, create_artifact_registration_callback
-from ..llm.client import MCPLLMClient, ContextBuilder, LLMDispatcher
-from ..plugins.protocol import ExecutionContext, ReferenceDataView, ArtifactRef, TimeoutClass
+from ..llm.client import (
+    ContextBuilder,
+    LLMDispatcher,
+    MCPLLMClient,
+    TierScopedLLMClient,
+)
+from ..llm.providers import load_tier_specs
+from ..plugins.protocol import (
+    ArtifactRef,
+    ExecutionContext,
+    QueryHints,
+    ReferenceDataView,
+    TimeoutClass,
+)
 from ..reference_data.mitre_attack import get_mitre_db
 from ..cloud.resolver import StorageResolver, StorageResolverConfig, create_local_resolver
 
@@ -191,47 +203,53 @@ class EventMillShell(cmd.Cmd):
                 self._load_errors.append(f"Router: {e}")
                 logger.warning("Failed to initialize router: %s", e)
         
-        # LLM availability - check for dual Gemini keys or legacy single key
-        self._available_models: list[dict[str, str]] = []
-        
-        # Check for dual Gemini API keys (production setup)
-        if os.environ.get("GEMINI_FLASH_API_KEY"):
-            self._available_models.append({
-                "id": "gemini-2.5-flash",
-                "name": "Gemini Flash",
-                "tier": "light",
-                "env_var": "GEMINI_FLASH_API_KEY",
-            })
-        if os.environ.get("GEMINI_PRO_API_KEY"):
-            self._available_models.append({
-                "id": "gemini-2.5-pro",
-                "name": "Gemini Pro",
-                "tier": "heavy",
-                "env_var": "GEMINI_PRO_API_KEY",
-            })
-        
-        # Fallback: legacy single GEMINI_API_KEY
-        if not self._available_models and os.environ.get("GEMINI_API_KEY"):
-            self._available_models.append({
-                "id": "gemini-2.5-flash",
-                "name": "Gemini (default)",
-                "tier": "default",
-                "env_var": "GEMINI_API_KEY",
-            })
-        
-        # Check for Anthropic
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            self._available_models.append({
-                "id": "claude-sonnet-4-20250514",
-                "name": "Claude Sonnet",
-                "tier": "heavy",
-                "env_var": "ANTHROPIC_API_KEY",
-            })
-        
+        # LLM availability — tiers come from the provider capability manifest
+        # (framework/llm/providers/gcp_gemini.json), so model ids, API-key env
+        # vars, and output caps live in one declarative place.
+        self._tier_specs = load_tier_specs()
+        self._available_models: list[dict[str, str]] = self._discover_models()
         self._llm_available = len(self._available_models) > 0
         
         self._update_prompt()
     
+    _TIER_DISPLAY = {"light": "light (fast, cheap)", "heavy": "heavy (deep reasoning)"}
+
+    def _discover_models(self) -> list[dict[str, str]]:
+        """Build the available-model list from the provider manifest + environment.
+
+        A tier is available when its declared API-key env var is set. Falls
+        back to the legacy single GEMINI_API_KEY, which is bound to the light
+        tier so the dispatcher can route to it (it only ever looks up
+        "light"/"heavy").
+        """
+        models: list[dict[str, str]] = []
+
+        for tier in ("light", "heavy"):
+            spec = self._tier_specs.get(tier)
+            if not spec or not spec.api_key_env:
+                continue
+            if not os.environ.get(spec.api_key_env):
+                continue
+            models.append({
+                "id": spec.model_id,
+                "name": spec.label(),
+                "tier": tier,
+                "env_var": spec.api_key_env,
+            })
+
+        if not models and os.environ.get("GEMINI_API_KEY"):
+            # Legacy single-key setup. Bind to light so bare 'connect' yields
+            # a routable dispatcher rather than one that raises on every query.
+            light = self._tier_specs.get("light")
+            models.append({
+                "id": light.model_id if light else "gemini-2.5-flash",
+                "name": "Gemini (default)",
+                "tier": "light",
+                "env_var": "GEMINI_API_KEY",
+            })
+
+        return models
+
     def _update_prompt(self) -> None:
         """Update the command prompt based on current state."""
         session = self.session_manager.get_current_session()
@@ -1561,12 +1579,23 @@ class EventMillShell(cmd.Cmd):
                 metadata=metadata or {},
             )
 
+        # Apply the plugin's declared model_tier as the default for every LLM
+        # call it makes. A plugin can still override per call with QueryHints.
+        # model_tier "none" declares the plugin does no LLM work at all.
+        model_tier = plugin.manifest.model_tier
+        llm_connected = self.llm_client is not None and self.llm_client.connected
+        if model_tier == "none" or not llm_connected:
+            scoped_llm = None
+        else:
+            scoped_llm = TierScopedLLMClient(self.llm_client, default_tier=model_tier)
+
         context = ExecutionContext(
             session_id=session.session_id,
             selected_pillar=session.active_pillar or "",
             artifacts=artifact_refs,
-            llm_enabled=self.llm_client is not None and self.llm_client.connected,
-            llm_query=self.llm_client,
+            llm_enabled=scoped_llm is not None,
+            llm_query=scoped_llm,
+            model_tier=model_tier,
             register_artifact=_register_artifact,
             reference_data=ReferenceDataView({"mitre_techniques": get_mitre_db()}),
         )
@@ -1878,7 +1907,9 @@ class EventMillShell(cmd.Cmd):
         print("")
         print("  'connect'            — bind all models (tiered auto-routing)")
         print("  'connect <model_id>' — bind a specific model only")
-        print(f"  Routing: max_tokens ≤ {LLMDispatcher.LIGHT_THRESHOLD} → light (Flash), > {LLMDispatcher.LIGHT_THRESHOLD} → heavy (Pro)")
+        print("  Routing: plugin manifest model_tier, overridable per call")
+        print("           by the plugin; unhinted framework calls fall back to")
+        print(f"           max_tokens > {LLMDispatcher.LIGHT_THRESHOLD} → heavy")
     
     def do_connect(self, arg: str) -> None:
         """Connect to LLM.
@@ -1922,7 +1953,10 @@ class EventMillShell(cmd.Cmd):
                 print("  No models connected.")
                 return
 
-            self.llm_client = LLMDispatcher(clients=connected_clients)
+            self.llm_client = LLMDispatcher(
+                clients=connected_clients,
+                tier_specs=self._tier_specs,
+            )
 
             log_user_activity("connect_llm", {
                 "models": {tier: c.model_id for tier, c in connected_clients.items()},
@@ -1931,8 +1965,9 @@ class EventMillShell(cmd.Cmd):
 
             if len(connected_clients) > 1:
                 print(f"")
-                print(f"  Auto-routing: max_tokens ≤ {LLMDispatcher.LIGHT_THRESHOLD} → light, "
-                      f"> {LLMDispatcher.LIGHT_THRESHOLD} → heavy")
+                print("  Auto-routing: each plugin's manifest model_tier, overridable")
+                print("                per call; unhinted calls fall back to "
+                      f"max_tokens > {LLMDispatcher.LIGHT_THRESHOLD} → heavy")
             return
 
         # Specific model requested — single-client mode
@@ -1982,6 +2017,7 @@ class EventMillShell(cmd.Cmd):
             self.llm_client = LLMDispatcher(
                 clients=connected_clients,
                 preferred_tier=selected_model["tier"],
+                tier_specs=self._tier_specs,
             )
         else:
             self.llm_client = primary_client
@@ -2078,10 +2114,13 @@ class EventMillShell(cmd.Cmd):
         print("  Thinking...")
         
         try:
+            # 'ask:' is analyst-facing reasoning over the full session context —
+            # deliberately the heavy tier, not an accident of max_tokens.
             response = self.llm_client.query_text(
                 prompt=full_prompt,
                 system_context=system_context,
                 max_tokens=4096,
+                hints=QueryHints(tier="heavy", needs_reasoning=True),
             )
             
             if response.ok and response.text:

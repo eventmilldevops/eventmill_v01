@@ -4,7 +4,10 @@
   "properties": {
     "mode": {
       "type": "string",
-      "enum": ["investigate", "workflow"],
+      "enum": [
+        "investigate",
+        "workflow"
+      ],
       "description": "Mode: 'investigate' for targeted AI analysis, 'workflow' for predefined SOC workflows."
     },
     "file_path": {
@@ -17,7 +20,12 @@
     },
     "workflow_type": {
       "type": "string",
-      "enum": ["top_talkers", "investigate_ip", "security_events", "attack_patterns"],
+      "enum": [
+        "top_talkers",
+        "investigate_ip",
+        "security_events",
+        "attack_patterns"
+      ],
       "description": "Predefined SOC workflow to execute. Required for workflow mode."
     },
     "target": {
@@ -26,16 +34,19 @@
     },
     "context_lines": {
       "type": "integer",
-      "default": 100,
+      "default": 500,
       "minimum": 10,
-      "maximum": 500,
-      "description": "Max matching lines to analyze in investigate mode."
+      "maximum": 5000,
+      "description": "Max matching lines retained for LLM analysis. The prompt sample is additionally bounded by a ~400,000 character budget, which binds first on wide log lines."
     },
     "full_log": {
       "type": "boolean",
       "default": false,
-      "description": "If true, scan entire file. Otherwise stop after context_lines matches."
+      "description": "Deprecated and ignored: the file is now always scanned in full so total_matches and lines_scanned are accurate. Use context_lines to control how many matches are retained for analysis."
     }
   },
-  "required": ["mode", "file_path"]
+  "required": [
+    "mode",
+    "file_path"
+  ]
 }

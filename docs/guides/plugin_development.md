@@ -57,6 +57,7 @@ Create `manifest.json` with your plugin's metadata:
   "output_schema": "schemas/output.schema.json",
   "timeout_class": "medium",
   "cost_hint": "low",
+  "model_tier": "light",
   "safe_for_auto_invoke": false,
   "requires_llm": false,
   "dependencies": [],
@@ -72,7 +73,8 @@ Create `manifest.json` with your plugin's metadata:
 | Field | Description |
 |-------|-------------|
 | `pillar` | Must match the parent directory name |
-| `timeout_class` | `fast` (30s), `medium` (120s), or `slow` (300s) |
+| `timeout_class` | `fast` (30s), `medium` (120s), or `slow` (600s) |
+| `model_tier` | Default LLM tier: `light` (bulk work), `heavy` (deep reasoning), or `none` (no LLM calls) |
 | `safe_for_auto_invoke` | `true` only if the tool has no side effects |
 | `artifacts_consumed` | Types this tool can read as input |
 | `artifacts_produced` | Types this tool registers as output |
@@ -255,21 +257,23 @@ class MyNewTool:
 
 ## Using LLM Capabilities
 
-### QueryHints for Model Selection
+### Model Tier Selection
 
-When calling the LLM, pass `QueryHints` to guide the dispatcher toward the right model tier:
+Your manifest's `model_tier` is the default for **every** LLM call your plugin makes. The
+framework applies it before `execute()` runs, so the common case needs no code at all:
+
+```python
+# manifest.json declares "model_tier": "light"
+# — this call goes to the light model, regardless of max_tokens.
+response = context.llm_query.query_text(prompt=my_prompt, max_tokens=4096)
+```
+
+Pass `QueryHints` only when one particular query should deviate from your plugin's norm:
 
 ```python
 from framework.plugins.protocol import QueryHints
 
-# Light model (default) — fast, cheap, good for bulk extraction
-response = context.llm_query.query_text(
-    prompt=my_prompt,
-    max_tokens=3000,
-    hints=QueryHints(tier="light"),
-)
-
-# Heavy model with reasoning — for complex analysis
+# This plugin is "light" overall, but this one call needs deep reasoning.
 response = context.llm_query.query_text(
     prompt=my_prompt,
     max_tokens=8192,
@@ -277,7 +281,41 @@ response = context.llm_query.query_text(
 )
 ```
 
-If you omit `hints`, the dispatcher falls back to token-count-based routing (same behavior as before).
+Precedence: **per-call `QueryHints` > manifest `model_tier` > `max_tokens > 3500` heuristic.**
+The heuristic is a last resort for framework-level callers; plugins should not rely on it.
+Note that both tiers have identical capacity (1,048,576 input / 65,536 output tokens) —
+tier selects reasoning quality, speed, and cost, never how much fits.
+
+### Controlling cost and latency
+
+Two further hints tune the request itself. Both default to the provider's own default:
+
+| Hint | Values | Use it when |
+|------|--------|-------------|
+| `thinking_level` | `minimal`, `low`, `medium` (default), `high` | Bulk extraction that is pattern-matching rather than reasoning should ask for `low` — the default adds latency and cost across every chunk. `needs_reasoning=True` implies `high`. |
+| `media_resolution` | `low` (280 tok/page), `medium` (560, default), `high` (1120) | Only affects PDFs and images. `medium` is optimal for document understanding; quality saturates there. |
+
+```python
+# Per-chunk extraction across a large report: cheap tier, shallow thinking.
+response = context.llm_query.query_text(
+    prompt=chunk_prompt,
+    max_tokens=4096,
+    hints=QueryHints(tier="light", thinking_level="low"),
+)
+```
+
+**Resolution decides whether a large PDF fits at all.** A 1000-page PDF costs ~280k tokens
+at `low`, ~560k at `medium`, and ~1.12M at `high` — the last exceeds the context window.
+The framework refuses such a request up front with a message naming the resolution that
+would work, rather than letting it fail opaquely partway through. Native text extracted
+from a PDF is not billed; only the per-page image tokens are.
+
+`threat_report_analyzer` is the reference example of a deliberate split — it summarizes each
+chunk on `light` and synthesizes the final report on `heavy`.
+
+`max_tokens` is clamped to the selected tier's output cap, so asking for more than a tier can
+emit degrades the response rather than failing the call. `context.model_tier` tells you which
+tier your plugin was given.
 
 ### Native Document Ingestion
 
@@ -456,7 +494,7 @@ python scripts/generate_tool_catalog.py
 
 The `LLMResponse` includes diagnostic fields that help with debugging:
 
-- **`model_used`** — which model actually ran the query (e.g. `gemini-2.5-flash`)
+- **`model_used`** — which model actually ran the query (e.g. `gemini-3.5-flash`)
 - **`transport_path`** — how the document was ingested (`gs_uri`, `inline_bytes`, `text`)
 - **`fallback_reason`** — why the preferred path wasn’t used (if applicable)
 

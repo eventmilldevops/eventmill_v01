@@ -39,7 +39,9 @@ dependencies = [
     "mcp>=1.0.0",
     "jsonschema>=4.20.0",
     "python-dotenv>=1.0.0",
-    "google-genai>=1.0.0",
+    # 1.69+ required for GenerateContentConfig.media_resolution and
+    # ThinkingConfig.thinking_level (Gemini 3.x controls).
+    "google-genai>=1.69.0",
 ]
 
 [project.optional-dependencies]

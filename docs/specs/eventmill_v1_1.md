@@ -163,7 +163,7 @@ The framework owns a single MCP client instance per session. Configuration is vi
 |---|---|---|
 | `EVENTMILL_MCP_TRANSPORT` | MCP transport type | `stdio`, `sse` |
 | `EVENTMILL_MCP_ENDPOINT` | Model provider endpoint | Provider-specific |
-| `EVENTMILL_MODEL_ID` | Model identifier | `gemini-2.5-flash`, `claude-sonnet-4-20250514` |
+| `EVENTMILL_MODEL_LIGHT` / `EVENTMILL_MODEL_HEAVY` | Per-tier model id override | `gemini-3.5-flash`, `gemini-3.1-pro-preview` |
 
 Additional provider-specific variables (API keys, project IDs) are documented per provider.
 

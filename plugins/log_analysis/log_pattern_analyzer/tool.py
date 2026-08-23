@@ -437,6 +437,8 @@ class LogPatternAnalyzer:
                 "Be thorough. This is a real investigation."
             )
 
+            # Tier comes from the manifest (model_tier: light) — pattern
+            # summarization is bulk work, not deep reasoning.
             llm_response = context.llm_query.query_text(prompt=prompt, max_tokens=4096)
             if llm_response.ok:
                 return llm_response.text

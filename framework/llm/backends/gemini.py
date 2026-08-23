@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from .base import LLMBackend, ModelCapabilities, DocumentPart
+from ..providers import load_tier_specs
 from ...plugins.protocol import LLMResponse
 
 try:
@@ -35,7 +36,7 @@ class GeminiBackend(LLMBackend):
 
     def __init__(
         self,
-        model_id: str = "gemini-2.5-flash",
+        model_id: str = "gemini-3.5-flash",
         tier: str = "light",
         api_key_env: str = "GEMINI_FLASH_API_KEY",
         max_retries: int = 3,
@@ -51,17 +52,26 @@ class GeminiBackend(LLMBackend):
         self._capabilities = capabilities_override or self._default_capabilities()
 
     def _default_capabilities(self) -> ModelCapabilities:
-        """Build default capabilities from tier."""
-        is_heavy = self._tier == "heavy"
+        """Build default capabilities from the provider manifest.
+
+        Reads framework/llm/providers/gcp_gemini.json rather than hardcoding
+        limits, so there is one source of truth for model capacity. Gemini 3.x
+        tiers are capacity-identical — tier signals reasoning depth and cost,
+        not how much fits.
+        """
+        spec = load_tier_specs().get(self._tier)
         return ModelCapabilities(
             model_id=self._model_id,
             tier=self._tier,
             native_document_types=["application/pdf"],
             native_image_types=["image/jpeg", "image/png", "image/webp", "image/gif"],
-            max_context_tokens=2_097_152 if is_heavy else 1_048_576,
-            max_output_tokens=65_536 if is_heavy else 8_192,
+            max_context_tokens=spec.max_context_tokens if spec else 1_048_576,
+            max_output_tokens=spec.max_output_tokens if spec else 65_536,
             supports_structured_output=True,
-            supports_reasoning=is_heavy,
+            supports_reasoning=(
+                "deep_reasoning" in spec.capabilities if spec
+                else self._tier == "heavy"
+            ),
         )
 
     # --- Connection ---

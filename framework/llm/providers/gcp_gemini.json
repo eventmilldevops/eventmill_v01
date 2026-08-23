@@ -1,12 +1,13 @@
 {
   "provider_id": "gcp_gemini",
   "display_name": "Google Gemini (GCP)",
-
   "tiers": {
     "light": {
-      "model_id": "gemini-2.5-flash",
+      "model_id": "gemini-3.5-flash",
+      "display_name": "Gemini 3.5 Flash",
+      "fallback_model_id": "",
       "api_key_env": "GEMINI_FLASH_API_KEY",
-      "max_output_tokens": 8192,
+      "max_output_tokens": 65536,
       "max_context_tokens": 1048576,
       "cost_tier": "low",
       "capabilities": [
@@ -15,13 +16,17 @@
         "native_pdf",
         "structured_output",
         "function_calling"
-      ]
+      ],
+      "_fallback_note": "GA endpoint; no fallback needed. EVENTMILL_MODEL_LIGHT overrides model_id without a code change."
     },
     "heavy": {
-      "model_id": "gemini-2.5-pro",
+      "model_id": "gemini-3.1-pro-preview",
+      "display_name": "Gemini 3.1 Pro",
+      "fallback_model_id": "gemini-3.5-flash",
+      "_fallback_note": "model_id is a Preview endpoint; Google gives ~2 weeks notice before preview deprecation. EVENTMILL_MODEL_HEAVY overrides model_id without a code change.",
       "api_key_env": "GEMINI_PRO_API_KEY",
       "max_output_tokens": 65536,
-      "max_context_tokens": 2097152,
+      "max_context_tokens": 1048576,
       "cost_tier": "high",
       "capabilities": [
         "text",
@@ -33,17 +38,25 @@
       ]
     }
   },
-
   "file_handling": {
     "application/pdf": {
       "max_pages": 1000,
       "max_size_mb": 50,
-      "tokens_per_page": 258,
-      "ingestion_paths": ["gs_uri", "inline_bytes", "files_api"],
+      "tokens_per_page": 560,
+      "tokens_per_page_by_resolution": {
+        "low": 280,
+        "medium": 560,
+        "high": 1120
+      },
+      "default_media_resolution": "medium",
+      "ingestion_paths": [
+        "gs_uri",
+        "inline_bytes",
+        "files_api"
+      ],
       "preferred_ingestion": "gs_uri"
     }
   },
-
   "document_strategies": {
     "application/pdf": "native",
     "application/json": "extract_text",

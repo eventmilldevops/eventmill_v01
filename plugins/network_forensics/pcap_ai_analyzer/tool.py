@@ -2088,6 +2088,8 @@ class PcapAiAnalyzer:
             )
 
             # Step 4: Query LLM
+            # Tier comes from the manifest (model_tier: heavy) — the framework
+            # applies it. max_tokens is clamped to the tier's output cap.
             response = context.llm_query.query_text(
                 prompt=prompt,
                 system_context=system_identity,

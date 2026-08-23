@@ -1234,6 +1234,10 @@ class ThreatIntelIngester:
                         hints=QueryHints(
                             tier="light",
                             needs_structured_output=True,
+                            # Bulk IOC extraction is pattern-matching, not
+                            # reasoning — the provider default (medium) just
+                            # adds latency and cost across N chunks.
+                            thinking_level="low",
                         ),
                     )
 

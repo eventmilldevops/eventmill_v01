@@ -149,7 +149,30 @@ class TestPluginManifest:
         assert manifest.timeout_class in ["fast", "medium", "slow"]
         assert isinstance(manifest.safe_for_auto_invoke, bool)
         assert isinstance(manifest.requires_llm, bool)
-    
+        assert manifest.model_tier in ["light", "heavy", "none"]
+
+    def test_manifest_model_tier_defaults_to_light(self, temp_plugins_dir: Path):
+        """A manifest omitting model_tier gets the cheap tier, not the costly one."""
+        loader = PluginLoader(temp_plugins_dir)
+        loader.discover_all()
+
+        manifest = loader.get_manifest("test_plugin")
+        assert "model_tier" not in manifest.data
+        assert manifest.model_tier == "light"
+
+    def test_shipped_manifests_declare_a_valid_model_tier(self):
+        """Every real plugin's declared tier must be one the framework understands."""
+        loader = PluginLoader(Path(__file__).parents[2] / "plugins")
+        loader.discover_all()
+
+        plugins = loader.list_all()
+        assert plugins, "no plugins discovered"
+        for plugin in plugins:
+            assert plugin.manifest.model_tier in ("light", "heavy", "none"), (
+                f"{plugin.tool_name} declares model_tier="
+                f"{plugin.manifest.model_tier!r}"
+            )
+
     def test_manifest_to_dict(self, temp_plugins_dir: Path):
         """Test converting manifest to dictionary."""
         loader = PluginLoader(temp_plugins_dir)

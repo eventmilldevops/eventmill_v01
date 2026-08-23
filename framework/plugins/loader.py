@@ -43,6 +43,10 @@ class PluginManifest:
         self.capabilities: list[str] = data.get("capabilities", [])
         self.timeout_class: str = data.get("timeout_class", "medium")
         self.cost_hint: str = data.get("cost_hint", "low")
+        # Default LLM tier for this plugin's queries: light | heavy | none.
+        # The framework applies it as the default; plugins override per call
+        # with QueryHints(tier=...).
+        self.model_tier: str = data.get("model_tier", "light")
         self.safe_for_auto_invoke: bool = data.get("safe_for_auto_invoke", False)
         self.requires_llm: bool = data.get("requires_llm", False)
         self.dependencies: list[str] = data.get("dependencies", [])

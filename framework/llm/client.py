@@ -11,10 +11,18 @@ import json
 import logging
 import os
 import time
+from dataclasses import replace
 from typing import Any
 
 from ..plugins.protocol import LLMQueryInterface, LLMResponse, QueryHints, ArtifactRef
 from .backends.base import DocumentPart
+from .providers import (
+    TierSpec,
+    default_media_resolution,
+    load_tier_specs,
+    pdf_handling,
+    tokens_per_pdf_page,
+)
 
 try:
     from google import genai
@@ -24,6 +32,57 @@ except ImportError:
     _HAS_GENAI = False
 
 logger = logging.getLogger("eventmill.framework.llm")
+
+# Provider-manifest capability token required for native ingestion of a MIME type.
+_NATIVE_CAPABILITY_BY_MIME = {
+    "application/pdf": "native_pdf",
+}
+
+# QueryHints string values -> SDK enum members (Gemini 3.x).
+_THINKING_LEVELS = {"minimal", "low", "medium", "high"}
+_MEDIA_RESOLUTIONS = {"low", "medium", "high"}
+
+
+def _build_config(
+    system_context: str | None,
+    max_tokens: int,
+    hints: QueryHints | None = None,
+) -> Any:
+    """Build a GenerateContentConfig from max_tokens, system context, and hints.
+
+    Shared by the text, multimodal, and document paths so the Gemini 3.x
+    controls are applied consistently rather than in three places.
+
+    Unset hints leave the provider default in place. Note that Gemini 3.x
+    deprecates temperature/top_p/top_k — this deliberately sets none of them.
+    """
+    config = genai_types.GenerateContentConfig(max_output_tokens=max_tokens)
+    if system_context:
+        config.system_instruction = system_context
+
+    if hints is None:
+        return config
+
+    # Deep reasoning implies maximum thinking unless the caller was explicit.
+    level = hints.thinking_level
+    if level is None and hints.needs_reasoning:
+        level = "high"
+    if level:
+        if level in _THINKING_LEVELS:
+            config.thinking_config = genai_types.ThinkingConfig(
+                thinking_level=level.upper(),
+            )
+        else:
+            logger.warning("Ignoring unknown thinking_level %r", level)
+
+    if hints.media_resolution:
+        res = hints.media_resolution
+        if res in _MEDIA_RESOLUTIONS:
+            config.media_resolution = f"MEDIA_RESOLUTION_{res.upper()}"
+        else:
+            logger.warning("Ignoring unknown media_resolution %r", res)
+
+    return config
 
 
 class MCPLLMClient:
@@ -38,7 +97,7 @@ class MCPLLMClient:
     
     def __init__(
         self,
-        model_id: str = "gemini-2.5-flash",
+        model_id: str = "gemini-3.5-flash",
         transport: str = "stdio",
         endpoint: str | None = None,
         max_retries: int = 3,
@@ -121,15 +180,19 @@ class MCPLLMClient:
         system_context: str | None = None,
         max_tokens: int = 4096,
         grounding_data: list[str] | None = None,
+        hints: QueryHints | None = None,
     ) -> LLMResponse:
         """Send a text prompt to the LLM via MCP.
-        
+
         Args:
             prompt: The user prompt.
             system_context: Optional system context override.
             max_tokens: Maximum tokens in response.
             grounding_data: Additional context strings.
-        
+            hints: Tier selection is a no-op here (a single client has one
+                   model), but generation controls — thinking_level,
+                   media_resolution, needs_reasoning — are applied.
+
         Returns:
             LLMResponse with text or error.
         """
@@ -156,6 +219,7 @@ class MCPLLMClient:
                 prompt=full_prompt,
                 system_context=system_context,
                 max_tokens=max_tokens,
+                hints=hints,
             )
 
             return LLMResponse(
@@ -184,16 +248,19 @@ class MCPLLMClient:
         image_format: str,
         system_context: str | None = None,
         max_tokens: int = 4096,
+        hints: QueryHints | None = None,
     ) -> LLMResponse:
         """Send a multimodal prompt to the LLM via MCP.
-        
+
         Args:
             prompt: The text prompt.
             image_data: Raw image bytes.
             image_format: Image format (jpeg, png).
             system_context: Optional system context.
             max_tokens: Maximum tokens in response.
-        
+            hints: Tier selection is a no-op here; generation controls
+                   (thinking_level, media_resolution) are applied.
+
         Returns:
             LLMResponse with text or error.
         """
@@ -217,6 +284,7 @@ class MCPLLMClient:
                 image_format=image_format,
                 system_context=system_context,
                 max_tokens=max_tokens,
+                hints=hints,
             )
             
             return LLMResponse(
@@ -279,6 +347,7 @@ class MCPLLMClient:
         prompt: str,
         system_context: str | None,
         max_tokens: int,
+        hints: QueryHints | None = None,
     ) -> tuple[str, int, int]:
         """Execute a text query via Google GenAI SDK (MCP bridge).
 
@@ -291,11 +360,7 @@ class MCPLLMClient:
         if self._genai_client is None:
             raise RuntimeError("Client not initialised — call connect() first")
 
-        config = genai_types.GenerateContentConfig(
-            max_output_tokens=max_tokens,
-        )
-        if system_context:
-            config.system_instruction = system_context
+        config = _build_config(system_context, max_tokens, hints)
 
         last_exc: Exception | None = None
         for attempt in range(self.max_retries + 1):
@@ -347,6 +412,7 @@ class MCPLLMClient:
         image_format: str,
         system_context: str | None,
         max_tokens: int,
+        hints: QueryHints | None = None,
     ) -> str:
         """Execute a multimodal query via Google GenAI SDK (MCP bridge)."""
         if self._genai_client is None:
@@ -355,12 +421,8 @@ class MCPLLMClient:
         mime_map = {"jpeg": "image/jpeg", "jpg": "image/jpeg", "png": "image/png"}
         mime_type = mime_map.get(image_format.lower(), f"image/{image_format}")
         
-        config = genai_types.GenerateContentConfig(
-            max_output_tokens=max_tokens,
-        )
-        if system_context:
-            config.system_instruction = system_context
-        
+        config = _build_config(system_context, max_tokens, hints)
+
         contents = [
             prompt,
             genai_types.Part.from_bytes(data=image_data, mime_type=mime_type),
@@ -404,10 +466,15 @@ class LLMDispatcher:
     and native document dispatch.
 
     Backward-compatible: all existing query_text() calls work unchanged.
-    When no QueryHints are provided, falls back to token-count routing:
 
-        max_tokens <= LIGHT_THRESHOLD  →  light / Flash  (fast, cheap)
-        max_tokens >  LIGHT_THRESHOLD  →  heavy / Pro    (powerful, expensive)
+    Tier selection precedence:
+
+        1. Explicit QueryHints (tier / needs_reasoning) — plugins get these
+           from their manifest's model_tier via TierScopedLLMClient.
+        2. The tier the analyst pinned with 'connect <model_id>'.
+        3. Token-count heuristic (last resort, for direct framework callers):
+           max_tokens <= LIGHT_THRESHOLD  →  light / Flash  (fast, cheap)
+           max_tokens >  LIGHT_THRESHOLD  →  heavy / Pro    (powerful, expensive)
 
     If the preferred tier is not connected the other tier is used as fallback.
     """
@@ -415,11 +482,17 @@ class LLMDispatcher:
     LIGHT_THRESHOLD: int = 3500
 
     def __init__(self, clients: dict[str, MCPLLMClient],
-                 preferred_tier: str | None = None) -> None:
+                 preferred_tier: str | None = None,
+                 tier_specs: dict[str, TierSpec] | None = None) -> None:
         self._clients = clients
         # When set, this tier is preferred over the token-count heuristic.
-        # Lets explicit 'connect gemini-2.5-flash' keep Flash as primary.
+        # Lets explicit 'connect gemini-3.5-flash' keep Flash as primary.
         self._preferred_tier = preferred_tier
+        # Per-tier capability specs from the provider manifest. Used to clamp
+        # max_tokens to what the selected model can actually emit.
+        self._tier_specs = (
+            tier_specs if tier_specs is not None else load_tier_specs()
+        )
 
     # --- Protocol compatibility -------------------------------------------------
 
@@ -448,18 +521,22 @@ class LLMDispatcher:
         """Select the appropriate client based on hints + capabilities.
 
         Routing priority:
-        1. Explicit tier from hints.tier or hints.needs_reasoning
-        2. If native document needed + prefers_native_file, prefer backend
-           whose underlying model supports that MIME type
-        3. Token-count heuristic (legacy fallback when no hints)
-        4. Any connected backend as final fallback
+        1. Explicit tier from hints.tier or hints.needs_reasoning — this is
+           where a plugin's manifest model_tier arrives.
+        2. The tier pinned by 'connect <model_id>'.
+        3. Token-count heuristic — last resort, for direct framework callers
+           that pass no hints.
+        4. Any connected backend as final fallback.
+
+        When a document MIME type is supplied, tiers whose provider manifest
+        does not declare native support for it are demoted in the order.
         """
         if hints is not None:
             if hints.needs_reasoning or hints.tier == "heavy":
                 order = ("heavy", "light")
             else:
                 order = ("light", "heavy")
-        elif self._preferred_tier:
+        elif self._preferred_tier in ("light", "heavy"):
             # User explicitly chose a model — honour that over token-count heuristic
             other = "light" if self._preferred_tier == "heavy" else "heavy"
             order = (self._preferred_tier, other)
@@ -467,21 +544,134 @@ class LLMDispatcher:
             prefer_heavy = max_tokens > self.LIGHT_THRESHOLD
             order = ("heavy", "light") if prefer_heavy else ("light", "heavy")
 
+        if document_mime:
+            order = self._prefer_native_capable(order, document_mime)
+
         for tier in order:
             c = self._clients.get(tier)
             if c and c.connected:
                 return c
+        # Nothing in the preferred order is connected. Accept any connected
+        # client rather than failing (e.g. a legacy single-key setup).
+        for c in self._clients.values():
+            if c.connected:
+                return c
         raise RuntimeError("No LLM client connected — run 'connect' first")
+
+    def _prefer_native_capable(
+        self, order: tuple[str, ...], document_mime: str,
+    ) -> tuple[str, ...]:
+        """Move tiers that natively handle this MIME type to the front.
+
+        Relative order within each group is preserved, so this only breaks
+        ties — it never overrides an explicit tier choice that is capable.
+        """
+        capability = _NATIVE_CAPABILITY_BY_MIME.get(document_mime)
+        if not capability or not self._tier_specs:
+            return order
+        capable = [
+            t for t in order
+            if capability in (self._tier_specs[t].capabilities
+                              if t in self._tier_specs else ())
+        ]
+        if not capable:
+            return order
+        return tuple(capable) + tuple(t for t in order if t not in capable)
+
+    def _tier_of(self, client: MCPLLMClient) -> str | None:
+        """Reverse-lookup the tier a client is registered under."""
+        for tier, c in self._clients.items():
+            if c is client:
+                return tier
+        return None
+
+    def _clamp_tokens(self, client: MCPLLMClient, max_tokens: int) -> int:
+        """Clamp max_tokens to what the selected tier can actually emit.
+
+        Without this, a call sized for Pro (e.g. 16384) that lands on Flash
+        (8192 cap) is rejected by the provider.
+        """
+        tier = self._tier_of(client)
+        spec = self._tier_specs.get(tier) if tier else None
+        if spec is None or max_tokens <= spec.max_output_tokens:
+            return max_tokens
+        logger.warning(
+            "Clamping max_tokens %d → %d for %s (tier=%s output cap)",
+            max_tokens, spec.max_output_tokens, client.model_id, tier,
+        )
+        return spec.max_output_tokens
 
     @staticmethod
     def _is_quota_error(error: str) -> bool:
         """Return True when the error string indicates quota exhaustion."""
         return "RESOURCE_EXHAUSTED" in error or "quota" in error.lower()
 
+    @staticmethod
+    def _is_model_not_found(error: str) -> bool:
+        """Return True when the model id itself was rejected.
+
+        Preview endpoints are retired with ~2 weeks' notice, so a pinned
+        preview model can start returning NOT_FOUND without warning.
+        """
+        lowered = error.lower()
+        return (
+            "not_found" in lowered
+            or "404" in error
+            or "is not found for api version" in lowered
+            or "was not found" in lowered
+        )
+
+    def _retry_on_retired_model(
+        self, client: MCPLLMClient, error: str,
+    ) -> MCPLLMClient | None:
+        """Build a client on the tier's fallback model after a NOT_FOUND.
+
+        Returns None when the error is not a model-id problem or the tier
+        declares no fallback.
+        """
+        if not self._is_model_not_found(error):
+            return None
+        tier = self._tier_of(client)
+        spec = self._tier_specs.get(tier) if tier else None
+        if not spec or not spec.fallback_model_id:
+            return None
+        if spec.fallback_model_id == client.model_id:
+            return None
+
+        logger.error(
+            "Model %s (tier=%s) returned NOT_FOUND — it may have been retired. "
+            "Falling back to %s. Set %s to pin a different model.",
+            client.model_id, tier, spec.fallback_model_id,
+            "EVENTMILL_MODEL_HEAVY" if tier == "heavy" else "EVENTMILL_MODEL_LIGHT",
+        )
+        print(
+            f"\n  ⚠️  Model {client.model_id} not found — "
+            f"retrying with {spec.fallback_model_id}"
+        )
+
+        substitute = MCPLLMClient(
+            model_id=spec.fallback_model_id,
+            transport=client.transport,
+            endpoint=client.endpoint,
+            max_retries=client.max_retries,
+        )
+        # Reuse the live connection; only the target model id differs.
+        substitute._genai_client = client._genai_client
+        substitute._api_key_env_var = client._api_key_env_var
+        substitute._connected = client._connected
+        # Register it so subsequent calls in this session skip the failed id.
+        if tier:
+            self._clients[tier] = substitute
+        return substitute
+
     def _fallback_client(self, primary: MCPLLMClient) -> MCPLLMClient | None:
         """Return the other connected tier, or None if unavailable."""
         for tier, c in self._clients.items():
             if c is not primary and c.connected:
+                logger.warning(
+                    "Tier change: %s (%s) → %s (%s) after quota exhaustion",
+                    self._tier_of(primary), primary.model_id, tier, c.model_id,
+                )
                 return c
         return None
 
@@ -502,8 +692,9 @@ class LLMDispatcher:
         result = client.query_text(
             prompt=prompt,
             system_context=system_context,
-            max_tokens=max_tokens,
+            max_tokens=self._clamp_tokens(client, max_tokens),
             grounding_data=grounding_data,
+            hints=hints,
         )
         if not result.ok and self._is_quota_error(result.error or ""):
             fallback = self._fallback_client(client)
@@ -520,8 +711,19 @@ class LLMDispatcher:
                 result = fallback.query_text(
                     prompt=prompt,
                     system_context=system_context,
-                    max_tokens=max_tokens,
+                    max_tokens=self._clamp_tokens(fallback, max_tokens),
                     grounding_data=grounding_data,
+                    hints=hints,
+                )
+        elif not result.ok:
+            substitute = self._retry_on_retired_model(client, result.error or "")
+            if substitute:
+                result = substitute.query_text(
+                    prompt=prompt,
+                    system_context=system_context,
+                    max_tokens=self._clamp_tokens(substitute, max_tokens),
+                    grounding_data=grounding_data,
+                    hints=hints,
                 )
         return result
 
@@ -532,9 +734,10 @@ class LLMDispatcher:
         image_format: str,
         system_context: str | None = None,
         max_tokens: int = 4096,
+        hints: QueryHints | None = None,
     ) -> LLMResponse:
         try:
-            client = self._route(max_tokens)
+            client = self._route(max_tokens, hints=hints)
         except RuntimeError as e:
             return LLMResponse(ok=False, error=str(e))
         result = client.query_multimodal(
@@ -542,7 +745,8 @@ class LLMDispatcher:
             image_data=image_data,
             image_format=image_format,
             system_context=system_context,
-            max_tokens=max_tokens,
+            max_tokens=self._clamp_tokens(client, max_tokens),
+            hints=hints,
         )
         if not result.ok and self._is_quota_error(result.error or ""):
             fallback = self._fallback_client(client)
@@ -561,7 +765,8 @@ class LLMDispatcher:
                     image_data=image_data,
                     image_format=image_format,
                     system_context=system_context,
-                    max_tokens=max_tokens,
+                    max_tokens=self._clamp_tokens(fallback, max_tokens),
+                    hints=hints,
                 )
         return result
 
@@ -586,10 +791,21 @@ class LLMDispatcher:
         hints = hints or QueryHints(tier="heavy", prefers_native_file=True)
         mime_type = artifact.metadata.get("mime_type", "application/pdf")
 
+        # PDF page cost is set by media_resolution under Gemini 3.x
+        # (low 280 / medium 560 / high 1120 tokens per page). Make the default
+        # explicit rather than relying on the provider's implicit choice.
+        if mime_type == "application/pdf" and hints.media_resolution is None:
+            hints = replace(hints, media_resolution=default_media_resolution())
+
         try:
             client = self._route(max_tokens, hints=hints, document_mime=mime_type)
         except RuntimeError as e:
             return LLMResponse(ok=False, error=str(e))
+
+        if mime_type == "application/pdf":
+            overflow = self._pdf_context_overflow(client, artifact, hints)
+            if overflow:
+                return overflow
 
         # Check if the underlying model supports native document ingestion.
         # MCPLLMClient doesn't have a capabilities() method — it uses the
@@ -619,8 +835,102 @@ class LLMDispatcher:
             prompt=full_prompt,
             doc=doc,
             system_context=system_context,
-            max_tokens=max_tokens,
+            max_tokens=self._clamp_tokens(client, max_tokens),
+            hints=hints,
         )
+
+    def _pdf_context_overflow(
+        self, client: MCPLLMClient, artifact: ArtifactRef,
+        hints: QueryHints,
+    ) -> LLMResponse | None:
+        """Refuse a PDF that cannot fit the model's context at this resolution.
+
+        A 1000-page PDF costs ~280k tokens at "low", ~560k at "medium", and
+        ~1.12M at "high" — the last exceeds the 1,048,576-token window. Catch
+        that here with an actionable message instead of an opaque provider
+        error partway through the call.
+
+        Returns None when the request fits, or when the page count is unknown.
+        """
+        pages = self._pdf_page_count(artifact)
+        if not pages:
+            return None
+
+        handling = pdf_handling()
+        max_pages = handling.get("max_pages", 1000)
+        max_mb = handling.get("max_size_mb", 50)
+        if pages > max_pages:
+            return LLMResponse(
+                ok=False,
+                error=(
+                    f"PDF has {pages:,} pages, above the provider limit of "
+                    f"{max_pages:,} pages / {max_mb} MB"
+                ),
+                model_used=client.model_id,
+                fallback_reason="pdf_exceeds_provider_page_limit",
+            )
+
+        resolution = hints.media_resolution or default_media_resolution()
+        per_page = tokens_per_pdf_page(resolution)
+        estimated = pages * per_page
+
+        tier = self._tier_of(client)
+        spec = self._tier_specs.get(tier) if tier else None
+        context_limit = spec.max_context_tokens if spec else 1_048_576
+
+        if estimated <= context_limit:
+            return None
+
+        # Try a cheaper resolution before giving up.
+        for cheaper in ("medium", "low"):
+            if pages * tokens_per_pdf_page(cheaper) <= context_limit:
+                logger.warning(
+                    "PDF %d pages at media_resolution=%s needs ~%d tokens "
+                    "(limit %d) — use media_resolution=%r instead",
+                    pages, resolution, estimated, context_limit, cheaper,
+                )
+                return LLMResponse(
+                    ok=False,
+                    error=(
+                        f"PDF ({pages:,} pages) needs ~{estimated:,} tokens at "
+                        f"media_resolution={resolution!r}, above the "
+                        f"{context_limit:,}-token context window. Retry with "
+                        f"media_resolution={cheaper!r} (~"
+                        f"{pages * tokens_per_pdf_page(cheaper):,} tokens)."
+                    ),
+                    model_used=client.model_id,
+                    fallback_reason="pdf_exceeds_context_at_resolution",
+                )
+
+        return LLMResponse(
+            ok=False,
+            error=(
+                f"PDF ({pages:,} pages) needs ~{estimated:,} tokens even at the "
+                f"lowest resolution, above the {context_limit:,}-token context "
+                "window. Split the document."
+            ),
+            model_used=client.model_id,
+            fallback_reason="pdf_exceeds_context_at_all_resolutions",
+        )
+
+    @staticmethod
+    def _pdf_page_count(artifact: ArtifactRef) -> int | None:
+        """Page count from artifact metadata, or by reading the file.
+
+        Returns None when it cannot be determined — the guard then defers to
+        the provider rather than blocking a request it cannot size.
+        """
+        pages = artifact.metadata.get("pages") or artifact.metadata.get("page_count")
+        if isinstance(pages, int) and pages > 0:
+            return pages
+        if not artifact.file_path:
+            return None
+        try:
+            from pypdf import PdfReader
+            return len(PdfReader(artifact.file_path).pages)
+        except Exception as e:
+            logger.debug("Could not determine PDF page count: %s", e)
+            return None
 
     def supports_native_document(self, mime_type: str) -> bool:
         """Check if any connected model handles this MIME type natively."""
@@ -648,6 +958,7 @@ class LLMDispatcher:
         doc: DocumentPart,
         system_context: str | None,
         max_tokens: int,
+        hints: QueryHints | None = None,
     ) -> LLMResponse:
         """Execute a document query via the GenAI SDK.
 
@@ -691,11 +1002,7 @@ class LLMDispatcher:
 
             parts.append(prompt)
 
-            config = genai_types.GenerateContentConfig(
-                max_output_tokens=max_tokens,
-            )
-            if system_context:
-                config.system_instruction = system_context
+            config = _build_config(system_context, max_tokens, hints)
 
             last_exc: Exception | None = None
             for attempt in range(client.max_retries + 1):
@@ -739,6 +1046,113 @@ class LLMDispatcher:
 
 # Backward compatibility alias
 TieredLLMClient = LLMDispatcher
+
+
+class TierScopedLLMClient:
+    """Applies a plugin's manifest model_tier as the default for its queries.
+
+    The framework wraps the shared LLMDispatcher in one of these per plugin
+    execution. Every query the plugin makes without explicit QueryHints picks
+    up the tier its manifest declares; a plugin that passes its own hints
+    keeps full control.
+
+    This is the single place the manifest default is applied — LLMDispatcher
+    stays plugin-agnostic, and no existing plugin call site has to change.
+    """
+
+    def __init__(self, inner: LLMQueryInterface, default_tier: str = "light"):
+        self._inner = inner
+        # "none" means the plugin declares no LLM work; treat any incidental
+        # call as light rather than silently promoting it to Pro.
+        self.default_tier = (
+            default_tier if default_tier in ("light", "heavy") else "light"
+        )
+
+    def _with_default(self, hints: QueryHints | None) -> QueryHints:
+        return hints if hints is not None else QueryHints(tier=self.default_tier)
+
+    # --- Pass-through properties -----------------------------------------------
+
+    @property
+    def connected(self) -> bool:
+        return getattr(self._inner, "connected", False)
+
+    @property
+    def model_id(self) -> str:
+        return getattr(self._inner, "model_id", "unknown")
+
+    @property
+    def total_tokens_used(self) -> int:
+        return getattr(self._inner, "total_tokens_used", 0)
+
+    # --- LLMQueryInterface methods ---------------------------------------------
+
+    def query_text(
+        self,
+        prompt: str,
+        system_context: str | None = None,
+        max_tokens: int = 4096,
+        grounding_data: list[str] | None = None,
+        hints: QueryHints | None = None,
+    ) -> LLMResponse:
+        return self._inner.query_text(
+            prompt=prompt,
+            system_context=system_context,
+            max_tokens=max_tokens,
+            grounding_data=grounding_data,
+            hints=self._with_default(hints),
+        )
+
+    def query_multimodal(
+        self,
+        prompt: str,
+        image_data: bytes,
+        image_format: str,
+        system_context: str | None = None,
+        max_tokens: int = 4096,
+        hints: QueryHints | None = None,
+    ) -> LLMResponse:
+        return self._inner.query_multimodal(
+            prompt=prompt,
+            image_data=image_data,
+            image_format=image_format,
+            system_context=system_context,
+            max_tokens=max_tokens,
+            hints=self._with_default(hints),
+        )
+
+    def query_with_document(
+        self,
+        prompt: str,
+        artifact: ArtifactRef,
+        system_context: str | None = None,
+        max_tokens: int = 8192,
+        grounding_data: list[str] | None = None,
+        hints: QueryHints | None = None,
+    ) -> LLMResponse:
+        # Native document work needs the file path preference regardless of tier.
+        resolved = hints or QueryHints(
+            tier=self.default_tier, prefers_native_file=True,
+        )
+        inner_call = getattr(self._inner, "query_with_document", None)
+        if inner_call is None:
+            return LLMResponse(
+                ok=False,
+                error="Connected client does not support native document queries",
+                fallback_reason="no query_with_document on client",
+            )
+        return inner_call(
+            prompt=prompt,
+            artifact=artifact,
+            system_context=system_context,
+            max_tokens=max_tokens,
+            grounding_data=grounding_data,
+            hints=resolved,
+        )
+
+    def supports_native_document(self, mime_type: str) -> bool:
+        checker = getattr(self._inner, "supports_native_document", None)
+        return bool(checker(mime_type)) if checker else False
 
 
 class ContextBuilder:

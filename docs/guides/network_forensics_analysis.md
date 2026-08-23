@@ -1301,7 +1301,7 @@ eventmill (network_forensics) > run pcap_threat_hunter {"hunt": "dns"}
 
 ```
 eventmill (network_forensics) > connect
-  ✓ Connected to Gemini Flash (gemini-2.5-flash)
+  ✓ Connected to Gemini Flash (gemini-3.5-flash)
 
 eventmill (network_forensics) > run pcap_ai_analyzer {"mode": "hunt_beacons"}
   [PCAP header + beaconing data + 🔍 AI ANALYSIS with MITRE ATT&CK mapping]
