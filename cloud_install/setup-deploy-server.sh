@@ -76,8 +76,14 @@ mkdir -p "${CONFIG_DIR}"
 if [ ! -f "${CONFIG_DIR}/deploy.env" ]; then
     cat > "${CONFIG_DIR}/deploy.env" <<'ENVEOF'
 # Event Mill deploy configuration
-# Source this file before running deploy scripts:
+#
+# provision-gcp-project.sh and deploy-cloudrun-secrets.sh load this file
+# automatically. Sourcing it by hand is only needed for gcloud builds submit,
+# which cannot read it:
 #   source ~/.eventmill/deploy.env
+#
+# GOOGLE_CLOUD_PROJECT, CLOUD_RUN_REGION and EVENTMILL_BUCKET_PREFIX are the
+# three that matter. Anything already exported in your shell wins over this.
 
 # Required: GCP project ID
 export GOOGLE_CLOUD_PROJECT="your-project-id"
@@ -88,8 +94,11 @@ export GOOGLE_CLOUD_PROJECT="your-project-id"
 # Default convention: {project_id}-eventmill (set after GOOGLE_CLOUD_PROJECT is known)
 export EVENTMILL_BUCKET_PREFIX="${GOOGLE_CLOUD_PROJECT}-eventmill"
 
-# Region (default: northamerica-northeast2)
-export CLOUD_RUN_REGION="northamerica-northeast2"
+# Required: region. MUST match the region you provision in — the Artifact
+# Registry image path embeds it, so a mismatch fails the deploy preflight.
+# Deliberately left blank: a pre-filled region is how deploys end up pointed
+# at a region nothing was provisioned in.
+export CLOUD_RUN_REGION=""
 
 # Legacy single-bucket override (backward compatibility only — leave empty for new deployments)
 export GCS_LOG_BUCKET=""
@@ -129,6 +138,7 @@ echo "✅ Deploy server setup complete."
 echo ""
 echo "Next steps:"
 echo "  1. Edit config:    nano ~/.eventmill/deploy.env"
+echo "     GOOGLE_CLOUD_PROJECT and CLOUD_RUN_REGION are required and blank."
 echo "  2. Authenticate:   gcloud auth login"
 echo "  3. Set project:    gcloud config set project YOUR_PROJECT_ID"
 echo "  4. Deploy:"

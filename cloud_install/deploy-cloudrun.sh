@@ -14,7 +14,7 @@ set -e
 # Configuration — override via environment variables
 # ---------------------------------------------------------------------------
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-your-project-id}"
-REGION="${CLOUD_RUN_REGION:-northamerica-northeast2}"
+REGION="${CLOUD_RUN_REGION:-}"
 SERVICE_NAME="event-mill"
 IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/eventmill/${SERVICE_NAME}"
 
@@ -27,6 +27,14 @@ echo ""
 
 if [ "${PROJECT_ID}" = "your-project-id" ]; then
     echo "ERROR: Set GOOGLE_CLOUD_PROJECT before running this script."
+    exit 1
+fi
+
+# Region is never guessed: the Artifact Registry image path embeds it, so
+# provisioning in one region and deploying in another fails at push time.
+if [ -z "${REGION}" ]; then
+    echo "ERROR: Set CLOUD_RUN_REGION before running this script."
+    echo "  It must match the region you provisioned in."
     exit 1
 fi
 

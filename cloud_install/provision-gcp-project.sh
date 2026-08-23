@@ -1,605 +1,677 @@
 #!/bin/bash
 # =============================================================================
-# Event Mill v0.1.0 — GCP Project Provisioning
+# Event Mill — GCP Project Provisioning
 # =============================================================================
 #
-# Run this script ONCE to prepare a GCP project for Event Mill.
-# It is idempotent — safe to re-run if a step fails partway through.
+# Second version of provision-gcp-project.sh. Same resources, same names, same
+# environment variables — safe to run against an already-provisioned project.
 #
-# Prerequisites:
-#   - gcloud CLI installed and authenticated (gcloud auth login)
-#   - A GCP project already created with billing enabled
-#   - Sufficient IAM permissions (Owner or Editor on the project)
+# WHY THIS EXISTS
+# ---------------
+# v1 runs under `set -e` with most checks written as `cmd > /dev/null 2>&1`.
+# Any unguarded failure aborts the script *silently* — no error, no banner.
+# In practice that produced a half-provisioned project:
+#
+#   - Section 4 line 401 (`echo -n "" | gsutil cp - "${dest}"`) had no `|| true`
+#     guard, so a single failed folder placeholder killed the run.
+#   - Section 5 (Artifact Registry), Section 6 (secrets) and Section 7 (secret
+#     IAM bindings) never executed, leaving the Artifact Registry repo absent
+#     in the requested region and no secretAccessor bindings at all.
+#
+# WHAT CHANGED
+# ------------
+#   1. REGION MUST BE EXPLICIT. v1 silently defaulted to northamerica-northeast2.
+#      Every region mismatch in this project traces back to that default, so this
+#      refuses to run without CLOUD_RUN_REGION (or --region) set.
+#
+#   2. NO SILENT ABORTS. Runs without `set -e`; every step reports success or
+#      the ACTUAL error text, accumulates failures, and always reaches the
+#      summary. Exit code is non-zero if anything failed.
+#
+#   3. Artifact Registry is created in the REQUESTED region, and the script
+#      warns if a same-named repo exists in a DIFFERENT region (the exact
+#      situation that produced "Repository 'eventmill' not found").
+#
+#   4. gsutil replaced with `gcloud storage` throughout. v1 mixed the two.
+#
+#   5. Secret IAM bindings are VERIFIED after being applied, not assumed.
+#      v1 printed "✓ can read <secret>" unconditionally, even on failure.
+#
+#   6. Detects the "not available in your location" geo-block explicitly
+#      instead of reporting it as a missing or name-collided resource.
 #
 # Usage:
-#   export GOOGLE_CLOUD_PROJECT="your-project-id"
+#   export GOOGLE_CLOUD_PROJECT="eventmill-v01"
+#   export CLOUD_RUN_REGION="us-central1"          # REQUIRED
+#   export EVENTMILL_BUCKET_PREFIX="evtm-v011"     # must match existing buckets
 #   bash cloud_install/provision-gcp-project.sh
 #
-# After provisioning, create secrets:
-#   bash cloud_install/provision-secrets.sh
+#   # Preflight only, change nothing:
+#   DRY_RUN=1 bash cloud_install/provision-gcp-project.sh
 #
-# Then deploy:
-#   bash cloud_install/deploy-cloudrun-secrets.sh
+# Idempotent: existing buckets, secrets, repos and bindings are left alone.
 # =============================================================================
 
-set -e
+set -uo pipefail
 
 # ---------------------------------------------------------------------------
-# Configuration — update these or set via environment variables
+# Configuration
 # ---------------------------------------------------------------------------
+# Saved deploy config, if present. Re-running provisioning against an existing
+# tenant should reuse the values already pinned rather than asking again.
+# Anything already exported wins.
+EVENTMILL_DEPLOY_ENV="${EVENTMILL_DEPLOY_ENV:-${HOME}/.eventmill/deploy.env}"
+if [ -f "${EVENTMILL_DEPLOY_ENV}" ]; then
+    _pre_project="${GOOGLE_CLOUD_PROJECT:-}"
+    _pre_region="${CLOUD_RUN_REGION:-}"
+    _pre_prefix="${EVENTMILL_BUCKET_PREFIX:-}"
 
-# CHANGE THIS: Your GCP project ID
-PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-your-project-id}"
+    # shellcheck disable=SC1090
+    . "${EVENTMILL_DEPLOY_ENV}"
 
-# CHANGE THIS: Deployment region
-# See https://cloud.google.com/run/docs/locations for available regions
-REGION="${CLOUD_RUN_REGION:-northamerica-northeast2}"
+    [ -n "${_pre_project}" ] && GOOGLE_CLOUD_PROJECT="${_pre_project}"
+    [ -n "${_pre_region}" ]  && CLOUD_RUN_REGION="${_pre_region}"
+    [ -n "${_pre_prefix}" ]  && EVENTMILL_BUCKET_PREFIX="${_pre_prefix}"
+    export GOOGLE_CLOUD_PROJECT CLOUD_RUN_REGION EVENTMILL_BUCKET_PREFIX
+    unset _pre_project _pre_region _pre_prefix
 
-# CHANGE THIS: Bucket prefix for Event Mill storage
-# Convention: {prefix}-{pillar-slug} and {prefix}-common
-# All bucket names must be globally unique across all of GCP
-# Default uses project ID as prefix to guarantee global uniqueness
-BUCKET_PREFIX="${EVENTMILL_BUCKET_PREFIX:-${PROJECT_ID}-eventmill}"
+    echo "Loaded deploy config: ${EVENTMILL_DEPLOY_ENV}"
+fi
 
-# Legacy single-bucket override (backward compatibility)
-GCS_LOG_BUCKET="${GCS_LOG_BUCKET:-}"
+PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-}"
+REGION="${CLOUD_RUN_REGION:-}"
+BUCKET_PREFIX="${EVENTMILL_BUCKET_PREFIX:-}"
 
-# Service account name for Event Mill (usually no change needed)
 SA_NAME="eventmill-runner"
 SA_DISPLAY_NAME="Event Mill Cloud Run Service Account"
-
-# Cloud Run service name (usually no change needed)
+AR_REPO="${EVENTMILL_AR_REPO:-eventmill}"
 SERVICE_NAME="event-mill"
+DRY_RUN="${DRY_RUN:-0}"
+
+PILLAR_SLUGS=(log-analysis network-forensics threat-modeling)
+COMMON_FOLDERS=(mitre capec cisa vendor_advisories threat_actors campaigns vulnerabilities)
+SECRET_NAMES=(
+    eventmill-gemini-flash-api
+    eventmill-gemini-pro-api
+    eventmill-gcs-sa
+    eventmill-ttyd-user
+    eventmill-ttyd-cred
+)
+
+FAILED=0
+WARNED=0
 
 # ---------------------------------------------------------------------------
-# Preflight checks
+# Argument parsing (env vars still work; flags win)
+# ---------------------------------------------------------------------------
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --project)       PROJECT_ID="$2";     shift 2 ;;
+        --region)        REGION="$2";         shift 2 ;;
+        --bucket-prefix) BUCKET_PREFIX="$2";  shift 2 ;;
+        --dry-run)       DRY_RUN=1;           shift   ;;
+        *) echo "Unknown argument: $1"; exit 2 ;;
+    esac
+done
+
+# ---------------------------------------------------------------------------
+# Helpers
 # ---------------------------------------------------------------------------
 
-echo "⚙ Event Mill v0.2.0 — GCP Project Provisioning"
-echo "================================================="
-echo ""
-echo "Project:        ${PROJECT_ID}"
-echo "Region:         ${REGION}"
-echo "Bucket prefix:  ${BUCKET_PREFIX}"
-echo "SA:             ${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
-echo ""
-echo "Buckets to create:"
-echo "   ${BUCKET_PREFIX}-log-analysis"
-echo "   ${BUCKET_PREFIX}-network-forensics"
-echo "   ${BUCKET_PREFIX}-threat-modeling"
-echo "   ${BUCKET_PREFIX}-common"
-if [ -n "${GCS_LOG_BUCKET}" ]; then
-    echo "   (legacy override: ${GCS_LOG_BUCKET} → log-analysis)"
-fi
-echo ""
+# Report the ACTUAL error, and name the geo-block rather than guessing.
+explain_error() {
+    local what="$1"
+    local err="$2"
 
-if [ "${PROJECT_ID}" = "your-project-id" ]; then
-    echo "ERROR: Set GOOGLE_CLOUD_PROJECT before running this script."
-    echo "  export GOOGLE_CLOUD_PROJECT=\"your-project-id\""
-    exit 1
-fi
+    if grep -qi "not available in your location" <<<"${err}"; then
+        echo "   ✗ ${what}: BLOCKED — Google is geo-blocking this host."
+        echo "     Not a missing resource, not an IAM problem, not a name collision."
+        echo "     Google's geolocation DB misclassifies some hosting ranges"
+        echo "     (notably OVH IPv6). Every *.googleapis.com call will fail here."
+        echo "     Prefer IPv4:  echo 'precedence ::ffff:0:0/96  100' | sudo tee -a /etc/gai.conf"
+        echo "     Or run this from Cloud Shell / a GCE VM in ${PROJECT_ID}."
+        return
+    fi
+    if grep -qiE "PERMISSION_DENIED|does not have|caller does not have|forbidden" <<<"${err}"; then
+        echo "   ✗ ${what}: permission denied"
+        echo "     ${err}" | head -3
+        return
+    fi
+    if grep -qiE "already own|already exists|ALREADY_EXISTS" <<<"${err}"; then
+        echo "   ✗ ${what}: name already taken globally — override the prefix and re-run"
+        return
+    fi
+    echo "   ✗ ${what}"
+    echo "     ${err}" | head -5
+}
 
-# Verify gcloud is authenticated and project is accessible
-echo "🔍 Verifying project access..."
-if ! gcloud projects describe "${PROJECT_ID}" --format="value(projectId)" > /dev/null 2>&1; then
-    echo "ERROR: Cannot access project '${PROJECT_ID}'."
-    echo "  - Is gcloud authenticated?  gcloud auth login"
-    echo "  - Does the project exist?   gcloud projects list"
-    exit 1
-fi
-echo "   OK: Project '${PROJECT_ID}' is accessible."
-echo ""
-
-# Capture project number (needed for default compute SA references)
-PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
-
-# =============================================================================
-# Section 1: Enable APIs
-# =============================================================================
-# These APIs are required for building, deploying, and running Event Mill
-# on Cloud Run with GCS artifact storage and Secret Manager.
-# API enablement is idempotent — already-enabled APIs are skipped.
-# =============================================================================
-
-echo "📡 Section 1: Enabling GCP APIs..."
-echo ""
-
-# Cloud Run — hosts the Event Mill container
-echo "   Enabling Cloud Run API (run.googleapis.com)..."
-gcloud services enable run.googleapis.com --project="${PROJECT_ID}" --quiet
-
-# Cloud Build — builds container images from source
-echo "   Enabling Cloud Build API (cloudbuild.googleapis.com)..."
-gcloud services enable cloudbuild.googleapis.com --project="${PROJECT_ID}" --quiet
-
-# Artifact Registry — stores built container images
-# (Container Registry is deprecated; Artifact Registry is the replacement)
-echo "   Enabling Artifact Registry API (artifactregistry.googleapis.com)..."
-gcloud services enable artifactregistry.googleapis.com --project="${PROJECT_ID}" --quiet
-
-# Cloud Storage — stores log artifacts and investigation files
-echo "   Enabling Cloud Storage API (storage.googleapis.com)..."
-gcloud services enable storage.googleapis.com --project="${PROJECT_ID}" --quiet
-
-# Secret Manager — stores API keys, credentials, and ttyd auth
-echo "   Enabling Secret Manager API (secretmanager.googleapis.com)..."
-gcloud services enable secretmanager.googleapis.com --project="${PROJECT_ID}" --quiet
-
-# Generative Language (Gemini via AI Studio) — AI-powered analysis
-# This is the API used by the google-genai Python SDK with GEMINI_API_KEY
-echo "   Enabling Generative Language API (generativelanguage.googleapis.com)..."
-gcloud services enable generativelanguage.googleapis.com --project="${PROJECT_ID}" --quiet
-
-# Cloud Logging — used by Event Mill for structured audit logging (google-cloud-logging)
-echo "   Enabling Cloud Logging API (logging.googleapis.com)..."
-gcloud services enable logging.googleapis.com --project="${PROJECT_ID}" --quiet
-
-# API Keys — required for programmatic API key creation and restriction
-echo "   Enabling API Keys API (apikeys.googleapis.com)..."
-gcloud services enable apikeys.googleapis.com --project="${PROJECT_ID}" --quiet
-
-# IAM — needed for service account and policy management
-echo "   Enabling IAM API (iam.googleapis.com)..."
-gcloud services enable iam.googleapis.com --project="${PROJECT_ID}" --quiet
-
-echo ""
-echo "   ✓ All APIs enabled."
-echo ""
-
-# =============================================================================
-# Section 2: Service Account
-# =============================================================================
-# Create a dedicated service account for Event Mill's Cloud Run service.
-# This follows the principle of least privilege — the service only gets
-# the permissions it needs, rather than using the broad default compute SA.
-# =============================================================================
-
-echo "👤 Section 2: Creating service account..."
-echo ""
-
-SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
-
-if gcloud iam service-accounts describe "${SA_EMAIL}" --project="${PROJECT_ID}" > /dev/null 2>&1; then
-    echo "   ✓ Service account already exists: ${SA_EMAIL}"
-else
-    gcloud iam service-accounts create "${SA_NAME}" \
-        --project="${PROJECT_ID}" \
-        --display-name="${SA_DISPLAY_NAME}" \
-        --description="Service account for Event Mill Cloud Run deployment" \
-        --quiet
-    echo "   ✓ Created service account: ${SA_EMAIL}"
-fi
-echo ""
-
-# =============================================================================
-# Section 3: IAM Role Bindings
-# =============================================================================
-# Grant the Event Mill service account only the permissions it needs.
-# Each binding is explained below.
-# =============================================================================
-
-echo "🔐 Section 3: Configuring IAM roles..."
-echo ""
-
-# Note: Project-level storage.objectUser binding is applied at bucket level instead
-# (see Section 4) to avoid conflicts with GCP org policy conditional IAM bindings
-# Note: Project-level secretmanager.secretAccessor is not needed — Section 7 applies
-# secret-level access which is more granular and bypasses org policy constraints
-
-# Add a project-level IAM binding and fall back to an always-true condition
-# for organizations that require conditions on all project IAM bindings.
+# Add a project-level IAM binding; fall back to an always-true condition for
+# organizations that require conditions on all project IAM bindings.
 add_project_binding() {
-    local member="$1"
-    local role="$2"
+    local member="$1" role="$2" err=""
 
-    if gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-        --member="${member}" \
-        --role="${role}" \
-        --quiet > /dev/null 2>&1; then
+    if err=$(gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+                --member="${member}" --role="${role}" --condition=None \
+                --quiet 2>&1 >/dev/null); then
+        echo "   ✓ ${role}"
         return 0
     fi
-
-    if gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-        --member="${member}" \
-        --role="${role}" \
-        --condition='expression=true,title=eventmill-bootstrap,description=Required for Event Mill bootstrap in condition-enforced IAM projects' \
-        --quiet > /dev/null 2>&1; then
+    if err=$(gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+                --member="${member}" --role="${role}" \
+                --condition='expression=true,title=eventmill-bootstrap,description=Required for Event Mill bootstrap in condition-enforced IAM projects' \
+                --quiet 2>&1 >/dev/null); then
+        echo "   ✓ ${role} (with always-true condition)"
         return 0
     fi
-
+    explain_error "${role} for ${member}" "${err}"
+    WARNED=$((WARNED + 1))
     return 1
 }
 
-# Allow the SA to write structured logs to Cloud Logging
-echo "   Granting Logs Writer..."
-if add_project_binding "serviceAccount:${SA_EMAIL}" "roles/logging.logWriter"; then
-    echo "   ✓ roles/logging.logWriter"
-else
-    echo "   ⚠ Could not grant roles/logging.logWriter to ${SA_EMAIL}"
+# ---------------------------------------------------------------------------
+# Grant roles/iam.serviceAccountUser (which contains iam.serviceAccounts.actAs)
+# on a service account RESOURCE.
+#
+# A service account is both an identity and a resource. actAs is what lets a
+# principal ATTACH that identity to a workload (Cloud Run revision, Cloud Build
+# build). It does NOT give the principal the service account's own permissions —
+# that would be iam.serviceAccounts.getAccessToken.
+#
+# This is deliberately granted per-service-account rather than project-wide:
+# a project-level grant would allow impersonating EVERY service account in the
+# project, which defeats the purpose.
+# ---------------------------------------------------------------------------
+grant_actas() {
+    local target_sa="$1" member="$2" label="$3" err=""
+
+    if ! gcloud iam service-accounts describe "${target_sa}" \
+            --project="${PROJECT_ID}" >/dev/null 2>&1; then
+        echo "   ⊘ ${label}: target SA ${target_sa} does not exist — skipped"
+        WARNED=$((WARNED + 1))
+        return 1
+    fi
+
+    if err=$(gcloud iam service-accounts add-iam-policy-binding "${target_sa}" \
+                --project="${PROJECT_ID}" \
+                --member="${member}" \
+                --role="roles/iam.serviceAccountUser" \
+                --quiet 2>&1 >/dev/null); then
+        echo "   ✓ ${label}"
+        return 0
+    fi
+
+    explain_error "${label}" "${err}"
+    echo "     Granting this needs iam.serviceAccounts.setIamPolicy on the target SA"
+    echo "     (roles/iam.serviceAccountAdmin or roles/owner). Ask an admin to run:"
+    echo "       gcloud iam service-accounts add-iam-policy-binding ${target_sa} \\"
+    echo "           --project=${PROJECT_ID} \\"
+    echo "           --member=\"${member}\" \\"
+    echo "           --role=\"roles/iam.serviceAccountUser\""
+    WARNED=$((WARNED + 1))
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Section 0: Validate inputs — no silent defaults
+# ---------------------------------------------------------------------------
+echo "⚙ Event Mill — GCP Project Provisioning"
+echo "============================================="
+echo ""
+
+if [ -z "${PROJECT_ID}" ] || [ "${PROJECT_ID}" = "your-project-id" ]; then
+    echo "ERROR: project not set."
+    echo "  export GOOGLE_CLOUD_PROJECT=\"your-project-id\"   (or --project)"
+    exit 1
 fi
 
-# Allow the SA to submit Cloud Build jobs (Zeek PCAP processing)
-echo "   Granting Cloud Build Editor (Zeek integration)..."
-if add_project_binding "serviceAccount:${SA_EMAIL}" "roles/cloudbuild.builds.editor"; then
-    echo "   ✓ roles/cloudbuild.builds.editor"
-else
-    echo "   ⚠ Could not grant roles/cloudbuild.builds.editor to ${SA_EMAIL}"
+# v1 defaulted REGION to northamerica-northeast2. That default is the root cause
+# of the Artifact Registry / bucket / Cloud Run region mismatches in this
+# project, so this script will not guess.
+if [ -z "${REGION}" ]; then
+    echo "ERROR: region not set. This script deliberately does not default it."
+    echo ""
+    echo "  export CLOUD_RUN_REGION=\"us-central1\"   (or --region us-central1)"
+    echo ""
+    echo "The Artifact Registry repo path embeds the region, so a mismatch"
+    echo "between provisioning and deploy is a hard failure. Existing regions:"
+    gcloud artifacts repositories list --project="${PROJECT_ID}" \
+        --format="value(name.basename(), location)" 2>/dev/null \
+        | sed 's/^/    repo: /' || true
+    exit 1
 fi
 
-# Allow Cloud Build's default SA to deploy to Cloud Run
-# (Cloud Build uses the project's default compute SA for builds)
+if [ -z "${BUCKET_PREFIX}" ]; then
+    BUCKET_PREFIX="${PROJECT_ID}-eventmill"
+    echo "NOTE: EVENTMILL_BUCKET_PREFIX unset — using default '${BUCKET_PREFIX}'."
+    echo "      If your buckets use a different prefix, set it explicitly or the"
+    echo "      deployed service will read the wrong (or empty) buckets."
+    echo ""
+fi
+
+SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+echo "Project:        ${PROJECT_ID}"
+echo "Region:         ${REGION}   (explicit)"
+echo "Bucket prefix:  ${BUCKET_PREFIX}"
+echo "Service acct:   ${SA_EMAIL}"
+echo "Artifact repo:  ${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
+echo "Cloud Run svc:  ${SERVICE_NAME}"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Section 1: Preflight — project access and API reachability
+# ---------------------------------------------------------------------------
+echo "🔍 Section 1: Preflight..."
+
+if err=$(gcloud projects describe "${PROJECT_ID}" 2>&1 >/dev/null); then
+    echo "   ✓ Project ${PROJECT_ID} accessible"
+else
+    explain_error "Project ${PROJECT_ID}" "${err}"
+    echo ""
+    echo "Aborting: cannot reach the project."
+    exit 1
+fi
+
+# Probe Cloud Storage early. If this host is geo-blocked, every later check
+# would report resources as "missing" — which is how v1 misled us repeatedly.
+if err=$(gcloud storage ls --project="${PROJECT_ID}" 2>&1 >/dev/null); then
+    echo "   ✓ Cloud Storage API reachable"
+else
+    explain_error "Cloud Storage API" "${err}"
+    echo ""
+    echo "Aborting: results would be unreliable while the API is unreachable."
+    exit 1
+fi
+
+PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)" 2>/dev/null)
 DEFAULT_COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 CLOUDBUILD_SA="${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com"
+echo "   ✓ Project number ${PROJECT_NUMBER}"
 
-# Grant default compute SA access to GCS (Cloud Build uploads source tarballs)
-echo "   Granting default compute SA storage access (Cloud Build source upload)..."
-if add_project_binding "serviceAccount:${DEFAULT_COMPUTE_SA}" "roles/storage.objectAdmin"; then
-    echo "   ✓ roles/storage.objectAdmin for default compute SA"
+# Identify the operator running this script so Section 4 can grant them the
+# actAs permissions the deploy step needs. Prefix must match the principal
+# type or the IAM binding is rejected.
+OPERATOR_ACCOUNT="${EVENTMILL_OPERATOR:-$(gcloud config get-value account 2>/dev/null)}"
+if [ -z "${OPERATOR_ACCOUNT}" ] || [ "${OPERATOR_ACCOUNT}" = "(unset)" ]; then
+    OPERATOR_MEMBER=""
+    echo "   ⚠ Could not determine the active account — operator actAs grants will be skipped"
+    WARNED=$((WARNED + 1))
+elif [[ "${OPERATOR_ACCOUNT}" == *.gserviceaccount.com ]]; then
+    OPERATOR_MEMBER="serviceAccount:${OPERATOR_ACCOUNT}"
+    echo "   ✓ Operator ${OPERATOR_ACCOUNT} (service account)"
 else
-    echo "   ⚠ Could not grant roles/storage.objectAdmin for default compute SA"
+    OPERATOR_MEMBER="user:${OPERATOR_ACCOUNT}"
+    echo "   ✓ Operator ${OPERATOR_ACCOUNT} (user)"
 fi
-
-# Grant default compute SA permission to push images to Artifact Registry
-echo "   Granting default compute SA Artifact Registry write access..."
-if add_project_binding "serviceAccount:${DEFAULT_COMPUTE_SA}" "roles/artifactregistry.writer"; then
-    echo "   ✓ roles/artifactregistry.writer for default compute SA"
-else
-    echo "   ⚠ Could not grant roles/artifactregistry.writer for default compute SA"
-fi
-
-echo "   Granting Event Mill SA permission to act as default compute SA (Zeek Cloud Build)..."
-gcloud iam service-accounts add-iam-policy-binding "${DEFAULT_COMPUTE_SA}" \
-    --project="${PROJECT_ID}" \
-    --member="serviceAccount:${SA_EMAIL}" \
-    --role="roles/iam.serviceAccountUser" \
-    --quiet > /dev/null 2>&1 || true
-echo "   ✓ roles/iam.serviceAccountUser on default compute SA for ${SA_NAME}"
-
-echo "   Granting Cloud Build SA permission to deploy to Cloud Run..."
-if add_project_binding "serviceAccount:${CLOUDBUILD_SA}" "roles/run.admin"; then
-    echo "   ✓ roles/run.admin for Cloud Build SA"
-else
-    echo "   ⚠ Could not grant roles/run.admin for Cloud Build SA"
-fi
-
-echo "   Granting Cloud Build SA permission to act as Event Mill SA..."
-gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
-    --project="${PROJECT_ID}" \
-    --member="serviceAccount:${CLOUDBUILD_SA}" \
-    --role="roles/iam.serviceAccountUser" \
-    --quiet > /dev/null 2>&1 || true
-echo "   ✓ roles/iam.serviceAccountUser on ${SA_NAME}"
-
 echo ""
 
-# =============================================================================
-# Section 4: GCS Buckets for Investigation Data
-# =============================================================================
-# Event Mill uses per-pillar buckets for data isolation plus a shared
-# common bucket for cross-pillar reference data (e.g. vetted threat intel).
-#
-# Naming convention:
-#   {BUCKET_PREFIX}-log-analysis
-#   {BUCKET_PREFIX}-network-forensics
-#   {BUCKET_PREFIX}-threat-modeling
-#   {BUCKET_PREFIX}-common
-#
-# Disabled pillars (cloud_investigation, risk_assessment) do not get
-# buckets until they are enabled.  Add them here when ready.
-#
-# Common bucket subdirectory layout (used by threat_report_analyzer):
-#   {BUCKET_PREFIX}-common/mitre/               MITRE ATT&CK JSON/STIX bundles
-#   {BUCKET_PREFIX}-common/capec/               CAPEC XML/JSON files
-#   {BUCKET_PREFIX}-common/cisa/                CISA KEV and advisory files
-#   {BUCKET_PREFIX}-common/vendor_advisories/   Vendor security bulletins
-#   {BUCKET_PREFIX}-common/threat_actors/       Threat actor profiles
-#   {BUCKET_PREFIX}-common/campaigns/           Threat campaign reports
-#   {BUCKET_PREFIX}-common/vulnerabilities/     CVE and vulnerability reports
-#
-# Automated ingestion systems write to the appropriate pillar bucket.
-# Which automations write to which buckets is site-specific and managed
-# by the implementation team outside of Event Mill.
-# =============================================================================
+if [ "${DRY_RUN}" = "1" ]; then
+    echo "DRY_RUN=1 — preflight passed, stopping before any changes."
+    exit 0
+fi
 
-echo "📦 Section 4: Creating GCS buckets for investigation data..."
+# ---------------------------------------------------------------------------
+# Section 2: Enable APIs
+# ---------------------------------------------------------------------------
+echo "📡 Section 2: Enabling APIs..."
+
+# compute.googleapis.com is included because `gcloud builds submit` runs builds
+# as the Compute Engine default service account, which only exists once this
+# API has been enabled. v1 omitted it, so its grants to DEFAULT_COMPUTE_SA
+# could target a service account that did not exist.
+for api in \
+    run.googleapis.com \
+    cloudbuild.googleapis.com \
+    artifactregistry.googleapis.com \
+    storage.googleapis.com \
+    secretmanager.googleapis.com \
+    generativelanguage.googleapis.com \
+    logging.googleapis.com \
+    apikeys.googleapis.com \
+    iam.googleapis.com \
+    compute.googleapis.com
+do
+    if err=$(gcloud services enable "${api}" --project="${PROJECT_ID}" --quiet 2>&1 >/dev/null); then
+        echo "   ✓ ${api}"
+    else
+        explain_error "${api}" "${err}"
+        FAILED=$((FAILED + 1))
+    fi
+done
 echo ""
 
-# Lifecycle rule JSON (shared across all pillar buckets)
-# CHANGE THIS: Adjust retention period per bucket if needed
-cat > /tmp/eventmill-lifecycle-90d.json <<'LIFECYCLE'
-{
-  "rule": [
-    {
-      "action": {"type": "Delete"},
-      "condition": {"age": 90}
-    }
-  ]
-}
-LIFECYCLE
+# ---------------------------------------------------------------------------
+# Section 3: Service account
+# ---------------------------------------------------------------------------
+echo "👤 Section 3: Service account..."
 
-# Common bucket gets longer retention (reference data is curated)
-cat > /tmp/eventmill-lifecycle-365d.json <<'LIFECYCLE'
-{
-  "rule": [
-    {
-      "action": {"type": "Delete"},
-      "condition": {"age": 365}
-    }
-  ]
-}
-LIFECYCLE
+if gcloud iam service-accounts describe "${SA_EMAIL}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    echo "   ✓ Already exists: ${SA_EMAIL}"
+elif err=$(gcloud iam service-accounts create "${SA_NAME}" \
+              --project="${PROJECT_ID}" \
+              --display-name="${SA_DISPLAY_NAME}" \
+              --description="Service account for Event Mill Cloud Run deployment" \
+              --quiet 2>&1 >/dev/null); then
+    echo "   ✓ Created: ${SA_EMAIL}"
+else
+    explain_error "Service account ${SA_EMAIL}" "${err}"
+    FAILED=$((FAILED + 1))
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
+# Section 4: Project-level IAM
+# ---------------------------------------------------------------------------
+# Bucket-level storage access is applied in Section 5 instead of project-level,
+# to avoid conflicts with org policies that require conditional IAM bindings.
+# ---------------------------------------------------------------------------
+echo "🔐 Section 4: Project IAM..."
+
+add_project_binding "serviceAccount:${SA_EMAIL}" "roles/logging.logWriter"
+add_project_binding "serviceAccount:${SA_EMAIL}" "roles/cloudbuild.builds.editor"
+
+# Cloud Build uploads source tarballs to GCS and pushes images to AR as the
+# default compute service account.
+if gcloud iam service-accounts describe "${DEFAULT_COMPUTE_SA}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    add_project_binding "serviceAccount:${DEFAULT_COMPUTE_SA}" "roles/storage.objectAdmin"
+    add_project_binding "serviceAccount:${DEFAULT_COMPUTE_SA}" "roles/artifactregistry.writer"
+else
+    echo "   ⚠ Default compute SA not found: ${DEFAULT_COMPUTE_SA}"
+    echo "     It is created when compute.googleapis.com is enabled; that may"
+    echo "     take a minute to propagate. Re-run this script afterwards."
+    WARNED=$((WARNED + 1))
+fi
+
+if gcloud iam service-accounts describe "${CLOUDBUILD_SA}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    add_project_binding "serviceAccount:${CLOUDBUILD_SA}" "roles/run.admin"
+else
+    echo "   ⚠ Legacy Cloud Build SA not found: ${CLOUDBUILD_SA} (may be fine)"
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
+# Section 4b: actAs delegations
+# ---------------------------------------------------------------------------
+# Four distinct actAs relationships exist in this deployment. v1 configured
+# only the two machine-to-machine ones (3 and 4) and silently omitted the two
+# human-operator ones (1 and 2) — which is why a hand-run deploy fails twice
+# with "Permission 'iam.serviceAccounts.actAs' denied", once per target SA.
+#
+#   1. operator          -> default compute SA   `gcloud builds submit`
+#                                                (the build runs as that SA)
+#   2. operator          -> eventmill-runner     `gcloud run deploy
+#                                                 --service-account=...`
+#   3. eventmill-runner  -> default compute SA   the running app submitting
+#                                                Zeek Cloud Build jobs
+#   4. Cloud Build SA    -> eventmill-runner     Cloud Build performing the
+#                                                deploy (cloudbuild*.yaml)
+#
+# IAM is written HERE, at bootstrap, and only verified at deploy time. That
+# keeps the deploy path free of IAM-write permission, so the same script works
+# unchanged under a CI service account that must not be able to rewrite IAM.
+# ---------------------------------------------------------------------------
+echo "🎭 Section 4b: actAs delegations..."
+
+# 1 + 2: the human (or CI identity) running the deploy script
+if [ -n "${OPERATOR_MEMBER}" ]; then
+    grant_actas "${DEFAULT_COMPUTE_SA}" "${OPERATOR_MEMBER}" \
+        "operator can actAs default compute SA (gcloud builds submit)"
+    grant_actas "${SA_EMAIL}" "${OPERATOR_MEMBER}" \
+        "operator can actAs ${SA_NAME} (gcloud run deploy)"
+else
+    echo "   ⊘ Operator unknown — skipping operator actAs grants."
+    echo "     A hand-run deploy will fail until these are granted; see README."
+fi
+
+# 3: Event Mill submits Zeek builds, which execute as the default compute SA
+grant_actas "${DEFAULT_COMPUTE_SA}" "serviceAccount:${SA_EMAIL}" \
+    "${SA_NAME} can actAs default compute SA (Zeek Cloud Build)"
+
+# 4: Cloud Build deploying Cloud Run as the runtime SA
+if gcloud iam service-accounts describe "${CLOUDBUILD_SA}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    grant_actas "${SA_EMAIL}" "serviceAccount:${CLOUDBUILD_SA}" \
+        "Cloud Build SA can actAs ${SA_NAME} (CI deploy)"
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
+# Section 5: GCS buckets
+# ---------------------------------------------------------------------------
+echo "📦 Section 5: Buckets (region: ${REGION})..."
+
+LIFECYCLE_90D=$(mktemp /tmp/eventmill-lifecycle-90d.XXXXXX.json)
+LIFECYCLE_365D=$(mktemp /tmp/eventmill-lifecycle-365d.XXXXXX.json)
+trap 'rm -f "${LIFECYCLE_90D}" "${LIFECYCLE_365D}"' EXIT
+
+printf '{\n  "rule": [\n    {"action": {"type": "Delete"}, "condition": {"age": 90}}\n  ]\n}\n'  > "${LIFECYCLE_90D}"
+printf '{\n  "rule": [\n    {"action": {"type": "Delete"}, "condition": {"age": 365}}\n  ]\n}\n' > "${LIFECYCLE_365D}"
 
 create_bucket_if_missing() {
-    local bucket_name=$1
-    local lifecycle_file=$2
-    local description=$3
+    local bucket_name="$1" lifecycle_file="$2" description="$3" err="" loc=""
 
-    # Check if bucket already exists and is accessible
-    if gcloud storage buckets describe "gs://${bucket_name}" > /dev/null 2>&1; then
-        echo "   ✓ Bucket already exists: gs://${bucket_name}"
-    else
-        if gcloud storage buckets create "gs://${bucket_name}" \
-            --project="${PROJECT_ID}" \
-            --location="${REGION}" \
-            --uniform-bucket-level-access; then
-            echo "   ✓ Created bucket: gs://${bucket_name}  (${description})"
+    if loc=$(gcloud storage buckets describe "gs://${bucket_name}" \
+                --project="${PROJECT_ID}" --format="value(location)" 2>/dev/null); then
+        # Warn on region drift instead of silently accepting it. Cross-region
+        # reads work but pay egress on every file load.
+        if [ -n "${loc}" ] && [ "${loc,,}" != "${REGION,,}" ]; then
+            echo "   ⚠ gs://${bucket_name} exists in ${loc}, not ${REGION}"
+            WARNED=$((WARNED + 1))
         else
-            echo ""
-            echo "ERROR: Failed to create gs://${bucket_name}."
-            echo "Most likely cause: the bucket name is already taken globally."
-            echo "Override the prefix and re-run, for example:"
-            echo "  export EVENTMILL_BUCKET_PREFIX=${PROJECT_ID}-em2"
-            exit 1
+            echo "   ✓ Exists: gs://${bucket_name} (${loc})"
         fi
-    fi
-
-    # Apply lifecycle rule
-    gcloud storage buckets update "gs://${bucket_name}" \
-        --project="${PROJECT_ID}" \
-        --lifecycle-file="${lifecycle_file}" > /dev/null 2>&1 || true
-
-    # Grant Event Mill SA bucket-level access (storage.objectAdmin)
-    # This is applied at bucket level instead of project level to avoid
-    # conflicts with GCP org policy conditional IAM bindings
-    gcloud storage buckets add-iam-policy-binding "gs://${bucket_name}" \
-        --member="serviceAccount:${SA_EMAIL}" \
-        --role="roles/storage.objectAdmin" \
-        --project="${PROJECT_ID}" \
-        --quiet > /dev/null 2>&1 || true
-}
-
-# Per-pillar buckets (MVP-enabled pillars only)
-create_bucket_if_missing "${BUCKET_PREFIX}-log-analysis"       /tmp/eventmill-lifecycle-90d.json  "log analysis artifacts"
-create_bucket_if_missing "${BUCKET_PREFIX}-network-forensics"  /tmp/eventmill-lifecycle-90d.json  "network forensics artifacts"
-create_bucket_if_missing "${BUCKET_PREFIX}-threat-modeling"    /tmp/eventmill-lifecycle-90d.json  "threat modeling artifacts"
-
-# Common/shared bucket (longer retention for curated reference data)
-create_bucket_if_missing "${BUCKET_PREFIX}-common"             /tmp/eventmill-lifecycle-365d.json "shared cross-pillar data"
-
-# Legacy single-bucket support: if GCS_LOG_BUCKET is set and different
-# from the new convention, create it too for backward compatibility
-if [ -n "${GCS_LOG_BUCKET}" ] && [ "${GCS_LOG_BUCKET}" != "${BUCKET_PREFIX}-log-analysis" ]; then
-    echo ""
-    echo "   Legacy bucket override detected: ${GCS_LOG_BUCKET}"
-    create_bucket_if_missing "${GCS_LOG_BUCKET}" /tmp/eventmill-lifecycle-90d.json "legacy log bucket"
-fi
-
-# ---------------------------------------------------------------------------
-# Initialize common bucket folder structure for threat_report_analyzer
-# ---------------------------------------------------------------------------
-# Creates a .keep placeholder in each subdirectory so the folder hierarchy
-# is visible in the GCS console and operators know where to upload reports.
-# Each subdirectory maps to a source type in ThreatReportAnalyzer.REPORT_DIRECTORIES.
-# ---------------------------------------------------------------------------
-
-init_common_folder() {
-    local folder=$1
-    local dest="gs://${BUCKET_PREFIX}-common/${folder}/.keep"
-    if gsutil ls "${dest}" > /dev/null 2>&1; then
-        echo "   ✓ Folder already initialized: gs://${BUCKET_PREFIX}-common/${folder}/"
+    elif err=$(gcloud storage buckets create "gs://${bucket_name}" \
+                  --project="${PROJECT_ID}" \
+                  --location="${REGION}" \
+                  --uniform-bucket-level-access 2>&1 >/dev/null); then
+        echo "   ✓ Created: gs://${bucket_name}  (${description})"
     else
-        echo -n "" | gsutil cp - "${dest}" > /dev/null 2>&1
-        echo "   ✓ Initialized folder:         gs://${BUCKET_PREFIX}-common/${folder}/"
+        explain_error "Bucket gs://${bucket_name}" "${err}"
+        FAILED=$((FAILED + 1))
+        return 1
+    fi
+
+    # Non-fatal: lifecycle and bucket IAM are best-effort, but report honestly.
+    if ! err=$(gcloud storage buckets update "gs://${bucket_name}" \
+                  --project="${PROJECT_ID}" \
+                  --lifecycle-file="${lifecycle_file}" 2>&1 >/dev/null); then
+        echo "     ⚠ lifecycle rule not applied"
+        WARNED=$((WARNED + 1))
+    fi
+    if ! err=$(gcloud storage buckets add-iam-policy-binding "gs://${bucket_name}" \
+                  --project="${PROJECT_ID}" \
+                  --member="serviceAccount:${SA_EMAIL}" \
+                  --role="roles/storage.objectAdmin" \
+                  --quiet 2>&1 >/dev/null); then
+        echo "     ⚠ objectAdmin not granted to ${SA_NAME}"
+        WARNED=$((WARNED + 1))
     fi
 }
 
-echo "   Initializing threat intel folder structure in common bucket..."
-for folder in mitre capec cisa vendor_advisories threat_actors campaigns vulnerabilities; do
+for slug in "${PILLAR_SLUGS[@]}"; do
+    create_bucket_if_missing "${BUCKET_PREFIX}-${slug}" "${LIFECYCLE_90D}" "${slug} artifacts"
+done
+create_bucket_if_missing "${BUCKET_PREFIX}-common" "${LIFECYCLE_365D}" "shared cross-pillar data"
+
+# ---------------------------------------------------------------------------
+# Common bucket folder placeholders
+# ---------------------------------------------------------------------------
+# This is the exact step that killed v1: `echo -n "" | gsutil cp - "${dest}"`
+# with no guard, under `set -e`, with stderr discarded. Everything below it —
+# Artifact Registry, secrets, secret IAM — was skipped without a single
+# character of output. Here it is non-fatal and uses gcloud storage.
+# ---------------------------------------------------------------------------
+echo "   Initializing common bucket folders..."
+init_common_folder() {
+    local folder="$1"
+    local dest="gs://${BUCKET_PREFIX}-common/${folder}/.keep"
+    local err=""
+
+    if gcloud storage objects describe "${dest}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+        echo "     ✓ ${folder}/"
+        return 0
+    fi
+    if err=$(echo -n "" | gcloud storage cp - "${dest}" --project="${PROJECT_ID}" 2>&1 >/dev/null); then
+        echo "     ✓ ${folder}/ (created)"
+    else
+        echo "     ⚠ ${folder}/ placeholder not created (non-fatal)"
+        WARNED=$((WARNED + 1))
+    fi
+}
+
+for folder in "${COMMON_FOLDERS[@]}"; do
     init_common_folder "${folder}"
 done
-
-# Generated artifacts: tool-produced outputs stored back into the common bucket.
-# Convention: common/generated/{tool_name}/{source_relative_path}.summary.md
-# Tools read source data from the top-level subdirs above; they write processed
-# artifacts here.  Other tools (e.g. risk_assessment_analyzer, log_investigator)
-# discover pre-built summaries by scanning common/generated/ instead of re-running
-# the LLM.
-echo ""
-echo "   Initializing generated artifacts namespace in common bucket..."
 init_common_folder "generated/threat_report_analyzer"
-
-# Exports: operator-initiated artifact exports via the 'export' CLI command.
-# Convention: common/exports/{source_tool}/{filename}
-# Per-tool subdirectories are created automatically on first write — only the
-# root placeholder is seeded here so the folder is visible in the GCS console.
-echo "   Initializing exports namespace in common bucket..."
 init_common_folder "exports"
-
 echo ""
 
-# =============================================================================
-# Section 5: Artifact Registry
-# =============================================================================
-# Artifact Registry stores the built Docker images.
-# Container Registry (gcr.io) is deprecated — Artifact Registry is the
-# supported replacement. Images are pushed to:
-#   ${REGION}-docker.pkg.dev/${PROJECT_ID}/eventmill/event-mill
-#
-# NOTE: Update IMAGE_NAME in deploy scripts to use this path.
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Section 6: Artifact Registry — IN THE REQUESTED REGION
+# ---------------------------------------------------------------------------
+# The repo location is embedded in the image path
+# (${REGION}-docker.pkg.dev/...), so this must match the deploy region exactly
+# or `docker push` fails with: name unknown: Repository "eventmill" not found
+# ---------------------------------------------------------------------------
+echo "🐳 Section 6: Artifact Registry (region: ${REGION})..."
 
-echo "🐳 Section 5: Artifact Registry..."
-echo ""
+# Surface same-named repos in OTHER regions. v1 gave no hint that this was
+# possible, which is what turned a region mismatch into a paid-build failure.
+OTHER_LOCATIONS=$(gcloud artifacts repositories list --project="${PROJECT_ID}" \
+    --format="value(name.basename(), location)" 2>/dev/null \
+    | awk -v r="${AR_REPO}" -v reg="${REGION}" '$1 == r && $2 != reg { print $2 }')
 
-if gcloud artifacts repositories describe eventmill \
-    --project="${PROJECT_ID}" \
-    --location="${REGION}" > /dev/null 2>&1; then
-    echo "   ✓ Repository already exists: ${REGION}-docker.pkg.dev/${PROJECT_ID}/eventmill"
-else
-    gcloud artifacts repositories create eventmill \
-        --project="${PROJECT_ID}" \
-        --repository-format=docker \
-        --location="${REGION}" \
-        --description="Event Mill container images" \
-        --quiet
-    echo "   ✓ Created repository: ${REGION}-docker.pkg.dev/${PROJECT_ID}/eventmill"
+if [ -n "${OTHER_LOCATIONS}" ]; then
+    echo "   ⚠ A repo named '${AR_REPO}' already exists in other region(s):"
+    echo "${OTHER_LOCATIONS}" | sed 's/^/       /'
+    echo "     Artifact Registry repos are regional. This run targets ${REGION}."
+    echo "     Images in the other region(s) are NOT reachable from ${REGION}."
+    WARNED=$((WARNED + 1))
 fi
 
-# =============================================================================
-# Section 6: Secret Manager — Create Empty Secrets
-# =============================================================================
-# Create the secret entries in Secret Manager. Values are added separately
-# using provision-secrets.sh (interactive) to avoid storing sensitive
-# values in shell history or scripts.
-# =============================================================================
-
-echo "🔑 Section 6: Creating Secret Manager entries..."
+if gcloud artifacts repositories describe "${AR_REPO}" \
+        --project="${PROJECT_ID}" --location="${REGION}" >/dev/null 2>&1; then
+    echo "   ✓ Already exists: ${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
+elif err=$(gcloud artifacts repositories create "${AR_REPO}" \
+              --project="${PROJECT_ID}" \
+              --repository-format=docker \
+              --location="${REGION}" \
+              --description="Event Mill container images" \
+              --quiet 2>&1 >/dev/null); then
+    echo "   ✓ Created: ${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
+else
+    explain_error "Artifact Registry '${AR_REPO}' in ${REGION}" "${err}"
+    echo "     Creating a repo needs artifactregistry.repositories.create."
+    echo "     roles/artifactregistry.repoAdmin does NOT include it —"
+    echo "     you need roles/artifactregistry.admin"
+    echo "     (console: 'Artifact Registry Administrator', without 'Repository')."
+    FAILED=$((FAILED + 1))
+fi
 echo ""
 
-create_secret_if_missing() {
-    local secret_name=$1
-    local description=$2
-    if gcloud secrets describe "${secret_name}" --project="${PROJECT_ID}" > /dev/null 2>&1; then
-        echo "   ✓ Secret already exists: ${secret_name}"
+# ---------------------------------------------------------------------------
+# Section 7: Secret Manager entries
+# ---------------------------------------------------------------------------
+# Created with a "placeholder" value; real values come from provision-secrets.sh
+# ---------------------------------------------------------------------------
+echo "🔑 Section 7: Secrets..."
+
+for secret in "${SECRET_NAMES[@]}"; do
+    if gcloud secrets describe "${secret}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+        echo "   ✓ Already exists: ${secret}"
+    elif err=$(echo -n "placeholder" | gcloud secrets create "${secret}" \
+                  --project="${PROJECT_ID}" \
+                  --data-file=- \
+                  --labels="app=eventmill" \
+                  --quiet 2>&1 >/dev/null); then
+        echo "   ✓ Created: ${secret} (placeholder — set via provision-secrets.sh)"
     else
-        # Create with an empty initial version (placeholder)
-        echo -n "placeholder" | gcloud secrets create "${secret_name}" \
-            --project="${PROJECT_ID}" \
-            --data-file=- \
-            --labels="app=eventmill" \
-            --quiet
-        echo "   ✓ Created secret: ${secret_name} (placeholder value — update via provision-secrets.sh)"
+        explain_error "Secret ${secret}" "${err}"
+        FAILED=$((FAILED + 1))
     fi
-}
-
-# Gemini API keys — separate keys per model tier to isolate quota
-# Flash key handles high-volume light tasks (log scanning, pattern discovery)
-# Pro key handles deep reasoning tasks (threat modeling, attack paths)
-create_secret_if_missing "eventmill-gemini-flash-api" "Gemini Flash API key (light tier)"
-create_secret_if_missing "eventmill-gemini-pro-api" "Gemini Pro API key (heavy tier)"
-
-# GCS service account key — JSON key file for GCS bucket access
-# NOTE: Only needed if NOT using workload identity or the default compute SA
-create_secret_if_missing "eventmill-gcs-sa" "GCS service account key JSON"
-
-# ttyd web terminal credentials — basic auth for the browser-based shell
-create_secret_if_missing "eventmill-ttyd-user" "ttyd web terminal username"
-create_secret_if_missing "eventmill-ttyd-cred" "ttyd web terminal password"
-
+done
 echo ""
 
-# =============================================================================
-# Section 7: Grant Event Mill SA Access to Its Secrets
-# =============================================================================
-# Cloud Run needs to read secrets at container startup.
-# Grant secret-level access to the Event Mill service account.
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Section 8: Secret IAM bindings — applied AND verified
+# ---------------------------------------------------------------------------
+# v1 printed "✓ <sa> can read <secret>" unconditionally because the binding
+# call ended in `> /dev/null 2>&1` with no status check. Cloud Run refuses to
+# create a revision if the runtime SA cannot read an injected secret, so a
+# false success here becomes a confusing deploy failure later.
+# ---------------------------------------------------------------------------
+echo "🔗 Section 8: Secret access for ${SA_NAME}..."
 
-echo "🔗 Section 7: Binding secrets to service account..."
-echo ""
+for secret in "${SECRET_NAMES[@]}"; do
+    if ! gcloud secrets describe "${secret}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+        echo "   ⊘ ${secret} does not exist — skipping binding"
+        continue
+    fi
 
-bind_secret_to_sa() {
-    local secret_name=$1
-    gcloud secrets add-iam-policy-binding "${secret_name}" \
-        --project="${PROJECT_ID}" \
-        --member="serviceAccount:${SA_EMAIL}" \
-        --role="roles/secretmanager.secretAccessor" \
-        --quiet > /dev/null 2>&1
-    echo "   ✓ ${SA_NAME} can read ${secret_name}"
-}
+    if ! err=$(gcloud secrets add-iam-policy-binding "${secret}" \
+                  --project="${PROJECT_ID}" \
+                  --member="serviceAccount:${SA_EMAIL}" \
+                  --role="roles/secretmanager.secretAccessor" \
+                  --quiet 2>&1 >/dev/null); then
+        explain_error "Binding on ${secret}" "${err}"
+        FAILED=$((FAILED + 1))
+        continue
+    fi
 
-bind_secret_to_sa "eventmill-gemini-flash-api"
-bind_secret_to_sa "eventmill-gemini-pro-api"
-bind_secret_to_sa "eventmill-gcs-sa"
-bind_secret_to_sa "eventmill-ttyd-user"
-bind_secret_to_sa "eventmill-ttyd-cred"
-
-# Also grant the default compute SA (used by Cloud Build during deploy)
-echo ""
-echo "   Granting default compute SA access to secrets (for Cloud Build)..."
-bind_secret_to_default() {
-    local secret_name=$1
-    gcloud secrets add-iam-policy-binding "${secret_name}" \
-        --project="${PROJECT_ID}" \
-        --member="serviceAccount:${DEFAULT_COMPUTE_SA}" \
-        --role="roles/secretmanager.secretAccessor" \
-        --quiet > /dev/null 2>&1
-    echo "   ✓ default-compute can read ${secret_name}"
-}
-
-bind_secret_to_default "eventmill-gemini-flash-api"
-bind_secret_to_default "eventmill-gemini-pro-api"
-bind_secret_to_default "eventmill-gcs-sa"
-bind_secret_to_default "eventmill-ttyd-user"
-bind_secret_to_default "eventmill-ttyd-cred"
-
+    # Verify rather than assume
+    if gcloud secrets get-iam-policy "${secret}" --project="${PROJECT_ID}" \
+            --format="value(bindings.members)" 2>/dev/null | grep -q "${SA_EMAIL}"; then
+        echo "   ✓ ${SA_NAME} can read ${secret}  (verified)"
+    else
+        echo "   ⚠ ${secret}: binding applied but not visible yet (IAM is eventually consistent)"
+        WARNED=$((WARNED + 1))
+    fi
+done
 echo ""
 
-# =============================================================================
-# Section 8: Summary and Next Steps
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Section 9: Summary
+# ---------------------------------------------------------------------------
+echo "============================================="
+if [ "${FAILED}" -eq 0 ] && [ "${WARNED}" -eq 0 ]; then
+    echo "✅ Provisioning complete — no errors, no warnings."
+elif [ "${FAILED}" -eq 0 ]; then
+    echo "✅ Provisioning complete with ${WARNED} warning(s) — review above."
+else
+    echo "❌ Provisioning finished with ${FAILED} error(s) and ${WARNED} warning(s)."
+    echo "   Unlike v1, this script did NOT abort early — every section ran."
+    echo "   Fix the errors above and re-run; the script is idempotent."
+fi
+echo "============================================="
+echo ""
+echo "Project:         ${PROJECT_ID}"
+echo "Region:          ${REGION}"
+echo "Service account: ${SA_EMAIL}"
+echo "Bucket prefix:   ${BUCKET_PREFIX}"
+echo "Artifact repo:   ${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}"
+echo ""
+echo "Buckets:"
+for slug in "${PILLAR_SLUGS[@]}"; do
+    echo "   gs://${BUCKET_PREFIX}-${slug}"
+done
+echo "   gs://${BUCKET_PREFIX}-common"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "NEXT STEPS"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "  1. Set real secret values (they are 'placeholder' until you do):"
+echo "       bash cloud_install/provision-secrets.sh"
+echo ""
+echo "  2. Pin the region and prefix so deploys cannot drift:"
+echo "       cat >> ~/.eventmill/deploy.env <<EOF"
+echo "       export GOOGLE_CLOUD_PROJECT=\"${PROJECT_ID}\""
+echo "       export CLOUD_RUN_REGION=\"${REGION}\""
+echo "       export EVENTMILL_BUCKET_PREFIX=\"${BUCKET_PREFIX}\""
+echo "       EOF"
+echo ""
+echo "  3. Deploy (run from the repo root):"
+echo "       bash cloud_install/deploy-cloudrun-secrets.sh"
+echo ""
 
-echo "================================================="
-echo "✅ GCP project provisioning complete!"
-echo "================================================="
-echo ""
-echo "Project:          ${PROJECT_ID}"
-echo "Region:           ${REGION}"
-echo "Service Account:  ${SA_EMAIL}"
-echo "Bucket prefix:    ${BUCKET_PREFIX}"
-echo "Artifact Reg:     ${REGION}-docker.pkg.dev/${PROJECT_ID}/eventmill"
-echo ""
-echo "Storage buckets:"
-echo "   gs://${BUCKET_PREFIX}-log-analysis              (log analysis)"
-echo "   gs://${BUCKET_PREFIX}-network-forensics         (network forensics)"
-echo "   gs://${BUCKET_PREFIX}-threat-modeling           (threat modeling)"
-echo "   gs://${BUCKET_PREFIX}-common                    (shared reference data)"
-echo "   gs://${BUCKET_PREFIX}-common/generated/         (tool-generated artifacts)"
-echo "   gs://${BUCKET_PREFIX}-common/generated/threat_report_analyzer/"
-echo "   gs://${BUCKET_PREFIX}-common/exports/           (operator exports via 'export' CLI command)"
-echo "   gs://${BUCKET_PREFIX}-common/exports/<tool>/    (created on first write per tool)"
-echo ""
-echo "Secrets created (placeholder values):"
-echo "   - eventmill-gemini-flash-api  (Flash / light tier)"
-echo "   - eventmill-gemini-pro-api    (Pro / heavy tier)"
-echo "   - eventmill-gcs-sa"
-echo "   - eventmill-ttyd-user"
-echo "   - eventmill-ttyd-cred"
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "NEXT STEPS:"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "  1. Add real secret values:"
-echo "     bash cloud_install/provision-secrets.sh"
-echo ""
-echo "  2. Deploy Event Mill:"
-echo "     export EVENTMILL_BUCKET_PREFIX=${BUCKET_PREFIX}"
-echo "     bash cloud_install/deploy-cloudrun-secrets.sh"
-echo ""
-echo "  3. Upload files to the appropriate pillar bucket:"
-echo "     gsutil cp /path/to/logs/*.log gs://${BUCKET_PREFIX}-log-analysis/"
-echo "     gsutil cp /path/to/pcaps/*.pcap gs://${BUCKET_PREFIX}-network-forensics/"
-echo ""
-echo "  4. Upload threat intelligence reports to common bucket (by source type):"
-echo "     gsutil cp /path/to/attack.json                   gs://${BUCKET_PREFIX}-common/mitre/"
-echo "     gsutil cp /path/to/capec.xml                    gs://${BUCKET_PREFIX}-common/capec/"
-echo "     gsutil cp /path/to/cisa-advisory.json           gs://${BUCKET_PREFIX}-common/cisa/"
-echo "     gsutil cp /path/to/vendor-bulletin.pdf          gs://${BUCKET_PREFIX}-common/vendor_advisories/"
-echo "     gsutil cp /path/to/actor-profile.json           gs://${BUCKET_PREFIX}-common/threat_actors/"
-echo "     gsutil cp /path/to/campaign-report.md           gs://${BUCKET_PREFIX}-common/campaigns/"
-echo "     gsutil cp /path/to/cve-report.json              gs://${BUCKET_PREFIX}-common/vulnerabilities/"
-echo ""
-echo "  5. Use workspace folders to organize by incident:"
-echo "     gsutil cp /path/to/logs/*.log gs://${BUCKET_PREFIX}-log-analysis/incident-2024-03/"
-echo ""
+[ "${FAILED}" -eq 0 ] || exit 1
+exit 0

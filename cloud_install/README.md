@@ -58,14 +58,24 @@ This will:
 Then configure:
 
 ```bash
-nano ~/.eventmill/deploy.env     # Set GOOGLE_CLOUD_PROJECT and EVENTMILL_BUCKET_PREFIX (required)
+nano ~/.eventmill/deploy.env     # GOOGLE_CLOUD_PROJECT and CLOUD_RUN_REGION are required and blank
 gcloud auth login                # Authenticate to GCP
 gcloud config set project YOUR_PROJECT_ID
 ```
 
+`provision-gcp-project.sh` and `deploy-cloudrun-secrets.sh` **load
+`~/.eventmill/deploy.env` automatically** — anything already exported in your
+shell takes precedence. The explicit `source` in the examples below is harmless
+and still required for `gcloud builds submit`, which cannot read the file.
+
 > **Important:** `EVENTMILL_BUCKET_PREFIX` must match the prefix used when running
 > `provision-gcp-project.sh`. Storage resolution will silently use the wrong buckets
 > if this value is missing or mismatched.
+>
+> `CLOUD_RUN_REGION` must match too, and is left blank in the template on
+> purpose. Every script now refuses to guess it: the Artifact Registry image
+> path embeds the region, so provisioning in one and deploying in another fails
+> at `docker push` — after a full paid build.
 
 ## Deploy Commands
 
@@ -96,28 +106,24 @@ Connect GitHub repo to Cloud Build, then trigger manually:
 
 ```bash
 cd ~/eventmill_v01
+source ~/.eventmill/deploy.env
 gcloud builds submit \
     --project="${GOOGLE_CLOUD_PROJECT}" \
     --config=cloud_install/cloudbuild.yaml \
+    --substitutions="_REGION=${CLOUD_RUN_REGION},_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX}" \
     .
 ```
 
-To override the bucket prefix or region at build time, pass substitutions:
-
-```bash
-gcloud builds submit \
-    --project="${GOOGLE_CLOUD_PROJECT}" \
-    --config=cloud_install/cloudbuild.yaml \
-    --substitutions="_BUCKET_PREFIX=evtm_v01,_REGION=us-central1" \
-    .
-```
-
-Substitution defaults (edit `cloudbuild.yaml` to change permanently):
+Substitutions:
 
 | Substitution | Default | Description |
 |---|---|---|
-| `_REGION` | `northamerica-northeast2` | Cloud Run region |
-| `_BUCKET_PREFIX` | `eventmill` | GCS bucket prefix — must match provisioned buckets |
+| `_REGION` | **none — required** | Cloud Run region. Must match the region you provisioned in; the build fails fast if unset rather than guessing. |
+| `_BUCKET_PREFIX` | `${PROJECT_ID}-eventmill` | GCS bucket prefix — must match provisioned buckets |
+
+Cloud Build cannot read `~/.eventmill/deploy.env`, so `_REGION` has to be passed
+explicitly here even though the shell scripts pick it up automatically. When
+wiring a **trigger**, set both in the trigger's substitution config.
 
 ## Files
 
@@ -131,6 +137,7 @@ Substitution defaults (edit `cloudbuild.yaml` to change permanently):
 | `deploy-cloudrun-secrets.sh` | Production deploy with GCP Secret Manager |
 | `cloudbuild.yaml` | Cloud Build CI/CD pipeline |
 | `docker-compose.cloudrun.yml` | Local testing of the Cloud Run image |
+| `*.bak` | Superseded v1 scripts, kept for reference only — do not run |
 
 ## GCP Project Provisioning (first time only)
 

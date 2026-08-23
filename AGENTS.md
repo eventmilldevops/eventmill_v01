@@ -218,14 +218,14 @@ ranges. Cloud Shell always works and is the reliable fallback.
 
 ---
 
-## Pending refactor: fold `*-v2` into the originals
+## Completed refactor: `*-v2` folded into the originals
 
-The `-v2` scripts in `cloud_install/` are the current, working path, verified
-end-to-end against a live tenant. The originals retain every defect listed
-below. The intent is to **replace the originals with the v2 implementations and
-retire the `-v2` suffix**, updating `cloud_install/README.md` to match.
+Done. `provision-gcp-project.sh`, `deploy-cloudrun-secrets.sh` and
+`cloudbuild.yaml` are now the v2 implementations, verified end-to-end against a
+live tenant. The superseded v1 files are kept alongside as `*.bak` for
+reference; they are not on any documented path and should not be run.
 
-Defects that must **not** be reintroduced when merging:
+Defects that must **not** be reintroduced:
 
 1. **Silent aborts.** v1 runs under `set -e` with checks written as
    `cmd > /dev/null 2>&1`. One unguarded failure —
@@ -246,12 +246,23 @@ Defects that must **not** be reintroduced when merging:
    Cloud Build runs as — only exists once that API is enabled.
 10. **"Previous revision" on a failed first deploy.** There isn't one; say so.
 
-Also outstanding, and not yet fixed anywhere:
+Region handling is now consistent everywhere: `provision-gcp-project.sh`,
+`deploy-cloudrun-secrets.sh`, `deploy-cloudrun.sh` and `cloudbuild.yaml` all
+refuse to run without an explicit region rather than defaulting to
+`northamerica-northeast2`. The `deploy.env` template ships it blank for the
+same reason — a pre-filled region silently satisfies the check.
 
-- `cloud_install/cloudbuild.yaml` still defaults `_REGION` to
-  `northamerica-northeast2` and `_BUCKET_PREFIX` to `''`. Wiring a Cloud Build
-  trigger with those defaults produces a service silently pointed at
-  nonexistent buckets. `cloudbuild-provisioned.yaml` is the corrected variant.
+`provision-gcp-project.sh` and `deploy-cloudrun-secrets.sh` now load
+`~/.eventmill/deploy.env` automatically, with already-exported values winning.
+Previously every doc told you to create that file and `source` it by hand, and
+forgetting the source was the most common way to deploy against the wrong
+region. `gcloud builds submit` still needs an explicit source plus
+`--substitutions`, since Cloud Build cannot read your shell.
+
+Still outstanding:
+
+- `provision-wikijs.sh` and `deploy-wikijs.sh` still default the region. They
+  are a separate optional component, untouched by the refactor.
 - Script headers claim `v0.1.0`; `pyproject.toml` says `0.2.0`.
 
 ---
