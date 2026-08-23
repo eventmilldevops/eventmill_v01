@@ -90,3 +90,6 @@ workspace/logs/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Archive stuff
+*.bak
