@@ -277,6 +277,18 @@ class TestQuotaFallback:
         assert clients["heavy"].calls[0]["max_tokens"] == 16384
         assert clients["light"].calls[0]["max_tokens"] == 8192
 
+    def test_falls_back_when_the_key_lacks_access_to_the_model(self):
+        """One legacy key binds both tiers but may not be entitled to Pro."""
+        clients = {
+            "heavy": FakeClient("pro", fail_with="403 PERMISSION_DENIED for model"),
+            "light": FakeClient("flash"),
+        }
+        d = LLMDispatcher(clients=clients, tier_specs=_specs())
+        result = d.query_text("p", max_tokens=100, hints=QueryHints(tier="heavy"))
+
+        assert result.ok
+        assert clients["light"].calls
+
     def test_non_quota_error_does_not_fall_back(self):
         clients = {
             "heavy": FakeClient("pro", fail_with="400 INVALID_ARGUMENT"),
@@ -492,6 +504,36 @@ class TestPdfContextGuard:
         )
         assert LLMDispatcher._pdf_page_count(art) is None
 
+    def test_context_limit_follows_the_model_that_actually_runs(self, clients):
+        """An override can point a tier at a model with a smaller window.
+
+        _clamp_tokens is keyed by model id for this reason; the context guard
+        must agree, or a PDF is waved through against a budget the running
+        model does not have.
+        """
+        specs = {
+            "light": TierSpec("light", "flash", "K_LIGHT", 65536, 1_048_576,
+                              "low", ("text", "native_pdf")),
+            "heavy": TierSpec("heavy", "pro", "K_HEAVY", 65536, 128_000,
+                              "high", ("text", "native_pdf")),
+        }
+        # The heavy client runs light's model, so it gets light's window.
+        clients["heavy"] = FakeClient("flash")
+        d = LLMDispatcher(clients=clients, tier_specs=specs)
+        art = ArtifactRef(
+            "a1", "pdf_report", "",
+            metadata={"mime_type": "application/pdf", "pages": 500},
+        )
+        assert d._pdf_context_overflow(
+            clients["heavy"], art, QueryHints(media_resolution="medium"),
+        ) is None
+        # A client genuinely on the small-window model is refused.
+        refused = d._pdf_context_overflow(
+            FakeClient("pro"), art, QueryHints(media_resolution="medium"),
+        )
+        assert refused is not None and not refused.ok
+        assert "128,000" in (refused.error or "")
+
     def test_unknown_page_count_defers_to_provider(self, dispatcher):
         art = ArtifactRef(
             "a1", "pdf_report", "",
@@ -537,6 +579,15 @@ class TestRetiredModelFallback:
 
     def test_does_not_confuse_quota_with_not_found(self):
         assert not LLMDispatcher._is_model_not_found("429 RESOURCE_EXHAUSTED quota")
+
+    def test_a_404_outside_status_position_is_not_a_retired_model(self):
+        """A false positive rewrites the tier's model for the whole session."""
+        for err in (
+            "400 INVALID_ARGUMENT: request id req-404abc rejected",
+            "400 INVALID_ARGUMENT: byte offset 40412 invalid",
+            "500 INTERNAL: upstream said 4045 bytes",
+        ):
+            assert not LLMDispatcher._is_model_not_found(err), err
 
     def test_no_fallback_when_tier_declares_none(self, clients):
         d = LLMDispatcher(clients=clients, tier_specs=_specs())

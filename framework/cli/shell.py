@@ -218,9 +218,14 @@ class EventMillShell(cmd.Cmd):
         """Build the available-model list from the provider manifest + environment.
 
         A tier is available when its declared API-key env var is set. Falls
-        back to the legacy single GEMINI_API_KEY, which is bound to the light
-        tier so the dispatcher can route to it (it only ever looks up
-        "light"/"heavy").
+        back to the legacy single GEMINI_API_KEY, which is bound to BOTH
+        tiers so plugin manifests keep driving model selection rather than
+        every tool collapsing onto Flash.
+
+        One key may reach Flash but not the Pro preview. That binds cleanly —
+        MCPLLMClient.connect() does no entitlement check — and surfaces as
+        PERMISSION_DENIED on first use, which LLMDispatcher._is_access_error
+        catches and falls back to the other tier.
         """
         models: list[dict[str, str]] = []
 

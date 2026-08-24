@@ -122,12 +122,39 @@ approach needs the width, and the reasoning the prompt asks for needs the tier.
 `log_pattern_analyzer` stays on light — first-pass aggregation over large volumes is
 pattern matching, and it only ran on Pro before because 4,096 tripped the old heuristic.
 
+## Second review pass
+
+A follow-up review of the branch found four more, all fixed here:
+
+- **`_is_model_not_found()` matched a bare `404` anywhere in the message.**
+  `_retry_on_retired_model()` reacts by permanently rewriting `self._clients[tier]`,
+  so a request id or an echoed log line containing `404` inside an unrelated
+  `INVALID_ARGUMENT` would demote the heavy tier to Flash for the rest of the
+  session. The match is now anchored to status position.
+- **`_pdf_context_overflow()` sized against the tier's context window, not the
+  running model's.** `_clamp_tokens()` was re-keyed by model id precisely because
+  `EVENTMILL_MODEL_*` changes the model without changing the tier; the context
+  guard had not been. New `_context_cap()` mirrors `_output_cap()`.
+- **A legacy key binding both tiers can lack Pro entitlement.** That returns
+  `PERMISSION_DENIED`, which is neither a quota error nor a retired model id, so
+  neither fallback fired and the five heavy-tier plugins hard-failed on a key that
+  could still serve them from light. New `_is_access_error()` folds it into the
+  cross-tier fallback. `_discover_models()`'s docstring, which still described the
+  old light-only binding, is corrected.
+- **The dispatcher's `tier="heavy"` default for native documents is unreachable
+  from a plugin** — every plugin call arrives through `TierScopedLLMClient` with a
+  tier already set. The default applies only to direct framework callers; the
+  comment claiming otherwise is corrected. Behaviour unchanged.
+
 ## Tests
 
-`tests/framework/test_llm_dispatcher.py`: 47 → 60. New coverage for the tier-`None`
+`tests/framework/test_llm_dispatcher.py`: 47 → 63. New coverage for the tier-`None`
 contract, partial hints preserving the manifest tier and their other fields, size-blind
 routing, clamping by model id, retired-model retry on the multimodal and document paths,
 manifest-driven native document capability, the PDF size limit, and page count from
 metadata for an artifact with no local file.
 
-Full suite: 389 passed.
+Also covered: a 404 outside status position, cross-tier fallback on
+`PERMISSION_DENIED`, and the context guard following the running model.
+
+Full suite: 392 passed.

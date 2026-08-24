@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import replace
 from typing import Any
@@ -37,6 +38,11 @@ logger = logging.getLogger("eventmill.framework.llm")
 _NATIVE_CAPABILITY_BY_MIME = {
     "application/pdf": "native_pdf",
 }
+
+# A 404 in status position, not a "404" anywhere in the message — request ids,
+# byte offsets and echoed log lines all contain those, and a false positive
+# permanently substitutes the tier's model for the rest of the session.
+_HTTP_404_RE = re.compile(r"(?:^|[\s:\[(])404(?=[\s:,\])]|$)")
 
 # QueryHints string values -> SDK enum members (Gemini 3.x).
 _THINKING_LEVELS = {"minimal", "low", "medium", "high"}
@@ -501,6 +507,10 @@ class LLMDispatcher:
             spec.model_id: spec.max_output_tokens
             for spec in self._tier_specs.values()
         }
+        self._context_by_model = {
+            spec.model_id: spec.max_context_tokens
+            for spec in self._tier_specs.values()
+        }
 
     # --- Protocol compatibility -------------------------------------------------
 
@@ -618,6 +628,20 @@ class LLMDispatcher:
             )
         return spec.max_output_tokens
 
+    def _context_cap(self, client: MCPLLMClient) -> int:
+        """Input context window of the model this client actually runs.
+
+        Keyed by model id for the same reason as _output_cap: an
+        EVENTMILL_MODEL_* override or a retired-model substitution changes
+        the model without changing the tier it is registered under.
+        """
+        cap = self._context_by_model.get(client.model_id)
+        if cap:
+            return cap
+        tier = self._tier_of(client)
+        spec = self._tier_specs.get(tier) if tier else None
+        return spec.max_context_tokens if spec else 1_048_576
+
     def _clamp_tokens(self, client: MCPLLMClient, max_tokens: int) -> int:
         """Clamp max_tokens to what the selected model can actually emit.
 
@@ -639,6 +663,25 @@ class LLMDispatcher:
         return "RESOURCE_EXHAUSTED" in error or "quota" in error.lower()
 
     @staticmethod
+    def _is_access_error(error: str) -> bool:
+        """Return True when the key is not entitled to this model.
+
+        A single legacy GEMINI_API_KEY binds both tiers, and it may reach
+        Flash but not the Pro preview. That returns PERMISSION_DENIED, which
+        is neither a quota problem nor a retired model id — without this,
+        heavy-tier plugins hard-fail on a key that could still serve them
+        from the other tier.
+        """
+        lowered = error.lower()
+        return "permission_denied" in lowered or (
+            "403" in error and "denied" in lowered
+        )
+
+    def _should_try_other_tier(self, error: str) -> bool:
+        """Whether this failure is worth retrying on the other connected tier."""
+        return self._is_quota_error(error) or self._is_access_error(error)
+
+    @staticmethod
     def _is_model_not_found(error: str) -> bool:
         """Return True when the model id itself was rejected.
 
@@ -648,9 +691,9 @@ class LLMDispatcher:
         lowered = error.lower()
         return (
             "not_found" in lowered
-            or "404" in error
             or "is not found for api version" in lowered
             or "was not found" in lowered
+            or _HTTP_404_RE.search(error) is not None
         )
 
     def _retry_on_retired_model(
@@ -731,16 +774,17 @@ class LLMDispatcher:
             grounding_data=grounding_data,
             hints=hints,
         )
-        if not result.ok and self._is_quota_error(result.error or ""):
+        if not result.ok and self._should_try_other_tier(result.error or ""):
             fallback = self._fallback_client(client)
             if fallback:
                 logger.warning(
-                    "Quota exhausted on %s — falling back to %s",
+                    "%s unavailable (%s) — falling back to %s",
                     client.model_id,
+                    "quota" if self._is_quota_error(result.error or "") else "access",
                     fallback.model_id,
                 )
                 print(
-                    f"\n  ⚠️  Quota exhausted on {client.model_id} "
+                    f"\n  ⚠️  {client.model_id} unavailable "
                     f"— retrying with {fallback.model_id}"
                 )
                 result = fallback.query_text(
@@ -783,16 +827,17 @@ class LLMDispatcher:
             max_tokens=self._clamp_tokens(client, max_tokens),
             hints=hints,
         )
-        if not result.ok and self._is_quota_error(result.error or ""):
+        if not result.ok and self._should_try_other_tier(result.error or ""):
             fallback = self._fallback_client(client)
             if fallback:
                 logger.warning(
-                    "Quota exhausted on %s — falling back to %s",
+                    "%s unavailable (%s) — falling back to %s",
                     client.model_id,
+                    "quota" if self._is_quota_error(result.error or "") else "access",
                     fallback.model_id,
                 )
                 print(
-                    f"\n  ⚠️  Quota exhausted on {client.model_id} "
+                    f"\n  ⚠️  {client.model_id} unavailable "
                     f"— retrying with {fallback.model_id}"
                 )
                 result = fallback.query_multimodal(
@@ -884,8 +929,10 @@ class LLMDispatcher:
             max_tokens=self._clamp_tokens(client, max_tokens),
             hints=hints,
         )
-        # This path defaults to the heavy tier, which is a Preview endpoint —
-        # it is the most likely of the three to meet a retired model id.
+        # The heavy tier is a Preview endpoint, so this path is the most
+        # likely of the three to meet a retired model id. Plugins arrive here
+        # through TierScopedLLMClient with their manifest tier already set —
+        # the heavy default above applies only to direct framework callers.
         if not result.ok:
             substitute = self._retry_on_retired_model(client, result.error or "")
             if substitute:
@@ -947,9 +994,7 @@ class LLMDispatcher:
         per_page = tokens_per_pdf_page(resolution)
         estimated = pages * per_page
 
-        tier = self._tier_of(client)
-        spec = self._tier_specs.get(tier) if tier else None
-        context_limit = spec.max_context_tokens if spec else 1_048_576
+        context_limit = self._context_cap(client)
 
         if estimated <= context_limit:
             return None
