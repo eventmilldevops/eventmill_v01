@@ -765,7 +765,7 @@ class TestSummarizeMultiRole:
         assert "Quick chart:" in summary
         assert "attack_path_visualizer" in summary
         assert "art_abc123" in summary
-        assert '"format": "mermaid"' in summary
+        assert "--format mermaid" in summary
 
 
 # ---------------------------------------------------------------------------

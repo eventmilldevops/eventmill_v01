@@ -33,19 +33,37 @@ The file is registered as a `json_events` session artifact. Use `artifacts` to g
 
 ## Example Usage
 
+Arguments are passed as `--key value` flags.
+
 ### Top Talkers (GROK)
-```json
-{"mode": "grok", "file_path": "/workspace/artifacts/access.log", "pattern": "IP", "limit": 10}
+```
+run log_pattern_analyzer --mode grok --file_path /workspace/artifacts/access.log --pattern IP --limit 10
 ```
 
 ### Custom Regex
-```json
-{"mode": "regex", "file_path": "/workspace/artifacts/app.log", "pattern": "user=(\\w+)", "limit": 5}
+```
+run log_pattern_analyzer --mode regex --file_path /workspace/artifacts/app.log --pattern "user=(\w+)" --limit 5
 ```
 
+Quote any pattern containing spaces or shell metacharacters. Backslashes in a
+flag value are passed through as typed — unlike the JSON form, where they have
+to be doubled.
+
 ### Discover Unknown Log
-```json
-{"mode": "discover", "file_path": "/workspace/artifacts/mystery.log", "ai_analysis": true}
+```
+run log_pattern_analyzer --mode discover --file_path /workspace/artifacts/mystery.log --ai_analysis
+```
+
+A flag given with no value is a boolean and sets it true, so `--ai_analysis` and
+`--ai_analysis true` mean the same thing.
+
+Instead of `--file_path`, you can pass `--artifact_id art_xxxx` from the
+`artifacts` listing — the shell resolves it to the file on disk.
+
+**JSON alternative.** Every tool also accepts a JSON payload. It is only
+needed for list or object arguments that a flag cannot express:
+```
+run log_pattern_analyzer {"mode": "regex", "file_path": "/workspace/artifacts/app.log", "pattern": "user=(\\w+)"}
 ```
 
 ## Chains

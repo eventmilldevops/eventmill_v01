@@ -1626,7 +1626,7 @@ class ThreatIntelIngester:
             )
             parts.append(
                 f"Quick chart: run attack_path_visualizer "
-                f'{{\"artifact_id\": \"{aid}\", \"format\": \"mermaid\"}}'
+                f"--artifact_id {aid} --format mermaid"
             )
 
         return " ".join(parts)

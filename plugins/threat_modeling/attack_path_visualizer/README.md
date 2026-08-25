@@ -15,20 +15,29 @@ Four output formats for attack path visualization:
 
 ### Usage Syntax
 
+Arguments are passed as `--key value` flags.
+
 ```bash
 # From threat_intel_ingester output (most common — generates graph from MITRE mappings)
-run attack_path_visualizer {"artifact_id": "<artifact_id>", "format": "mermaid"}
+run attack_path_visualizer --artifact_id <artifact_id> --format mermaid
 
 # ASCII art (terminal-friendly)
-run attack_path_visualizer {"artifact_id": "<artifact_id>", "format": "ascii"}
+run attack_path_visualizer --artifact_id <artifact_id> --format ascii
 
 # Compact single-line flow
-run attack_path_visualizer {"artifact_id": "<artifact_id>", "format": "compact"}
+run attack_path_visualizer --artifact_id <artifact_id> --format compact
 
 # Both ASCII + Mermaid
-run attack_path_visualizer {"artifact_id": "<artifact_id>", "format": "both"}
+run attack_path_visualizer --artifact_id <artifact_id> --format both
 
-# Inline stages (no artifact needed)
+# Suppress the control coverage matrix
+run attack_path_visualizer --artifact_id <artifact_id> --format mermaid --include_controls false
+```
+
+Inline `stages` is the one argument flags cannot express — it is a list of
+objects, so it needs the JSON form:
+
+```bash
 run attack_path_visualizer {"format": "ascii", "attack_type": "ransomware", "stages": [...]}
 ```
 
@@ -47,7 +56,7 @@ run attack_path_visualizer {"format": "ascii", "attack_type": "ransomware", "sta
 
 The `threat_intel_ingester` summary includes a ready-to-paste command:
 ```
-Quick chart: run attack_path_visualizer {"artifact_id": "art_XXXX", "format": "mermaid"}
+Quick chart: run attack_path_visualizer --artifact_id art_XXXX --format mermaid
 ```
 Copy, adjust the artifact ID, and paste into the Event Mill shell.
 
@@ -79,8 +88,8 @@ The file is registered as a `text` session artifact. The artifact ID and full pa
 
 ## Example — Direct from threat_intel_ingester
 
-```json
-{"artifact_id": "art_04d30b48", "format": "mermaid"}
+```
+run attack_path_visualizer --artifact_id art_04d30b48 --format mermaid
 ```
 
 Stages are automatically derived from the MITRE technique mappings in the `json_events` artifact, ordered by kill-chain sequence.
@@ -106,14 +115,10 @@ Analysts should treat them with appropriate scrutiny.
 
 ## Example — Inline stages
 
-```json
-{
-  "format": "ascii",
-  "attack_type": "ransomware",
-  "stages": [
-    {"name": "Initial Access", "mitre_technique_id": "T1566", "stage_present": true, "controls": [...]}
-  ]
-}
+`stages` is a list of objects, so this example requires the JSON form:
+
+```
+run attack_path_visualizer {"format": "ascii", "attack_type": "ransomware", "stages": [{"name": "Initial Access", "mitre_technique_id": "T1566", "stage_present": true, "controls": []}]}
 ```
 
 ## Chains

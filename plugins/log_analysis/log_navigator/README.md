@@ -31,19 +31,30 @@ The file is registered as a `text` session artifact. Use `artifacts` to get its 
 
 ## Example Usage
 
+Arguments are passed as `--key value` flags.
+
 ### List Directory
-```json
-{"action": "list", "path": "/workspace/artifacts", "prefix": "access", "max_results": 50}
+```
+run log_navigator --action list --path /workspace/artifacts --prefix access --max_results 50
 ```
 
 ### Read Segment (Pagination)
-```json
-{"action": "read", "path": "/workspace/artifacts/access.log", "offset_lines": 0, "line_limit": 100}
+```
+run log_navigator --action read --path /workspace/artifacts/access.log --offset_lines 0 --line_limit 100
 ```
 
 ### Get Metadata
-```json
-{"action": "metadata", "path": "/workspace/artifacts/access.log"}
+```
+run log_navigator --action metadata --path /workspace/artifacts/access.log
+```
+
+Instead of `--path`, you can pass `--artifact_id art_xxxx` from the `artifacts`
+listing — the shell resolves it to the file on disk.
+
+**JSON alternative.** Every tool also accepts a JSON payload. It is only
+needed for list or object arguments that a flag cannot express:
+```
+run log_navigator {"action": "read", "path": "/workspace/artifacts/access.log", "line_limit": 100}
 ```
 
 ## Chains

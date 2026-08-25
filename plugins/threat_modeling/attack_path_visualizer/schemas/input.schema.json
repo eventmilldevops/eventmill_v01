@@ -2,6 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "artifact_id": {
+      "type": "string",
+      "description": "ID of a json_events artifact (e.g. threat_intel_ingester output) to derive stages from. Supply this or 'stages'."
+    },
     "format": {
       "type": "string",
       "enum": ["ascii", "mermaid", "compact", "both"],
@@ -49,5 +53,8 @@
       "description": "Include control coverage matrix in mermaid output."
     }
   },
-  "required": ["stages"]
+  "anyOf": [
+    { "required": ["artifact_id"] },
+    { "required": ["stages"] }
+  ]
 }

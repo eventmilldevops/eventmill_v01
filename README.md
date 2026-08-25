@@ -127,12 +127,38 @@ python -m framework.cli.shell
 Inside the shell:
 
 ```
-models          # list configured models and their tier
-connect         # bind every available model (tiered auto-routing)
-new             # start an investigation session
-tools           # list available plugins
-ask: <question> # ask the LLM about the current session
+models              # list configured models and their tier
+connect             # bind every available model (tiered auto-routing)
+new                 # start an investigation session
+pillar <name>       # set the investigation pillar
+tools               # list available plugins and the name to invoke them by
+help <tool_name>    # show a tool's arguments
+run <tool_name> ... # run a tool
+ask: <question>     # ask the LLM about the current session
 ```
+
+Tools are always invoked through `run`, with arguments as `--key value` flags:
+
+```
+run threat_report_analyzer --action list_reports
+run log_navigator --action read --path access.log --line_limit 100
+run log_searcher --file_path access.log --query "Failed password" --context_lines 2
+```
+
+Flag values are typed from the tool's input schema, so numbers and booleans
+arrive as numbers and booleans. A flag given without a value is a boolean and
+sets it true (`--ai_analysis`). A comma-separated value becomes a list
+(`--ioc_types ip,domain`).
+
+Arguments that are lists of objects, or otherwise nested, cannot be expressed as
+flags. For those, pass a JSON payload instead — still after `run <tool_name>`:
+
+```
+run attack_path_visualizer {"format": "ascii", "stages": [{"name": "Initial Access"}]}
+```
+
+`help <tool_name>` lists every argument a tool accepts, with its type, default,
+and allowed values.
 
 ---
 

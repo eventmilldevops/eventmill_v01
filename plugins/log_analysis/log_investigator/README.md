@@ -31,19 +31,30 @@ The file is registered as a `json_events` session artifact. Use `artifacts` to g
 
 ## Example Usage
 
+Arguments are passed as `--key value` flags.
+
 ### AI Investigation
-```json
-{"mode": "investigate", "file_path": "/workspace/artifacts/access.log", "search_term": "192.168.1.100"}
+```
+run log_investigator --mode investigate --file_path /workspace/artifacts/access.log --search_term 192.168.1.100
 ```
 
 ### SOC Workflow — Top Talkers
-```json
-{"mode": "workflow", "file_path": "/workspace/artifacts/access.log", "workflow_type": "top_talkers"}
+```
+run log_investigator --mode workflow --file_path /workspace/artifacts/access.log --workflow_type top_talkers
 ```
 
 ### SOC Workflow — Investigate IP
-```json
-{"mode": "workflow", "file_path": "/workspace/artifacts/access.log", "workflow_type": "investigate_ip", "target": "10.0.0.55"}
+```
+run log_investigator --mode workflow --file_path /workspace/artifacts/access.log --workflow_type investigate_ip --target 10.0.0.55
+```
+
+Instead of `--file_path`, you can pass `--artifact_id art_xxxx` from the
+`artifacts` listing — the shell resolves it to the file on disk.
+
+**JSON alternative.** Every tool also accepts a JSON payload. It is only
+needed for list or object arguments that a flag cannot express:
+```
+run log_investigator {"mode": "investigate", "file_path": "/workspace/artifacts/access.log", "search_term": "192.168.1.100"}
 ```
 
 ## Chains

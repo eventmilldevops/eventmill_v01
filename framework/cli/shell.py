@@ -55,7 +55,7 @@ _BANNERS = [
     | ____| | | | ____| \ | |_   _| |  \/  |_ _| |   | |
     |  _| | | | |  _| |  \| | | |   | |\/| || || |   | |
     | |___| |_| | |___| |\  | | |   | |  | || || |___| |___
-    |_____|\___/|_____|_| \_| |_|   |_|  |_|___|_____|_____|
+    |_____|\___/|_____|_| \_| |_|v0 |_|11|_|___|_____|_____|
 """,
     r"""
     ╔══════════════════════════════════════════════════════╗
@@ -65,7 +65,7 @@ _BANNERS = [
     ║  ██╔══╝  ╚██╗ ██╔╝██╔══╝  ██║╚██╗██║   ██║          ║
     ║  ███████╗ ╚████╔╝ ███████╗██║ ╚████║   ██║          ║
     ║  ╚══════╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝   ╚═╝          ║
-    ║              M  I  L  L                             ║
+    ║              M  I  L  L    v011                     ║
     ╚══════════════════════════════════════════════════════╝
 """,
     r"""
@@ -74,12 +74,12 @@ _BANNERS = [
     / _ \ \ / / __|   | '_ \| | | |
    |  __/\ V /| |_    | | | | | | |
     \___| \_/  \__|   |_| |_|_|_|_|
-      event           mill
+      event           mill v011
 """,
     r"""
     ┌─────────────────────────────────────────┐
     │  ╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸  │
-    │     E V E N T   M I L L   v0.1.0       │
+    │     E V E N T   M I L L   v0.1.1       │
     │   event record analysis platform       │
     │  ╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸  │
     └─────────────────────────────────────────┘
@@ -88,12 +88,12 @@ _BANNERS = [
         ____                 __     __  ___ _  __  __
        / __/ _  __ ___  ___ / /_   /  |/  /(_)/ / / /
       / _/  | |/ // -_)/ _ / __/  / /|_/ // // / / /
-     /___/  |___/ \__//_//_\__/  /_/  /_//_//_/ /_/
+     /___/  |___/ \__//_//_\__/v0/_/ 1/_//_//_/1/_/
 """,
     r"""
       .--.      .--.      .--.      .--.
      /    \    /    \    /    \    /    \
-    | EVNT |--| MILL |--| v0.1|--| .0  |
+    | EVNT |--| MILL |--| v0.1 |--| .1   |
      \    /    \    /    \    /    \    /
       `--'      `--'      `--'      `--'
       upstream of the SIEM — analysis before commitment
@@ -168,6 +168,7 @@ class EventMillShell(cmd.Cmd):
         self.artifact_registry: ArtifactRegistry | None = None
         self.context_builder = ContextBuilder()
         self._conversation_history: list[dict[str, str]] = []
+        self._input_schema_cache: dict[str, dict[str, Any]] = {}
         
         # Initialize storage resolver
         # In Cloud Run (K_SERVICE set), use GCS resolver; otherwise local
@@ -1409,9 +1410,12 @@ class EventMillShell(cmd.Cmd):
         print(f"  {'─' * 60}")
         print(f"  {m.display_name}  ({m.tool_name})")
         print(f"  Pillar: {m.pillar}   Stability: {m.stability}")
-        print(f"  Invoke: run {m.tool_name} {{\"action\": \"...\"}}") 
+        print(f"  Invoke: run {m.tool_name} --key value [--key value ...]")
+        print(f"      or: run {m.tool_name} {{\"key\": \"value\"}}   (for list/object arguments)")
         print(f"  {'─' * 60}")
         print()
+
+        self._print_tool_arguments(plugin)
 
         if readme_path.exists():
             rendered = self._render_markdown_plain(readme_path.read_text(encoding="utf-8"))
@@ -1422,6 +1426,61 @@ class EventMillShell(cmd.Cmd):
             print("  No README.md available for this tool.")
         print()
 
+    def _print_tool_arguments(self, plugin: LoadedPlugin) -> None:
+        """Print the tool's arguments as flags, derived from its input schema."""
+        import textwrap
+
+        schema = self._plugin_input_schema(plugin)
+        if not schema:
+            return
+        required_list, one_of = self._plugin_required_inputs(plugin)
+        required = set(required_list)
+
+        print("  Arguments")
+        print(f"  {'─' * 9}")
+
+        for name, spec in schema.items():
+            declared = self._declared_type(spec) or "string"
+            item_type = self._declared_type(spec.get("items") or {})
+
+            if declared == "boolean":
+                flag = f"--{name}"
+            elif declared == "array" and item_type in (None, "string"):
+                flag = f"--{name} a,b,c"
+            elif declared in ("object",) or (declared == "array" and item_type not in (None, "string")):
+                flag = f'{{"{name}": ...}}'
+            else:
+                flag = f"--{name} <{declared}>"
+
+            notes = []
+            if name in required:
+                notes.append("required")
+            if "default" in spec:
+                notes.append(f"default {spec['default']}")
+            if spec.get("enum"):
+                notes.append("one of: " + ", ".join(str(v) for v in spec["enum"]))
+            if "minimum" in spec and "maximum" in spec:
+                notes.append(f"range {spec['minimum']}-{spec['maximum']}")
+            elif "minimum" in spec:
+                notes.append(f"min {spec['minimum']}")
+            elif "maximum" in spec:
+                notes.append(f"max {spec['maximum']}")
+            if declared == "object" or (declared == "array" and item_type not in (None, "string")):
+                notes.append("JSON form only")
+
+            print(f"    {flag:<34} {'; '.join(notes)}".rstrip())
+            desc = spec.get("description")
+            if desc:
+                print(
+                    textwrap.fill(
+                        desc, width=78, initial_indent="        ", subsequent_indent="        "
+                    )
+                )
+        if one_of:
+            print()
+            print("    Supply one of: " + ", ".join(f"--{n}" for n in one_of))
+        print()
+
     @staticmethod
     def _render_markdown_plain(text: str) -> str:
         """Convert Markdown to readable plain-text for terminal display."""
@@ -1430,16 +1489,28 @@ class EventMillShell(cmd.Cmd):
 
         lines = text.splitlines()
         out: list[str] = []
+        para: list[str] = []
         in_code = False
+
+        def flush_paragraph() -> None:
+            """Wrap the buffered paragraph as one block, not line by line."""
+            if para:
+                out.append(
+                    textwrap.fill(
+                        " ".join(para),
+                        width=78,
+                        initial_indent="  ",
+                        subsequent_indent="  ",
+                    )
+                )
+                para.clear()
 
         for line in lines:
             # Toggle fenced code block
             if line.startswith("```"):
+                flush_paragraph()
                 in_code = not in_code
-                if in_code:
-                    out.append("")
-                else:
-                    out.append("")
+                out.append("")
                 continue
 
             if in_code:
@@ -1448,18 +1519,21 @@ class EventMillShell(cmd.Cmd):
 
             # H1
             if line.startswith("# "):
+                flush_paragraph()
                 title = line[2:].strip()
                 out.append(f"\n  {title}")
                 out.append(f"  {'═' * len(title)}")
                 continue
             # H2
             if line.startswith("## "):
+                flush_paragraph()
                 title = line[3:].strip()
                 out.append(f"\n  {title}")
                 out.append(f"  {'─' * len(title)}")
                 continue
             # H3
             if line.startswith("### "):
+                flush_paragraph()
                 title = line[4:].strip()
                 out.append(f"\n  {title}:")
                 continue
@@ -1475,21 +1549,167 @@ class EventMillShell(cmd.Cmd):
 
             # Table rows and list items — indent and pass through
             if line.startswith("|") or line.startswith("- ") or line.startswith("* ") or re.match(r"^\d+\. ", line):
+                flush_paragraph()
                 out.append(f"  {line}")
                 continue
 
             # Blank lines
             if not line.strip():
+                flush_paragraph()
                 out.append("")
                 continue
 
-            # Paragraph text — word-wrap at 78
-            wrapped = textwrap.fill(
-                line, width=78, initial_indent="  ", subsequent_indent="  "
-            )
-            out.append(wrapped)
+            # Paragraph text — buffered so the whole paragraph wraps at 78
+            para.append(line.strip())
 
+        flush_paragraph()
         return "\n".join(out)
+
+    def _plugin_input_schema(self, plugin: LoadedPlugin) -> dict[str, Any]:
+        """Return the ``properties`` block of a plugin's input schema, cached."""
+        name = plugin.tool_name
+        if name not in self._input_schema_cache:
+            props: dict[str, Any] = {}
+            schema_path = plugin.manifest.plugin_dir / "schemas" / "input.schema.json"
+            if schema_path.exists():
+                try:
+                    raw = json.loads(schema_path.read_text(encoding="utf-8"))
+                    props = raw.get("properties") or {}
+                except (OSError, json.JSONDecodeError) as e:
+                    logger.warning("Could not read input schema for %s: %s", name, e)
+            self._input_schema_cache[name] = props
+        return self._input_schema_cache[name]
+
+    def _plugin_required_inputs(self, plugin: LoadedPlugin) -> tuple[list[str], list[str]]:
+        """Return a plugin's required inputs as (always_required, one_of).
+
+        ``one_of`` collects the single-key ``anyOf`` alternatives some schemas use
+        to say "supply this argument or that one".
+        """
+        schema_path = plugin.manifest.plugin_dir / "schemas" / "input.schema.json"
+        if not schema_path.exists():
+            return [], []
+        try:
+            raw = json.loads(schema_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return [], []
+        one_of: list[str] = []
+        for branch in raw.get("anyOf") or []:
+            for name in branch.get("required") or []:
+                if name not in one_of:
+                    one_of.append(name)
+        return list(raw.get("required") or []), one_of
+
+    @staticmethod
+    def _declared_type(spec: dict[str, Any]) -> str | None:
+        """Resolve a schema property's type, tolerating ``["string", "null"]`` unions."""
+        declared = spec.get("type")
+        if isinstance(declared, list):
+            declared = next((t for t in declared if t != "null"), None)
+        return declared
+
+    def _coerce_flag_value(
+        self, key: str, value: Any, spec: dict[str, Any]
+    ) -> tuple[Any, str | None]:
+        """Convert a --flag string to the type the plugin's input schema declares.
+
+        Returns (value, None) on success or (None, message) on failure. Keys the
+        schema does not declare are passed through unchanged for the plugin's own
+        validate_inputs() to judge.
+        """
+        if value is True:  # bare --flag
+            return True, None
+
+        declared = self._declared_type(spec)
+
+        if declared in (None, "string"):
+            return value, None
+
+        if declared == "boolean":
+            low = value.strip().lower()
+            if low in ("true", "yes", "on", "1"):
+                return True, None
+            if low in ("false", "no", "off", "0"):
+                return False, None
+            return None, f"--{key} expects true or false, got {value!r}."
+
+        if declared == "integer":
+            try:
+                return int(value, 10) if isinstance(value, str) else int(value), None
+            except ValueError:
+                return None, f"--{key} expects a whole number, got {value!r}."
+
+        if declared == "number":
+            try:
+                return float(value), None
+            except ValueError:
+                return None, f"--{key} expects a number, got {value!r}."
+
+        if declared == "array":
+            item_type = self._declared_type(spec.get("items") or {})
+            if item_type in (None, "string"):
+                return [v.strip() for v in value.split(",") if v.strip()], None
+            return None, (
+                f"--{key} takes structured values. Use the JSON form instead: "
+                f'run <tool_name> {{"{key}": [...]}}'
+            )
+
+        if declared == "object":
+            return None, (
+                f"--{key} takes a structured value. Use the JSON form instead: "
+                f'run <tool_name> {{"{key}": {{...}}}}'
+            )
+
+        return value, None
+
+    def _parse_flag_payload(self, raw: str, plugin: LoadedPlugin) -> dict[str, Any] | None:
+        """Parse --key value flags into a typed payload.
+
+        Values are typed from the plugin's input schema, so --line_limit 100
+        arrives as an int while --query 404 stays a string. Returns None after
+        printing a message when the flags cannot be parsed.
+        """
+        try:
+            tokens = shlex.split(raw)
+        except ValueError as e:
+            print(f"  Could not parse arguments: {e}")
+            return None
+
+        pairs: list[tuple[str, Any]] = []
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if not tok.startswith("--"):
+                print(f"  Unexpected token {tok!r}.")
+                print("  Use --key value flags, or JSON for list/object arguments.")
+                return None
+            key, sep, inline = tok[2:].partition("=")
+            if not key:
+                print(f"  Invalid flag: {tok!r}. Use --key value or --key=value.")
+                return None
+            if sep:
+                pairs.append((key, inline))
+                i += 1
+            elif i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
+                pairs.append((key, tokens[i + 1]))
+                i += 2
+            else:
+                pairs.append((key, True))
+                i += 1
+
+        schema = self._plugin_input_schema(plugin)
+        payload: dict[str, Any] = {}
+        for key, value in pairs:
+            coerced, error = self._coerce_flag_value(key, value, schema.get(key) or {})
+            if error:
+                print(f"  {error}")
+                return None
+            # Repeating a list-valued flag appends rather than overwrites
+            if isinstance(coerced, list) and isinstance(payload.get(key), list):
+                payload[key].extend(coerced)
+            else:
+                payload[key] = coerced
+        return payload
 
     def complete_run(self, text: str, line: str, begidx: int, endidx: int) -> list[str]:
         # Complete tool names (first argument only)
@@ -1501,13 +1721,28 @@ class EventMillShell(cmd.Cmd):
 
     def do_run(self, arg: str) -> None:
         """Run a tool on the current session.
-        
-        Usage: run <tool_name> [--key value ...] | [json_payload]
 
-        Examples:
-          run log_investigator --severity orange --file_path auth.log
-          run log_investigator {"severity": "orange", "file_path": "auth.log"}
-          run log_investigator --verbose          (boolean flag, sets value to True)
+        Usage: run <tool_name> --key value [--key value ...]
+
+        Flags are the normal way to call a tool. Values are typed from the
+        tool's input schema, so numbers and true/false arrive correctly:
+
+          run log_navigator --action read --path access.log --line_limit 100
+          run log_pattern_analyzer --mode discover --file_path mystery.log --ai_analysis
+          run threat_report_analyzer --action search_reports --query "ransomware"
+
+        Flag forms:
+          --key value      set a value
+          --key=value      same, needed when the value starts with '-'
+          --key            a boolean flag, sets it true
+          --key a,b,c      a list of text values
+
+        JSON is the alternative for arguments a flag cannot express — lists of
+        objects, or nested structures:
+
+          run attack_path_visualizer {"format": "ascii", "stages": [{"name": "..."}]}
+
+        Use 'help <tool_name>' for a tool's arguments.
         """
         if not self.session_manager.get_current_session():
             print("  No active session. Use 'new' to create one.")
@@ -1536,25 +1771,10 @@ class EventMillShell(cmd.Cmd):
                     print(f"  Invalid JSON payload: {e}")
                     return
             else:
-                # --flag style: --key value  or  --flag (sets key=True)
-                tokens = shlex.split(raw)
-                i = 0
-                while i < len(tokens):
-                    tok = tokens[i]
-                    if tok.startswith("--"):
-                        key = tok[2:]
-                        if not key:
-                            print(f"  Invalid flag: {tok!r}. Use --key or --key value.")
-                            return
-                        if i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
-                            payload[key] = tokens[i + 1]
-                            i += 2
-                        else:
-                            payload[key] = True
-                            i += 1
-                    else:
-                        print(f"  Unexpected token {tok!r}. Use --key value flags or JSON format.")
-                        return
+                parsed = self._parse_flag_payload(raw, plugin)
+                if parsed is None:
+                    return
+                payload = parsed
         
         # Resolve artifact_id → file_path for plugins that need a file
         if "artifact_id" in payload:
@@ -2299,7 +2519,15 @@ class EventMillShell(cmd.Cmd):
     
     def default(self, line: str) -> None:
         """Handle unknown commands."""
-        print(f"  Unknown command: {line.split()[0]}")
+        stripped = line.strip()
+        if stripped.startswith("{"):
+            print("  That is a tool payload, not a command — it needs a 'run <tool_name>' prefix:")
+            print(f"    run <tool_name> {stripped}")
+            print("  Most arguments are easier as flags:")
+            print("    run <tool_name> --key value")
+            print("  'tools' lists the tool names; 'help <tool_name>' lists its arguments.")
+            return
+        print(f"  Unknown command: {stripped.split()[0]}")
         print("  Type 'help' for available commands.")
         if self.llm_client and self.llm_client.connected:
             print("  Tip: use 'ask: <question>' to query the LLM.")

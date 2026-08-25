@@ -23,19 +23,31 @@ The file is registered as a `json_events` session artifact containing matched li
 
 ## Example Usage
 
+Arguments are passed as `--key value` flags.
+
 ### Simple Text Search
-```json
-{"file_path": "/workspace/artifacts/app.log", "query": "ERROR", "max_results": 50}
+```
+run log_searcher --file_path /workspace/artifacts/app.log --query ERROR --max_results 50
 ```
 
 ### Regex Search with Context
-```json
-{"file_path": "/workspace/artifacts/app.log", "query": "ERROR.*(timeout|refused)", "mode": "regex", "context_lines": 2}
+```
+run log_searcher --file_path /workspace/artifacts/app.log --query "ERROR.*(timeout|refused)" --mode regex --context_lines 2
 ```
 
 ### Invert (Exclusion) Search
-```json
-{"file_path": "/workspace/artifacts/app.log", "query": "INFO", "invert": true}
+```
+run log_searcher --file_path /workspace/artifacts/app.log --query INFO --invert
+```
+
+Quote any query containing spaces or shell metacharacters. Instead of
+`--file_path`, you can pass `--artifact_id art_xxxx` from the `artifacts`
+listing — the shell resolves it to the file on disk.
+
+**JSON alternative.** Every tool also accepts a JSON payload. It is only
+needed for list or object arguments that a flag cannot express:
+```
+run log_searcher {"file_path": "/workspace/artifacts/app.log", "query": "ERROR", "max_results": 50}
 ```
 
 ## Chains

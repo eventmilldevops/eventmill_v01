@@ -84,6 +84,8 @@ For **PDF reports**, the plugin now supports **native PDF ingestion via the Gemi
 
 ### Running in Event Mill
 
+Arguments are passed as `--key value` flags.
+
 ```bash
 # Start Event Mill
 eventmill
@@ -91,21 +93,27 @@ eventmill
 # Load an artifact (PDF, HTML, or text file)
 load /path/to/threat_report.pdf
 
-# Check loaded artifacts
+# Check loaded artifacts — this prints the artifact ID to use below
 artifacts
 
 # Run the ingester on the loaded artifact
-run threat_intel_ingester {"artifact_id": "<artifact_id>"}
+run threat_intel_ingester --artifact_id <artifact_id>
 
-# View the structured output
-result
+# With source context and a page cap
+run threat_intel_ingester --artifact_id <artifact_id> --source_context "Mandiant M-Trends 2025" --max_pages 50
+
+# Restrict the IOC types extracted (comma-separated list)
+run threat_intel_ingester --artifact_id <artifact_id> --ioc_types ip,domain,cve
 
 # Chain to attack_path_visualizer using the output artifact
-run attack_path_visualizer {"artifact_id": "<output_artifact_id>"}
+run attack_path_visualizer --artifact_id <output_artifact_id> --format mermaid
 
 # Export the JSON output to cloud storage
 export <output_artifact_id>
 ```
+
+The run summary prints the output artifact ID and the path it was written to.
+`artifacts` lists them again at any time.
 
 ### Input Parameters
 
@@ -119,14 +127,14 @@ export <output_artifact_id>
 
 ### Example Request
 
-```json
-{
-  "artifact_id": "art_0001",
-  "source_context": "Mandiant M-Trends 2025 Report",
-  "ioc_types": ["ip", "domain", "hash_sha256", "url", "cve", "mitre_technique"],
-  "confidence_threshold": "low",
-  "max_pages": 50
-}
+```
+run threat_intel_ingester --artifact_id art_0001 --source_context "Mandiant M-Trends 2025 Report" --ioc_types ip,domain,hash_sha256,url,cve,mitre_technique --confidence_threshold low --max_pages 50
+```
+
+**JSON alternative.** Every tool also accepts a JSON payload. It is only
+needed for list or object arguments that a flag cannot express:
+```
+run threat_intel_ingester {"artifact_id": "art_0001", "source_context": "Mandiant M-Trends 2025 Report", "ioc_types": ["ip", "domain", "hash_sha256", "url", "cve", "mitre_technique"], "confidence_threshold": "low", "max_pages": 50}
 ```
 
 ## Supported Artifact Types
@@ -205,7 +213,7 @@ If the LLM connection is unavailable, the plugin falls back to regex-only extrac
 ## Example summarize_for_llm() Output
 
 ```
-Ingested pdf_report (12 pages): APT29 Campaign Analysis. Attributed to APT29 (high confidence), campaign: SolarWinds Follow-on. Extracted 47 IOCs: 23 ips, 12 domains, 8 hash_sha256s, 4 cves. 3 IOCs flagged as high-priority. Mapped to 5 unique techniques across 7 tactical roles: T1566.001 (Spearphishing Attachment), T1059.001 (PowerShell), T1078 (Initial Access, Persistence), T1486 (Data Encrypted for Impact), T1048.003 (Exfiltration Over Unencrypted Protocol). Attack graph: 2 path(s) identified, converging at T1059.001. Output artifact: art_0002 (json_events). Quick chart: run attack_path_visualizer {"artifact_id": "art_0002", "format": "mermaid"}
+Ingested pdf_report (12 pages): APT29 Campaign Analysis. Attributed to APT29 (high confidence), campaign: SolarWinds Follow-on. Extracted 47 IOCs: 23 ips, 12 domains, 8 hash_sha256s, 4 cves. 3 IOCs flagged as high-priority. Mapped to 5 unique techniques across 7 tactical roles: T1566.001 (Spearphishing Attachment), T1059.001 (PowerShell), T1078 (Initial Access, Persistence), T1486 (Data Encrypted for Impact), T1048.003 (Exfiltration Over Unencrypted Protocol). Attack graph: 2 path(s) identified, converging at T1059.001. Output artifact: art_0002 (json_events). Quick chart: run attack_path_visualizer --artifact_id art_0002 --format mermaid
 ```
 
 The **Quick chart** command at the end lets an analyst immediately generate a
