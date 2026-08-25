@@ -116,6 +116,29 @@ class ConsoleFormatter(logging.Formatter):
         return f"{prefix} {record.getMessage()}"
 
 
+def route_warnings_to_log(file_handler: logging.Handler | None = None) -> None:
+    """Send Python warnings to the log file instead of the analyst's screen.
+
+    Dependency import warnings — scapy pulling a deprecated FFDH primitive out of
+    `cryptography` is the recurring one — are written straight to stderr by the
+    warnings module, so they land in the shell during startup with no way to
+    filter them per-logger. `captureWarnings` reroutes them through the
+    `py.warnings` logger; attaching only the file handler and disabling
+    propagation keeps them off the console in both local and Cloud Run modes,
+    where stderr is the ttyd terminal.
+
+    Args:
+        file_handler: Handler warnings are written to. None discards them.
+    """
+    logging.captureWarnings(True)
+
+    warnings_logger = logging.getLogger("py.warnings")
+    warnings_logger.handlers.clear()
+    warnings_logger.propagate = False
+    warnings_logger.setLevel(logging.WARNING)
+    warnings_logger.addHandler(file_handler or logging.NullHandler())
+
+
 def setup_logging(
     log_level: str = "INFO",
     log_file: str | Path | None = None,
@@ -169,13 +192,14 @@ def setup_logging(
         root_logger.addHandler(console_handler)
     
     # File handler - always logs at configured level (captures INFO for debugging)
+    file_handler: logging.Handler | None = None
     if log_file:
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         file_handler = logging.FileHandler(str(log_path))
         file_handler.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-        
+
         if json_format:
             file_handler.setFormatter(JSONFormatter())
         else:
@@ -184,9 +208,12 @@ def setup_logging(
                     "%(asctime)s %(levelname)s %(name)s %(message)s"
                 )
             )
-        
+
         root_logger.addHandler(file_handler)
-    
+
+    # Dependency warnings go to the log file, never the analyst's screen
+    route_warnings_to_log(file_handler)
+
     # Setup user activity logger (separate from main logger)
     # Activity logs are audit records — they go to:
     # - Cloud Logging API (in cloud mode) for immutable, tamper-proof audit trail
