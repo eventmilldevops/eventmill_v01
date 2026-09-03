@@ -131,11 +131,37 @@ models              # list configured models and their tier
 connect             # bind every available model (tiered auto-routing)
 new                 # start an investigation session
 pillar <name>       # set the investigation pillar
+files [filters]     # list files in the pillar and common buckets
+load <file|#N>      # register a file as an artifact
 tools               # list available plugins and the name to invoke them by
 help <tool_name>    # show a tool's arguments
 run <tool_name> ... # run a tool
 ask: <question>     # ask the LLM about the current session
 ```
+
+`files` lists what a pillar can reach. On a large store, narrow it rather than
+scrolling it — `--path <prefix>`, `--ext .log,.json`, `--newer 24h`,
+`--match "*auth*"`, `--sort time|size|name`, and `--limit N`:
+
+```
+files --ext .log --newer 24h
+    #  Path                                     Source       Size  Modified
+  ───  ──────────────────────────────────────── ─────── ─────────  ────────────
+    1  linuxdroplettest/auth.log                pillar     2.1 MB  3h ago
+    2  linuxdroplettest/auth.log.1              pillar   878.9 KB  9h ago
+```
+
+Rows are numbered, and `#N` stands in for a file wherever one is expected, so
+paths never have to be retyped:
+
+```
+load #2
+run log_navigator --action read --path #2 --line_limit 100
+```
+
+`#N` refers to the listing you last saw. It is refused rather than guessed at if
+the pillar or workspace changed since, and `run` requires the file to be loaded
+first — downloading it is `load`'s job, not a side effect of running a tool.
 
 Tools are always invoked through `run`, with arguments as `--key value` flags:
 

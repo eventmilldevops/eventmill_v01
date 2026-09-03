@@ -8,14 +8,17 @@ This is the primary user interface for Event Mill.
 from __future__ import annotations
 
 import cmd
+import fnmatch
 import json
 import os
 import random
+import re
 import shlex
 import signal
 import sys
 import threading
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,9 +43,146 @@ from ..plugins.protocol import (
     TimeoutClass,
 )
 from ..reference_data.mitre_attack import get_mitre_db
-from ..cloud.resolver import StorageResolver, StorageResolverConfig, create_local_resolver
+from ..cloud.resolver import (
+    StorageResolver,
+    StorageResolverConfig,
+    WorkspaceFile,
+    create_local_resolver,
+)
 
 logger = get_logger("cli")
+
+
+# ---------------------------------------------------------------------------
+# File listing support
+# ---------------------------------------------------------------------------
+
+_DURATION_RE = re.compile(r"^(\d+)\s*([smhdw])$", re.IGNORECASE)
+_DURATION_UNITS = {
+    "s": "seconds",
+    "m": "minutes",
+    "h": "hours",
+    "d": "days",
+    "w": "weeks",
+}
+
+_FILE_REF_RE = re.compile(r"^#(\d+)$")
+
+FILES_DEFAULT_LIMIT = 50
+
+
+def _parse_duration(text: str) -> timedelta | None:
+    """Parse a duration like ``24h`` or ``90m`` into a timedelta.
+
+    Compound forms and calendar units are rejected rather than guessed at.
+    ``m`` is minutes; there is no month unit.
+    """
+    match = _DURATION_RE.match(text.strip())
+    if not match:
+        return None
+    amount, unit = match.groups()
+    return timedelta(**{_DURATION_UNITS[unit.lower()]: int(amount)})
+
+
+def _format_bytes(size: int | None) -> str:
+    """Render a byte count in the widest unit that keeps it under 1024."""
+    if size is None:
+        return "-"
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            precision = 0 if unit == "B" else 1
+            return f"{value:.{precision}f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"
+
+
+def _format_age(moment: datetime | None) -> str:
+    """Render a timestamp as an age relative to now."""
+    if moment is None:
+        return "-"
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - moment
+    seconds = int(delta.total_seconds())
+    if seconds < 0:
+        return "just now"
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h ago"
+    if seconds < 86400 * 30:
+        return f"{seconds // 86400}d ago"
+    return moment.strftime("%Y-%m-%d")
+
+
+def _split_flags(tokens: list[str]) -> tuple[list[tuple[str, Any]], str | None]:
+    """Split --key value / --key=value / --key tokens into ordered pairs.
+
+    Returns (pairs, error). A bare flag yields True so callers can treat it
+    as a boolean. The error is a printable message when parsing fails.
+    """
+    pairs: list[tuple[str, Any]] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if not tok.startswith("--"):
+            return [], (
+                f"Unexpected token {tok!r}.\n"
+                "  Use --key value flags, or JSON for list/object arguments."
+            )
+        key, sep, inline = tok[2:].partition("=")
+        if not key:
+            return [], f"Invalid flag: {tok!r}. Use --key value or --key=value."
+        if sep:
+            pairs.append((key, inline))
+            i += 1
+        elif i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
+            pairs.append((key, tokens[i + 1]))
+            i += 2
+        else:
+            pairs.append((key, True))
+            i += 1
+    return pairs, None
+
+
+@dataclass
+class FilesQuery:
+    """Parsed arguments for the ``files`` command."""
+
+    prefix: str = ""
+    extensions: list[str] = field(default_factory=list)
+    newer_than: timedelta | None = None
+    match: str = ""
+    sort: str = "time"
+    limit: int = FILES_DEFAULT_LIMIT
+
+
+@dataclass
+class FileListingEntry:
+    """One numbered row of a ``files`` listing."""
+
+    index: int
+    file: WorkspaceFile
+    artifact_id: str | None = None
+    local_path: Path | None = None
+
+
+@dataclass
+class FileListing:
+    """The rows a ``files`` command printed, and the context it printed them in.
+
+    The context is what makes ``#3`` safe to reuse: a listing taken under a
+    different session, pillar, or workspace folder refers to different files,
+    so it is refused rather than silently resolved.
+    """
+
+    session_id: str
+    pillar: str
+    workspace_folder: str | None
+    entries: list[FileListingEntry]
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +309,7 @@ class EventMillShell(cmd.Cmd):
         self.context_builder = ContextBuilder()
         self._conversation_history: list[dict[str, str]] = []
         self._input_schema_cache: dict[str, dict[str, Any]] = {}
+        self._last_file_listing: FileListing | None = None
         
         # Initialize storage resolver
         # In Cloud Run (K_SERVICE set), use GCS resolver; otherwise local
@@ -633,43 +774,284 @@ class EventMillShell(cmd.Cmd):
 
     def do_files(self, arg: str) -> None:
         """List files available in the current pillar's storage.
-        
+
         Shows files from both the pillar bucket and the common bucket.
         If a workspace folder is set, lists files within that folder.
-        
-        Usage: files
+
+        Usage: files [--path <prefix>] [--ext .log,.json] [--newer 24h]
+                     [--match <pattern>] [--sort time|size|name] [--limit N]
+
+        Filters:
+          --path    only paths starting with this prefix, below the workspace
+          --ext     comma-separated extensions; matches any suffix, so
+                    --ext .log also matches auth.log.1
+          --newer   files modified within a duration: 90m, 24h, 7d, 2w
+          --match   substring on the path, or a glob when it contains * or ?
+
+        Display:
+          --sort    time (newest first, default), size (largest first), name
+          --limit   rows to show, default 50; --limit 0 shows all
+
+        Rows are numbered. Use #N in place of a path:
+
+          files --ext .log --newer 24h
+          load #2
+          run log_navigator --action read --path #2
         """
         session = self.session_manager.get_current_session()
         if not session:
             print("  No active session. Use 'new' to create one.")
             return
-        
+
         if not session.active_pillar:
             print("  No pillar selected. Use 'pillar <name>' first.")
             return
-        
+
         if not self.storage_resolver:
             print("  Storage resolver not initialized.")
             return
-        
-        files = self.storage_resolver.list_workspace(
+
+        query = self._parse_files_flags(arg)
+        if query is None:
+            return
+
+        listing = self.storage_resolver.list_workspace(
             pillar=session.active_pillar,
             workspace_folder=session.workspace_folder,
+            prefix=query.prefix,
         )
-        
-        if not files:
-            location = session.active_pillar
-            if session.workspace_folder:
-                location += f"/{session.workspace_folder}"
+
+        location = session.active_pillar
+        if session.workspace_folder:
+            location += f"/{session.workspace_folder}"
+
+        if not listing.files:
             print(f"  No files found in {location} or common bucket.")
+            if query.prefix:
+                print(f"  Prefix filter: {query.prefix}")
             return
-        
-        print(f"  {'Filename':40s} {'Source':10s} Path")
-        print(f"  {'─' * 40} {'─' * 10} {'─' * 40}")
-        
+
+        matched = self._apply_files_filters(listing.files, query)
+        if not matched:
+            print(f"  No files in {location} match those filters.")
+            print(f"  {len(listing.files)} file(s) before filtering.")
+            return
+
+        shown = matched if query.limit == 0 else matched[: query.limit]
+        entries = [
+            FileListingEntry(index=i, file=f) for i, f in enumerate(shown, start=1)
+        ]
+
+        self._last_file_listing = FileListing(
+            session_id=session.session_id,
+            pillar=session.active_pillar,
+            workspace_folder=session.workspace_folder,
+            entries=entries,
+        )
+
+        self._render_file_table(entries, len(matched), listing.truncated)
+
+    def _parse_files_flags(self, arg: str) -> FilesQuery | None:
+        """Parse flags for 'files'. Returns None after printing on error."""
+        query = FilesQuery()
+        if not arg.strip():
+            return query
+
+        try:
+            tokens = shlex.split(arg.strip())
+        except ValueError as e:
+            print(f"  Could not parse arguments: {e}")
+            return None
+
+        pairs, error = _split_flags(tokens)
+        if error:
+            print(f"  {error}")
+            return None
+
+        for key, value in pairs:
+            if value is True and key not in ("help",):
+                print(f"  --{key} needs a value.")
+                return None
+
+            if key == "path":
+                query.prefix = str(value).replace("\\", "/").lstrip("/")
+            elif key == "ext":
+                query.extensions = [
+                    "." + part.strip().lstrip(".").lower()
+                    for part in str(value).split(",")
+                    if part.strip()
+                ]
+                if not query.extensions:
+                    print("  --ext needs at least one extension.")
+                    return None
+            elif key == "newer":
+                delta = _parse_duration(str(value))
+                if delta is None:
+                    print(f"  Could not read --newer {value!r}.")
+                    print("  Use a count and a unit: 90m, 24h, 7d, 2w.")
+                    return None
+                query.newer_than = delta
+            elif key == "match":
+                query.match = str(value)
+            elif key == "sort":
+                if str(value) not in ("time", "size", "name"):
+                    print(f"  Unknown --sort {value!r}. Use time, size, or name.")
+                    return None
+                query.sort = str(value)
+            elif key == "limit":
+                try:
+                    limit = int(str(value))
+                except ValueError:
+                    print(f"  --limit needs a whole number, got {value!r}.")
+                    return None
+                if limit < 0:
+                    print("  --limit cannot be negative. Use 0 to show all.")
+                    return None
+                query.limit = limit
+            else:
+                print(f"  Unknown flag --{key}.")
+                print("  Use --path, --ext, --newer, --match, --sort, --limit.")
+                return None
+
+        return query
+
+    def _apply_files_filters(
+        self,
+        files: list[WorkspaceFile],
+        query: FilesQuery,
+    ) -> list[WorkspaceFile]:
+        """Apply the shell-side filters and ordering to a listing."""
+        cutoff = (
+            datetime.now(timezone.utc) - query.newer_than
+            if query.newer_than
+            else None
+        )
+        is_glob = any(ch in query.match for ch in "*?")
+        needle = query.match.lower()
+
+        matched: list[WorkspaceFile] = []
         for f in files:
-            print(f"  {f['filename']:40s} {f['source']:10s} {f['object_path']}")
-    
+            if query.extensions:
+                suffixes = [s.lower() for s in Path(f.filename).suffixes]
+                if not any(ext in suffixes for ext in query.extensions):
+                    continue
+            if cutoff is not None:
+                if f.modified is None:
+                    continue
+                moment = f.modified
+                if moment.tzinfo is None:
+                    moment = moment.replace(tzinfo=timezone.utc)
+                if moment < cutoff:
+                    continue
+            if query.match:
+                if is_glob:
+                    if not fnmatch.fnmatch(f.object_path.lower(), needle):
+                        continue
+                elif needle not in f.object_path.lower():
+                    continue
+            matched.append(f)
+
+        # Unknown size/mtime sorts last so a degraded backend stays ordered
+        if query.sort == "time":
+            matched.sort(key=lambda f: f.object_path)
+            matched.sort(
+                key=lambda f: (
+                    f.modified is None,
+                    -(f.modified.timestamp() if f.modified else 0),
+                )
+            )
+        elif query.sort == "size":
+            matched.sort(key=lambda f: f.object_path)
+            matched.sort(
+                key=lambda f: (f.size_bytes is None, -(f.size_bytes or 0))
+            )
+        else:
+            matched.sort(key=lambda f: f.object_path)
+
+        return matched
+
+    def _render_file_table(
+        self,
+        entries: list[FileListingEntry],
+        total: int,
+        truncated: bool,
+    ) -> None:
+        """Print a numbered file listing."""
+        print(f"  {'#':>3s}  {'Path':40s} {'Source':7s} {'Size':>9s}  Modified")
+        print(f"  {'─' * 3}  {'─' * 40} {'─' * 7} {'─' * 9}  {'─' * 12}")
+
+        for entry in entries:
+            f = entry.file
+            path = f.object_path
+            if len(path) > 40:
+                path = "..." + path[-37:]
+            size = _format_bytes(f.size_bytes)
+            print(
+                f"  {entry.index:>3d}  {path:40s} {f.source:7s} "
+                f"{size:>9s}  {_format_age(f.modified)}"
+            )
+
+        hidden = total - len(entries)
+        if hidden > 0:
+            print(f"\n  ... and {hidden} more. Use --limit 0 to show all.")
+        if truncated:
+            print("\n  ⚠ Listing hit the per-bucket object cap; filters saw")
+            print("    only part of the store. Narrow it with --path <prefix>.")
+
+    def complete_files(
+        self,
+        text: str,
+        line: str,
+        begidx: int,
+        endidx: int,
+    ) -> list[str]:
+        """Complete flag names for 'files'."""
+        flags = ["--path", "--ext", "--newer", "--match", "--sort", "--limit"]
+        return [f for f in flags if f.startswith(text)]
+
+    def _resolve_file_ref(self, ref: str) -> FileListingEntry | None:
+        """Look up a '#N' reference against the last 'files' listing.
+
+        Returns None after printing why when there is no listing, the
+        listing was taken elsewhere, or the index is out of range.
+        """
+        match = _FILE_REF_RE.match(ref)
+        if not match:
+            return None
+
+        listing = self._last_file_listing
+        if listing is None:
+            print(f"  No file listing to resolve {ref} against. Run 'files' first.")
+            return None
+
+        session = self.session_manager.get_current_session()
+        if not session:
+            print("  No active session.")
+            return None
+
+        current = (session.session_id, session.active_pillar, session.workspace_folder)
+        taken = (listing.session_id, listing.pillar, listing.workspace_folder)
+        if current != taken:
+            def label(pillar: str, folder: str | None) -> str:
+                return f"{pillar}:{folder}" if folder else str(pillar)
+
+            was = label(listing.pillar, listing.workspace_folder)
+            now = label(session.active_pillar, session.workspace_folder)
+            print(f"  {ref} was listed under {was};")
+            print(f"  you are now in {now}. Run 'files' again.")
+            return None
+
+        index = int(match.group(1))
+        if index < 1 or index > len(listing.entries):
+            print(
+                f"  {ref} is out of range; the last listing had "
+                f"{len(listing.entries)} row(s)."
+            )
+            return None
+
+        return listing.entries[index - 1]
+
+
     # -------------------------------------------------------------------
     # Artifact Commands
     # -------------------------------------------------------------------
@@ -711,12 +1093,26 @@ class EventMillShell(cmd.Cmd):
             parts = [p for p in parts if p != "--fast"]
         
         file_ref = parts[0]
+        listing_entry: FileListingEntry | None = None
+        if _FILE_REF_RE.match(file_ref):
+            listing_entry = self._resolve_file_ref(file_ref)
+            if listing_entry is None:
+                return
+            # The URI is exact, so this skips re-resolution entirely
+            file_ref = listing_entry.file.uri
+            print(f"  {parts[0]} → {file_ref}")
+
         file_path = Path(file_ref)
-        
+
         # Try local file first
         if file_path.exists():
             artifact_type = parts[1] if len(parts) > 1 else self._infer_artifact_type(file_path)
-            self._register_local_artifact(file_path, artifact_type, use_dpkt=use_dpkt)
+            artifact_id = self._register_local_artifact(
+                file_path, artifact_type, use_dpkt=use_dpkt
+            )
+            if listing_entry:
+                listing_entry.artifact_id = artifact_id
+                listing_entry.local_path = file_path
             return
         
         # Try storage resolver (gs:// URI or filename lookup in buckets)
@@ -748,7 +1144,15 @@ class EventMillShell(cmd.Cmd):
                     return
                 
                 artifact_type = parts[1] if len(parts) > 1 else self._infer_artifact_type(local_dest)
-                self._register_local_artifact(local_dest, artifact_type, source_info=resolved.display, use_dpkt=use_dpkt)
+                artifact_id = self._register_local_artifact(
+                    local_dest,
+                    artifact_type,
+                    source_info=resolved.display,
+                    use_dpkt=use_dpkt,
+                )
+                if listing_entry:
+                    listing_entry.artifact_id = artifact_id
+                    listing_entry.local_path = local_dest
                 return
         
         # Nothing found
@@ -792,8 +1196,12 @@ class EventMillShell(cmd.Cmd):
         artifact_type: str,
         source_info: str | None = None,
         use_dpkt: bool = False,
-    ) -> None:
-        """Register a local file as an artifact in the current session."""
+    ) -> str:
+        """Register a local file as an artifact in the current session.
+
+        Returns the new artifact id so callers can associate it with the
+        listing row the file came from.
+        """
         metadata = self._artifact_metadata(file_path)
         artifact = self.session_manager.register_artifact(
             artifact_type=artifact_type,
@@ -825,6 +1233,8 @@ class EventMillShell(cmd.Cmd):
         # Auto-parse PCAP files (mirrors event_mill v1 load_pcap behaviour)
         if artifact_type == "pcap":
             self._auto_parse_pcap(file_path, use_dpkt=use_dpkt)
+
+        return artifact.artifact_id
 
     def _auto_parse_pcap(self, file_path: Path, use_dpkt: bool = False) -> None:
         """Automatically parse a PCAP so downstream tools work immediately.
@@ -960,10 +1370,18 @@ class EventMillShell(cmd.Cmd):
         """Resolve a PCAP reference to a gs:// URI.
 
         Resolution order:
-          1. Already a gs:// URI → use as-is
-          2. Filename → look in network forensics bucket (workspace, then root)
-          3. Filename → look in common bucket
+          1. #N from the last 'files' listing → that row's URI
+          2. Already a gs:// URI → use as-is
+          3. Filename → look in network forensics bucket (workspace, then root)
+          4. Filename → look in common bucket
         """
+        if _FILE_REF_RE.match(pcap_ref):
+            entry = self._resolve_file_ref(pcap_ref)
+            if entry is None:
+                return None
+            print(f"  {pcap_ref} → {entry.file.uri}")
+            return entry.file.uri
+
         # 1. Explicit gs:// URI
         if pcap_ref.startswith("gs://"):
             return pcap_ref
@@ -1662,6 +2080,67 @@ class EventMillShell(cmd.Cmd):
 
         return value, None
 
+    def _local_path_for_entry(self, entry: FileListingEntry) -> Path | None:
+        """Find the local copy of a listed file, if it has been loaded.
+
+        Uses the id recorded when the row itself was loaded, and otherwise
+        falls back to matching a session artifact by filename so a plain
+        'load auth.log' still satisfies a later '#N'.
+        """
+        if entry.local_path and entry.local_path.exists():
+            return entry.local_path
+
+        for artifact in self.session_manager.list_artifacts():
+            candidate = Path(artifact.file_path)
+            if candidate.name == entry.file.filename and candidate.exists():
+                entry.artifact_id = artifact.artifact_id
+                entry.local_path = candidate
+                return candidate
+
+        return None
+
+    def _expand_file_refs(
+        self,
+        pairs: list[tuple[str, Any]],
+    ) -> tuple[list[tuple[str, Any]], bool]:
+        """Replace '#N' flag values with the local path of that listed file.
+
+        Only a value that is exactly '#N' is treated as a reference, so a
+        literal like --query "#3" is untouched. '##N' escapes to a literal
+        '#N'. Returns (pairs, ok); ok is False after printing an error.
+        """
+        expanded: list[tuple[str, Any]] = []
+        for key, value in pairs:
+            if not isinstance(value, str):
+                expanded.append((key, value))
+                continue
+
+            if value.startswith("##"):
+                expanded.append((key, value[1:]))
+                continue
+
+            if not _FILE_REF_RE.match(value):
+                expanded.append((key, value))
+                continue
+
+            entry = self._resolve_file_ref(value)
+            if entry is None:
+                return [], False
+
+            local = self._local_path_for_entry(entry)
+            if local is None:
+                print(
+                    f"  {value} is a stored file "
+                    f"({entry.file.object_path}), not a local one."
+                )
+                print(f"  Load it first:  load {value}")
+                return [], False
+
+            print(f"  {value} → {local}")
+            expanded.append((key, str(local)))
+
+        return expanded, True
+
     def _parse_flag_payload(self, raw: str, plugin: LoadedPlugin) -> dict[str, Any] | None:
         """Parse --key value flags into a typed payload.
 
@@ -1675,27 +2154,15 @@ class EventMillShell(cmd.Cmd):
             print(f"  Could not parse arguments: {e}")
             return None
 
-        pairs: list[tuple[str, Any]] = []
-        i = 0
-        while i < len(tokens):
-            tok = tokens[i]
-            if not tok.startswith("--"):
-                print(f"  Unexpected token {tok!r}.")
-                print("  Use --key value flags, or JSON for list/object arguments.")
-                return None
-            key, sep, inline = tok[2:].partition("=")
-            if not key:
-                print(f"  Invalid flag: {tok!r}. Use --key value or --key=value.")
-                return None
-            if sep:
-                pairs.append((key, inline))
-                i += 1
-            elif i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
-                pairs.append((key, tokens[i + 1]))
-                i += 2
-            else:
-                pairs.append((key, True))
-                i += 1
+        pairs, error = _split_flags(tokens)
+        if error:
+            print(f"  {error}")
+            return None
+
+        expanded, ok = self._expand_file_refs(pairs)
+        if not ok:
+            return None
+        pairs = expanded
 
         schema = self._plugin_input_schema(plugin)
         payload: dict[str, Any] = {}
@@ -1736,6 +2203,8 @@ class EventMillShell(cmd.Cmd):
           --key=value      same, needed when the value starts with '-'
           --key            a boolean flag, sets it true
           --key a,b,c      a list of text values
+          --key #3         file #3 from the last 'files' listing, which
+                           must already be loaded; --key ##3 is a literal
 
         JSON is the alternative for arguments a flag cannot express — lists of
         objects, or nested structures:

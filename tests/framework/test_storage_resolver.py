@@ -220,8 +220,8 @@ class TestListWorkspace:
         _write_file(storage_base, "testmill-log-analysis", "a.log")
         _write_file(storage_base, "testmill-common", "shared.json")
 
-        files = resolver.list_workspace(pillar=Pillar.LOG_ANALYSIS)
-        filenames = {f["filename"] for f in files}
+        listing = resolver.list_workspace(pillar=Pillar.LOG_ANALYSIS)
+        filenames = {f.filename for f in listing.files}
         assert "a.log" in filenames
         assert "shared.json" in filenames
 
@@ -229,26 +229,112 @@ class TestListWorkspace:
         _write_file(storage_base, "testmill-log-analysis", "dup.txt", content="pillar")
         _write_file(storage_base, "testmill-common", "dup.txt", content="common")
 
-        files = resolver.list_workspace(pillar=Pillar.LOG_ANALYSIS)
-        dup_entries = [f for f in files if f["filename"] == "dup.txt"]
+        listing = resolver.list_workspace(pillar=Pillar.LOG_ANALYSIS)
+        dup_entries = [f for f in listing.files if f.filename == "dup.txt"]
         assert len(dup_entries) == 1
-        assert dup_entries[0]["source"] == "pillar"
+        assert dup_entries[0].source == "pillar"
 
     def test_workspace_filter(self, resolver: StorageResolver, storage_base: Path):
         _write_file(storage_base, "testmill-log-analysis", "inc-1/a.log")
         _write_file(storage_base, "testmill-log-analysis", "inc-2/b.log")
 
-        files = resolver.list_workspace(
+        listing = resolver.list_workspace(
             pillar=Pillar.LOG_ANALYSIS,
             workspace_folder="inc-1",
         )
-        filenames = {f["filename"] for f in files}
+        filenames = {f.filename for f in listing.files}
         assert "a.log" in filenames
         assert "b.log" not in filenames
 
     def test_empty_bucket(self, resolver: StorageResolver):
-        files = resolver.list_workspace(pillar=Pillar.NETWORK_FORENSICS)
-        assert files == []
+        listing = resolver.list_workspace(pillar=Pillar.NETWORK_FORENSICS)
+        assert listing.files == []
+        assert listing.truncated is False
+
+    def test_same_basename_in_different_folders_both_listed(
+        self, resolver: StorageResolver, storage_base: Path
+    ):
+        """Distinct files sharing a basename must not collapse into one row."""
+        _write_file(storage_base, "testmill-log-analysis", "inc-1/auth.log")
+        _write_file(storage_base, "testmill-log-analysis", "inc-2/auth.log")
+
+        listing = resolver.list_workspace(pillar=Pillar.LOG_ANALYSIS)
+        paths = {f.object_path for f in listing.files}
+        assert paths == {"inc-1/auth.log", "inc-2/auth.log"}
+
+    def test_prefix_narrows_listing(
+        self, resolver: StorageResolver, storage_base: Path
+    ):
+        _write_file(storage_base, "testmill-log-analysis", "inc-1/a.log")
+        _write_file(storage_base, "testmill-log-analysis", "inc-2/b.log")
+
+        listing = resolver.list_workspace(
+            pillar=Pillar.LOG_ANALYSIS,
+            prefix="inc-1/",
+        )
+        assert {f.filename for f in listing.files} == {"a.log"}
+
+    def test_partial_segment_prefix_matches_like_object_store(
+        self, resolver: StorageResolver, storage_base: Path
+    ):
+        """A prefix need not be a whole directory name, as on GCS."""
+        _write_file(storage_base, "testmill-log-analysis", "inc-1/a.log")
+        _write_file(storage_base, "testmill-log-analysis", "inc-2/b.log")
+        _write_file(storage_base, "testmill-log-analysis", "other/c.log")
+
+        listing = resolver.list_workspace(pillar=Pillar.LOG_ANALYSIS, prefix="inc")
+        assert {f.filename for f in listing.files} == {"a.log", "b.log"}
+
+    def test_prefix_composes_with_workspace(
+        self, resolver: StorageResolver, storage_base: Path
+    ):
+        _write_file(storage_base, "testmill-log-analysis", "inc-1/web/a.log")
+        _write_file(storage_base, "testmill-log-analysis", "inc-1/db/b.log")
+
+        listing = resolver.list_workspace(
+            pillar=Pillar.LOG_ANALYSIS,
+            workspace_folder="inc-1",
+            prefix="web/",
+        )
+        assert {f.filename for f in listing.files} == {"a.log"}
+
+    def test_size_and_mtime_populated(
+        self, resolver: StorageResolver, storage_base: Path
+    ):
+        _write_file(storage_base, "testmill-log-analysis", "a.log", content="hello")
+
+        listing = resolver.list_workspace(pillar=Pillar.LOG_ANALYSIS)
+        entry = next(f for f in listing.files if f.filename == "a.log")
+        assert entry.size_bytes == 5
+        assert entry.modified is not None
+        # Aware UTC, so it is comparable with values from other backends
+        assert entry.modified.tzinfo is not None
+
+    def test_truncated_flag_set_at_cap(
+        self, resolver: StorageResolver, storage_base: Path
+    ):
+        for i in range(4):
+            _write_file(storage_base, "testmill-log-analysis", f"f{i}.log")
+
+        listing = resolver.list_workspace(pillar=Pillar.LOG_ANALYSIS, max_results=2)
+        assert listing.truncated is True
+
+    def test_uri_round_trips_to_resolve(
+        self, resolver: StorageResolver, storage_base: Path
+    ):
+        """A listed file's uri must resolve without re-running the lookup."""
+        _write_file(storage_base, "testmill-log-analysis", "inc-1/auth.log")
+
+        listing = resolver.list_workspace(pillar=Pillar.LOG_ANALYSIS)
+        entry = listing.files[0]
+
+        resolved = resolver.resolve(
+            filename="",
+            pillar=Pillar.LOG_ANALYSIS,
+            explicit_path=entry.uri,
+        )
+        assert resolved is not None
+        assert resolved.object_path == "inc-1/auth.log"
 
 
 # ---------------------------------------------------------------------------

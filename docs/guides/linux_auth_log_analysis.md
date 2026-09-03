@@ -60,17 +60,30 @@ pillar bucket. The file paths reveal which workspace folders exist:
 
 ```
 eventmill (log_analysis) > files
-  Filename                                 Source     Path
-  ──────────────────────────────────────── ────────── ────────────────────────────────────────
-  auth.log                                 pillar     linuxdroplettest/auth.log
-  auth.log.1                               pillar     linuxdroplettest/auth.log.1
-  auth.log.2                               pillar     linuxdroplettest/auth.log.2
-  auth.log.3                               pillar     linuxdroplettest/auth.log.3
-  auth.log.4                               pillar     linuxdroplettest/auth.log.4
+    #  Path                                     Source       Size  Modified
+  ───  ──────────────────────────────────────── ─────── ─────────  ────────────
+    1  linuxdroplettest/auth.log                pillar     2.1 MB  3h ago
+    2  linuxdroplettest/auth.log.1              pillar   878.9 KB  1d ago
+    3  linuxdroplettest/auth.log.2              pillar     1.4 MB  8d ago
+    4  linuxdroplettest/auth.log.3              pillar     1.1 MB  15d ago
+    5  linuxdroplettest/auth.log.4              pillar   902.4 KB  22d ago
 ```
 
 The **Path** column shows that all files live under the
 `linuxdroplettest/` folder. This is the workspace you need.
+
+Listings are ordered newest first and capped at 50 rows. On a larger
+store, narrow the listing rather than scrolling it:
+
+```
+files --path linuxdroplettest    # one folder
+files --ext .log --newer 24h     # recent logs only
+files --match "*auth*"           # by name
+files --sort size --limit 10     # the ten largest
+```
+
+`--ext .log` matches any suffix, so it finds `auth.log.1` as well as
+`auth.log`. Durations take a count and a unit: `90m`, `24h`, `7d`, `2w`.
 
 ---
 
@@ -96,17 +109,28 @@ current pillar bucket and workspace:
 
 ```
 eventmill (log_analysis:linuxdroplettest) > files
-  Filename                                 Source     Path
-  ──────────────────────────────────────── ────────── ────────────────────────────────────────
-  auth.log                                 pillar     linuxdroplettest/auth.log
-  auth.log.1                               pillar     linuxdroplettest/auth.log.1
-  auth.log.2                               pillar     linuxdroplettest/auth.log.2
-  auth.log.3                               pillar     linuxdroplettest/auth.log.3
-  auth.log.4                               pillar     linuxdroplettest/auth.log.4
+    #  Path                                     Source       Size  Modified
+  ───  ──────────────────────────────────────── ─────── ─────────  ────────────
+    1  linuxdroplettest/auth.log                pillar     2.1 MB  3h ago
+    2  linuxdroplettest/auth.log.1              pillar   878.9 KB  1d ago
+    3  linuxdroplettest/auth.log.2              pillar     1.4 MB  8d ago
+    4  linuxdroplettest/auth.log.3              pillar     1.1 MB  15d ago
+    5  linuxdroplettest/auth.log.4              pillar   902.4 KB  22d ago
 ```
 
 Files are resolved from the pillar bucket first, then the common bucket.
 The **Source** column tells you where each file lives.
+
+The **#** column is a handle on the row. Use `#N` anywhere a file is
+expected and you never have to retype a path:
+
+```
+load #1                                    # instead of load auth.log
+run log_navigator --action read --path #1  # once #1 is loaded
+```
+
+A `#N` refers to the listing you last saw, so it is refused rather than
+guessed at if you change pillar or workspace in between.
 
 ---
 
@@ -358,8 +382,8 @@ pillar.
 | `new [description]` | Create a new investigation session |
 | `pillar log_analysis` | Set the active pillar |
 | `workspace <folder>` | Scope file resolution to a subfolder |
-| `files` | List available files in pillar + common buckets |
-| `load <filename>` | Download and register a file as an artifact |
+| `files [filters]` | List available files; `--path`, `--ext`, `--newer`, `--match`, `--sort`, `--limit` |
+| `load <filename\|#N>` | Download and register a file as an artifact |
 | `artifacts` | List loaded artifacts |
 | `tools` | List available tools |
 | `run <tool> <json>` | Execute a tool with a JSON payload |
@@ -374,7 +398,7 @@ pillar.
 
 ```
 new → pillar log_analysis → files (discover workspaces)
-  → workspace <incident_id> → files (scoped listing) → load auth.log
+  → workspace <incident_id> → files --ext .log (scoped listing) → load #1
   → run log_pattern_analyzer (discover)
   → run log_searcher (Failed password / Invalid user / Accepted publickey)
   → run log_pattern_analyzer (regex: extract source IPs)

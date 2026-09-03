@@ -24,11 +24,12 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ..session.models import Pillar
-from .interfaces import StorageBackend
+from .interfaces import StorageBackend, StoredObject
 
 logger = logging.getLogger("eventmill.framework.cloud.resolver")
 
@@ -46,6 +47,10 @@ PILLAR_SLUGS: dict[str, str] = {
 }
 
 COMMON_SLUG = "common"
+
+# Ceiling on objects fetched per bucket for a listing. Filters run over what
+# comes back, so a low cap would turn a display limit into a false negative.
+LIST_MAX_RESULTS = 5000
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +161,35 @@ class ResolvedPath:
         if self.workspace_folder:
             label += f" (workspace: {self.workspace_folder})"
         return f"{label}: {self.uri}"
+
+
+@dataclass
+class WorkspaceFile:
+    """One file visible to a pillar, as listed by ``list_workspace``."""
+
+    filename: str
+    bucket: str
+    source: str  # "pillar" or "common"
+    object_path: str
+    size_bytes: int | None = None
+    modified: datetime | None = None
+
+    @property
+    def uri(self) -> str:
+        """Full gs:// URI, resolvable without re-running the lookup."""
+        return f"gs://{self.bucket}/{self.object_path}"
+
+
+@dataclass
+class WorkspaceListing:
+    """Result of ``list_workspace``.
+
+    ``truncated`` is True when a bucket returned as many objects as were
+    asked for, meaning filters downstream only saw part of the store.
+    """
+
+    files: list[WorkspaceFile] = field(default_factory=list)
+    truncated: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -290,48 +324,73 @@ class StorageResolver:
         pillar: str,
         workspace_folder: str | None = None,
         include_common: bool = True,
-    ) -> list[dict[str, str]]:
+        prefix: str = "",
+        max_results: int = LIST_MAX_RESULTS,
+    ) -> WorkspaceListing:
         """List files available to a pillar, optionally within a workspace.
 
-        Returns a list of dicts with keys ``filename``, ``bucket``,
-        ``source`` (``"pillar"`` or ``"common"``), and ``object_path``.
+        Deduplication follows the two rules resolution itself uses. Within
+        a bucket, objects are distinct by ``object_path``, so files sharing
+        a basename in different folders are all listed. Across buckets, a
+        common-bucket file is hidden by a pillar-bucket file of the same
+        name, mirroring the pillar-wins precedence of :meth:`resolve`.
         """
-        results: list[dict[str, str]] = []
-        seen_filenames: set[str] = set()
+        files: list[WorkspaceFile] = []
+        truncated = False
+        seen_paths: set[str] = set()
+        pillar_basenames: set[str] = set()
 
         pillar_bucket = self.config.bucket_for_pillar(pillar)
         common_bucket = self.config.common_bucket()
 
+        base_prefix = f"{workspace_folder}/" if workspace_folder else ""
+        full_prefix = f"{base_prefix}{prefix}" if prefix else base_prefix
+
         # Pillar bucket (takes precedence)
-        prefix = f"{workspace_folder}/" if workspace_folder else ""
-        for obj_path in self._list(pillar_bucket, prefix):
-            # Normalize separators (LocalStorageBackend may return OS-native paths)
-            obj_path = obj_path.replace("\\", "/")
+        objects = self._list_detailed(pillar_bucket, full_prefix, max_results)
+        truncated = truncated or len(objects) >= max_results
+        for obj in objects:
+            obj_path = obj.path.replace("\\", "/")
             fname = obj_path.rsplit("/", 1)[-1] if "/" in obj_path else obj_path
-            if fname and fname not in seen_filenames:
-                seen_filenames.add(fname)
-                results.append({
-                    "filename": fname,
-                    "bucket": pillar_bucket,
-                    "source": "pillar",
-                    "object_path": obj_path,
-                })
+            if not fname or obj_path in seen_paths:
+                continue
+            seen_paths.add(obj_path)
+            pillar_basenames.add(fname)
+            files.append(
+                WorkspaceFile(
+                    filename=fname,
+                    bucket=pillar_bucket,
+                    source="pillar",
+                    object_path=obj_path,
+                    size_bytes=obj.size_bytes,
+                    modified=obj.modified,
+                )
+            )
 
         # Common bucket
         if include_common:
-            for obj_path in self._list(common_bucket, prefix):
-                obj_path = obj_path.replace("\\", "/")
+            objects = self._list_detailed(common_bucket, full_prefix, max_results)
+            truncated = truncated or len(objects) >= max_results
+            for obj in objects:
+                obj_path = obj.path.replace("\\", "/")
                 fname = obj_path.rsplit("/", 1)[-1] if "/" in obj_path else obj_path
-                if fname and fname not in seen_filenames:
-                    seen_filenames.add(fname)
-                    results.append({
-                        "filename": fname,
-                        "bucket": common_bucket,
-                        "source": "common",
-                        "object_path": obj_path,
-                    })
+                if not fname or obj_path in seen_paths:
+                    continue
+                if fname in pillar_basenames:
+                    continue
+                seen_paths.add(obj_path)
+                files.append(
+                    WorkspaceFile(
+                        filename=fname,
+                        bucket=common_bucket,
+                        source="common",
+                        object_path=obj_path,
+                        size_bytes=obj.size_bytes,
+                        modified=obj.modified,
+                    )
+                )
 
-        return results
+        return WorkspaceListing(files=files, truncated=truncated)
 
     def upload(
         self,
@@ -428,11 +487,19 @@ class StorageResolver:
             logger.debug("exists check failed for %s/%s: %s", bucket, object_path, exc)
             return False
 
-    def _list(self, bucket: str, prefix: str = "") -> list[str]:
-        """List objects in a bucket under a prefix."""
+    def _list_detailed(
+        self,
+        bucket: str,
+        prefix: str = "",
+        max_results: int = LIST_MAX_RESULTS,
+    ) -> list[StoredObject]:
+        """List objects in a bucket under a prefix, with metadata."""
         try:
             backend = self._get_backend(bucket)
-            return backend.list_files(prefix=prefix)
+            return backend.list_files_detailed(
+                prefix=prefix,
+                max_results=max_results,
+            )
         except (ValueError, Exception) as exc:
             logger.debug("list failed for %s/%s: %s", bucket, prefix, exc)
             return []
