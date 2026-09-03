@@ -683,17 +683,26 @@ class EventMillShell(cmd.Cmd):
         for b in buckets:
             print(f"  {b['pillar']:25s} {b['bucket']:40s} {b['type']}")
 
+    # Tools whose outputs are exported to the common bucket automatically
+    # after each run when the shell is on Cloud Run (or EVENTMILL_AUTO_EXPORT=1).
+    # Override with EVENTMILL_AUTO_EXPORT_TOOLS ("*" = every tool, "" = none).
+    DEFAULT_AUTO_EXPORT_TOOLS = "attack_path_visualizer"
+
     def do_export(self, arg: str) -> None:
-        """Export a session artifact to the common storage bucket.
+        """Export session artifacts to the common storage bucket.
 
         Writes to common/exports/<source_tool>/ by default — mirroring the
-        common/generated/ convention used by threat_report_analyzer.  Intended
-        for troubleshooting or handing off JSON/MMD outputs to external tools.
-        Not required for normal in-container workflows.
+        common/generated/ convention used by threat_report_analyzer.  On Cloud
+        Run this is the durable copy: the container's workspace/artifacts is
+        ephemeral and disappears when the instance is recycled.
 
         Usage: export <artifact_id> [subfolder]
+               export --all [subfolder]
 
         artifact_id — ID from the 'artifacts' command (e.g. art_04d30b48)
+        --all       — Export every tool-produced artifact in the session
+                      (inputs you loaded from a bucket are skipped; they are
+                      already there).
         subfolder   — Optional path appended inside exports/<source_tool>/.
                       Useful for tagging by incident (e.g. incident-2025-04).
 
@@ -704,35 +713,71 @@ class EventMillShell(cmd.Cmd):
         Examples:
           export art_04d30b48
           export art_04d30b48 incident-2025-04
+          export --all crowdstrike-2026
+
+        On Cloud Run, attack_path_visualizer outputs are exported automatically
+        after each run (see EVENTMILL_AUTO_EXPORT_TOOLS).
         """
         if not self.session_manager.get_current_session():
             print("  No active session. Use 'session new' first.")
             return
-
         if not self.storage_resolver:
             print("  Storage resolver not initialized.")
             return
 
         parts = shlex.split(arg) if arg.strip() else []
         if not parts:
-            print("  Usage: export <artifact_id> [subfolder]")
+            print("  Usage: export <artifact_id> [subfolder]  |  export --all [subfolder]")
+            return
+
+        if parts[0] == "--all":
+            subfolder = parts[1] if len(parts) > 1 else None
+            self._export_all(subfolder)
             return
 
         artifact_id = parts[0]
         subfolder = parts[1] if len(parts) > 1 else None
 
-        # Resolve artifact
         artifact = self.session_manager.get_artifact(artifact_id)
         if artifact is None:
             print(f"  Artifact '{artifact_id}' not found. Use 'artifacts' to list.")
             return
+        print(f"  Exporting {artifact_id} ({artifact.artifact_type})")
+        self._export_artifact(artifact, subfolder)
 
-        local_path = Path(artifact.file_path)
-        if not local_path.exists():
-            print(f"  Artifact file missing on disk: {local_path}")
+    def _export_all(self, subfolder: str | None) -> None:
+        """Export every tool-produced artifact in the session."""
+        artifacts = self.session_manager.list_artifacts()
+        produced = [a for a in artifacts if getattr(a, "source_tool", None)]
+        skipped_inputs = len(artifacts) - len(produced)
+        if not produced:
+            print("  No tool-produced artifacts to export.")
+            if skipped_inputs:
+                print(f"  ({skipped_inputs} loaded input(s) skipped — already in a bucket.)")
             return
 
-        # Build destination folder: exports/<source_tool>[/<subfolder>]
+        print(f"  Exporting {len(produced)} tool-produced artifact(s)"
+              + (f" to subfolder '{subfolder}'" if subfolder else "") + " ...")
+        ok = 0
+        for a in produced:
+            print(f"  {a.artifact_id} ({a.artifact_type}, {a.source_tool})")
+            if self._export_artifact(a, subfolder, indent="    "):
+                ok += 1
+        print(f"  Exported {ok}/{len(produced)}."
+              + (f" {skipped_inputs} loaded input(s) skipped." if skipped_inputs else ""))
+
+    def _export_artifact(
+        self, artifact: Any, subfolder: str | None, indent: str = "  "
+    ) -> str | None:
+        """Upload one artifact to common/exports/<source_tool>[/<subfolder>]/.
+
+        Returns the destination URI, or None if the export did not happen.
+        """
+        local_path = Path(artifact.file_path)
+        if not local_path.exists():
+            print(f"{indent}✗ Artifact file missing on disk: {local_path}")
+            return None
+
         source_tool = getattr(artifact, "source_tool", None) or "unknown"
         dest_folder = f"exports/{source_tool}"
         if subfolder:
@@ -742,13 +787,9 @@ class EventMillShell(cmd.Cmd):
         # since target="common" it won't be used for routing, but must be valid.
         session = self.session_manager.get_current_session()
         pillar = session.active_pillar or "log_analysis"
-
         filename = local_path.name
         common_bucket = self.storage_resolver.config.common_bucket()
-
-        print(f"  Exporting {artifact_id} ({artifact.artifact_type})")
-        print(f"  Destination: {common_bucket}/{dest_folder}/{filename}")
-
+        print(f"{indent}Destination: {common_bucket}/{dest_folder}/{filename}")
         try:
             resolved = self.storage_resolver.upload(
                 local_path=local_path,
@@ -757,20 +798,57 @@ class EventMillShell(cmd.Cmd):
                 workspace_folder=dest_folder,
                 target="common",
                 metadata={
-                    "artifact_id": artifact_id,
+                    "artifact_id": artifact.artifact_id,
                     "artifact_type": artifact.artifact_type,
                     "source_tool": source_tool,
                 },
             )
-            print(f"  ✓ Uploaded: {resolved.uri}")
+            print(f"{indent}✓ Uploaded: {resolved.uri}")
             log_user_activity("export_artifact", {
-                "artifact_id": artifact_id,
+                "artifact_id": artifact.artifact_id,
                 "destination": resolved.uri,
                 "source_tool": source_tool,
             })
+            return resolved.uri
         except Exception as e:
-            print(f"  ✗ Export failed: {e}")
+            print(f"{indent}✗ Export failed: {e}")
             logger.error("Artifact export failed: %s", e)
+            return None
+
+    def _auto_export_enabled(self, tool_name: str) -> bool:
+        """Auto-export runs on Cloud Run (K_SERVICE) or when EVENTMILL_AUTO_EXPORT=1,
+        for the tools named in EVENTMILL_AUTO_EXPORT_TOOLS."""
+        on_cloud_run = bool(os.environ.get("K_SERVICE"))
+        forced = os.environ.get("EVENTMILL_AUTO_EXPORT", "") == "1"
+        if not (on_cloud_run or forced):
+            return False
+        raw = os.environ.get("EVENTMILL_AUTO_EXPORT_TOOLS")
+        if raw is None:
+            raw = self.DEFAULT_AUTO_EXPORT_TOOLS
+        tools = {t.strip() for t in raw.split(",") if t.strip()}
+        return "*" in tools or tool_name in tools
+
+    def _auto_export_run_output(self, tool_name: str, artifacts_before: set[str]) -> None:
+        """Push the artifacts a run just produced to the common bucket.
+
+        Only for tools selected by _auto_export_enabled.  Failures are
+        reported but never fail the run — the files are still on disk and
+        can be exported by hand.
+        """
+        if not self._auto_export_enabled(tool_name):
+            return
+        new_artifacts = [
+            a for a in self.session_manager.list_artifacts()
+            if a.artifact_id not in artifacts_before
+        ]
+        if not new_artifacts:
+            return
+        if not self.storage_resolver:
+            print("  Auto-export skipped: storage resolver not initialized.")
+            return
+        print(f"\n  Auto-export ({len(new_artifacts)} file(s) to the common bucket):")
+        for a in new_artifacts:
+            self._export_artifact(a, None, indent="    ")
 
     def do_files(self, arg: str) -> None:
         """List files available in the current pillar's storage.
@@ -2429,6 +2507,8 @@ class EventMillShell(cmd.Cmd):
                 
                 print(f"  ✓ Completed successfully")
                 print(f"\n  Summary:\n  {summary}")
+                self._print_run_output(result, _artifacts_before)
+                self._auto_export_run_output(tool_name, _artifacts_before)
             else:
                 self.session_manager.complete_execution(
                     execution=execution,
@@ -2465,6 +2545,100 @@ class EventMillShell(cmd.Cmd):
             
             print(f"  ✗ Error: {e}")
             logger.exception("Tool execution failed: %s", tool_name)
+
+    def _print_run_output(self, result: Any, artifacts_before: set[str]) -> None:
+        """Show the full rendered output and the files a run produced.
+
+        summarize_for_llm() is capped at 2000 characters because it feeds the
+        LLM context; it is not the user's copy of the result.  Tools that
+        return a rendering under 'visualization' get it printed in full here,
+        and every artifact registered by the run is listed with its path, so
+        nothing is lost when the summary is cut short.
+        """
+        data = result.result or {}
+        viz = data.get("visualization")
+        if isinstance(viz, str) and viz.strip():
+            print("\n  Rendered output:")
+            for line in viz.splitlines():
+                print(f"  {line}")
+
+        new_artifacts = [
+            a for a in self.session_manager.list_artifacts()
+            if a.artifact_id not in artifacts_before
+        ]
+        if new_artifacts:
+            print("\n  Output files (use 'show <id>' to print one in full):")
+            for a in new_artifacts:
+                print(f"    {a.artifact_id:12s} {a.artifact_type:14s} {a.file_path}")
+
+    def do_show(self, arg: str) -> None:
+        """Print an artifact's contents in full.
+
+        Usage: show <artifact_id> [max_lines]
+
+        Text, markdown and Mermaid artifacts are printed as-is; JSON is
+        pretty-printed.  Use it to see a rendering the run summary cut
+        short, or to inspect a tool's JSON output.  Binary artifacts
+        (pcap, pdf) are not printed.
+        """
+        if not self.session_manager.get_current_session():
+            print("  No active session. Use 'new' to create one.")
+            return
+
+        parts = arg.strip().split()
+        if not parts:
+            print("  Usage: show <artifact_id> [max_lines]")
+            return
+        artifact_id = parts[0]
+        max_lines: int | None = None
+        if len(parts) > 1:
+            try:
+                max_lines = max(1, int(parts[1]))
+            except ValueError:
+                print(f"  max_lines must be a number, got {parts[1]!r}")
+                return
+
+        art_path = self.session_manager.get_artifact_path(artifact_id)
+        if art_path is None:
+            print(f"  Artifact not found: {artifact_id}. Use 'artifacts' to list them.")
+            return
+        art_path = Path(art_path)
+        if not art_path.exists():
+            print(f"  Artifact file is missing on disk: {art_path}")
+            return
+
+        printable = {
+            ".txt", ".md", ".mmd", ".json", ".csv", ".log", ".html",
+            ".xml", ".stix", ".yaml", ".yml", ".jsonl",
+        }
+        if art_path.suffix.lower() not in printable:
+            print(
+                f"  {art_path.name} is not a text artifact "
+                f"({art_path.suffix or 'no extension'}); nothing to print."
+            )
+            return
+
+        try:
+            content = art_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(f"  Could not read {art_path}: {exc}")
+            return
+
+        if art_path.suffix.lower() == ".json":
+            try:
+                content = json.dumps(json.loads(content), indent=2)
+            except json.JSONDecodeError:
+                pass
+
+        lines = content.splitlines()
+        shown = lines if max_lines is None else lines[:max_lines]
+        print(f"\n  {artifact_id}  {art_path}  ({len(lines)} lines)\n")
+        for line in shown:
+            print(f"  {line}")
+        if max_lines is not None and len(lines) > max_lines:
+            print(f"\n  ... {len(lines) - max_lines} more line(s); "
+                  f"run 'show {artifact_id}' without a limit to see all.")
+        print()
 
     def _auto_persist_result(
         self,

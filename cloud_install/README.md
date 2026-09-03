@@ -407,3 +407,24 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | `EVENTMILL_BUCKET_PREFIX` | Bucket prefix for pillar-based storage resolution |
 | `GCS_LOG_BUCKET` | Legacy bucket override for log_analysis pillar |
 | `GOOGLE_CLOUD_PROJECT` | Auto-set by Cloud Run — used by GCS client for project resolution |
+
+### Artifact export
+
+`workspace/artifacts` in the container is ephemeral. The `export` command
+copies session artifacts to the common bucket under
+`exports/<source_tool>/[<subfolder>/]<filename>`:
+
+```
+export <artifact_id> [subfolder]
+export --all [subfolder]          # every tool-produced artifact in the session
+```
+
+On Cloud Run (detected via `K_SERVICE`) outputs of `attack_path_visualizer`
+are exported automatically after each run. Two optional variables tune this:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `EVENTMILL_AUTO_EXPORT_TOOLS` | `attack_path_visualizer` | Comma-separated tool names to auto-export; `*` for all, empty string to disable |
+| `EVENTMILL_AUTO_EXPORT` | unset | Set to `1` to enable auto-export outside Cloud Run (local testing) |
+
+Download exported files with `gcloud storage cp gs://<prefix>-common/exports/... .`

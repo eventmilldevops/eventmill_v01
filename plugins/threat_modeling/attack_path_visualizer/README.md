@@ -84,7 +84,41 @@ The tool writes the visualization directly to a format-specific file:
 | `compact` | `workspace/artifacts/attack_path_compact_<ts>.txt` |
 | `both` | `workspace/artifacts/attack_path_both_<ts>.txt` |
 
-The file is registered as a `text` session artifact. The artifact ID and full path are shown in the run summary. `.mmd` files can be rendered directly in GitHub, VS Code, or any Mermaid-compatible viewer.
+The file is registered as a `text` session artifact. `.mmd` files can be rendered directly in GitHub, VS Code, or any Mermaid-compatible viewer.
+
+## What You See After `run`
+
+The shell prints three things:
+
+1. **Summary** — the short text that also goes into the LLM context. It is
+   capped at 2000 characters by the plugin spec, so it never contains the
+   drawing itself; it lists paths, convergence points, unconfirmed tactics,
+   and where the files are.
+2. **Rendered output** — the complete ASCII and/or Mermaid rendering, printed
+   in full. Nothing is cut.
+3. **Output files** — the artifact IDs and paths written by this run.
+
+To print any of those files again later, use `show <artifact_id>`
+(`show <artifact_id> 40` limits it to the first 40 lines). Inline `stages`
+runs that write no file of their own are auto-saved as
+`workspace/artifacts/attack_path_visualizer_<ts>.md` and listed the same way.
+
+### Keeping the files on Cloud Run
+
+`workspace/artifacts` inside the container is ephemeral. On Cloud Run the
+shell exports this tool's outputs to the common bucket automatically after
+each run, under `exports/attack_path_visualizer/`, and prints the
+`gs://` URIs. To push everything a session produced in one go (for example
+before closing the terminal):
+
+```
+export --all                 # every tool-produced artifact
+export --all crowdstrike-26  # same, under a subfolder per incident
+```
+
+Set `EVENTMILL_AUTO_EXPORT_TOOLS` to change which tools auto-export (`*` for
+all, empty to disable); set `EVENTMILL_AUTO_EXPORT=1` to enable it outside
+Cloud Run.
 
 ## Example — Direct from threat_intel_ingester
 

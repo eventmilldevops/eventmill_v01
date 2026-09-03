@@ -1058,6 +1058,18 @@ class AttackPathVisualizer:
                         "path_count": len(dag.paths),
                         "convergence_points": dag.convergence_points,
                         "branch_points": dag.branch_points,
+                        "paths": [
+                            {
+                                "path_id": p.get("path_id", "?"),
+                                "description": p.get("description", ""),
+                                "step_count": len(p.get("steps", [])),
+                            }
+                            for p in dag.paths
+                        ],
+                        "unconfirmed_tactics": [
+                            f"{n.technique_id} ({n.tactic})"
+                            for n in dag.nodes.values() if n.tactic_mismatch
+                        ],
                         "source": f"artifact:{artifact_id}",
                     },
                     output_artifacts=output_artifacts or None,
@@ -1087,6 +1099,8 @@ class AttackPathVisualizer:
                         "visualization": visualization,
                         "stages_rendered": len(present),
                         "missing_required": len(missing_req),
+                        "stage_names": [s.get("name", "?") for s in present],
+                        "missing_stage_names": [s.get("name", "?") for s in missing_req],
                         "source": f"artifact:{artifact_id}" if artifact_id else "payload",
                     },
                 )
@@ -1099,7 +1113,12 @@ class AttackPathVisualizer:
             )
 
     def summarize_for_llm(self, result: ToolResult) -> str:
-        """Compress output for LLM context."""
+        """Compress output for LLM context.
+
+        Describes what was rendered and where the full files are.  The
+        drawing itself is not embedded: the 2000-character cap would cut it
+        mid-diagram, and the shell prints the full rendering separately.
+        """
         if not result.ok:
             return f"attack_path_visualizer failed: {result.message}"
 
@@ -1110,35 +1129,52 @@ class AttackPathVisualizer:
         path_count = data.get("path_count")
         convergence = data.get("convergence_points", [])
 
+        parts: list[str] = []
         if path_count:
-            summary = (
+            parts.append(
                 f"Rendered {rendered} techniques across {path_count} attack path(s) "
                 f"({fmt} format)."
             )
             if convergence:
-                summary += f" Convergence at: {', '.join(convergence)}."
+                parts.append(f"Convergence at: {', '.join(convergence)}.")
         else:
-            summary = f"Rendered {rendered} attack stages ({fmt} format)."
+            parts.append(f"Rendered {rendered} attack stages ({fmt} format).")
 
         if missing:
-            summary += f" {missing} required stage(s) missing."
+            names = data.get("missing_stage_names") or []
+            parts.append(
+                f"{missing} required stage(s) missing"
+                + (f": {', '.join(names)}." if names else ".")
+            )
 
-        # List output files
         artifacts = result.output_artifacts or []
         if artifacts:
             file_list = ", ".join(
-                a.get("file_path", a.get("artifact_id", "?"))
-                for a in artifacts
+                a.get("file_path", a.get("artifact_id", "?")) for a in artifacts
             )
-            summary += f" Output files: {file_list}."
+            parts.append(f"Full rendering saved to: {file_list}.")
+        else:
+            parts.append("Full rendering is printed by the shell and auto-saved as a text artifact.")
 
-        # Include compact flow if available, truncate if too long
-        viz = data.get("visualization", "")
-        if len(viz) > 1500:
-            lines = viz.split("\n")
-            preview = "\n".join(lines[:20])
-            summary += f"\n{preview}\n... (truncated)"
-        elif viz:
-            summary += f"\n{viz}"
+        unconfirmed = data.get("unconfirmed_tactics") or []
+        if unconfirmed:
+            parts.append(
+                f"Tactic unconfirmed on {len(unconfirmed)} node(s): "
+                f"{', '.join(unconfirmed[:5])}"
+                + (" ..." if len(unconfirmed) > 5 else "") + "."
+            )
 
+        if path_count:
+            for p in data.get("paths", []):
+                desc = p.get("description", "")
+                line = f"- {p.get('path_id')} ({p.get('step_count', 0)} steps)"
+                if desc:
+                    line += f": {desc}"
+                parts.append(line)
+        else:
+            names = data.get("stage_names") or []
+            if names:
+                parts.append("Flow: " + " -> ".join(names))
+
+        summary = "\n".join(parts)
         return summary[:2000]
