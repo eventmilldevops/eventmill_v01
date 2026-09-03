@@ -66,27 +66,50 @@ For **PDF reports**, the plugin now supports **native PDF ingestion via the Gemi
    tactics, preventing the MITRE matrix from being artificially flattened by
    repeated "Initial Access" labels.
 
-   ### Tactic Mismatch Labeling
+   ### Tactic Correction and Mismatch Labeling
 
-   When the reconciler detects that an assigned tactic is **not** in the
-   technique's official ATT&CK tactic list (even after case-insensitive
-   comparison), the entry is flagged:
+   After the LLM assigns tactics, the reconciler checks every label against
+   the technique's official ATT&CK tactic list and resolves it in one of
+   three ways. Only the last one needs a person.
 
-   ```json
-   {
-     "technique_id": "T1078",
-     "tactic": "Lateral Movement",
-     "mitre_validated": true,
-     "tactic_mismatch": true
-   }
-   ```
+   1. **Corrected automatically** — the entry gets `tactic_corrected_from`
+      holding the LLM's original label. This happens when the label is
+      unambiguously wrong:
+      - a retired tactic ("Defense Evasion") whose technique lists exactly
+        one of the v19 successors (T1027 → Stealth, T1553 → Defense
+        Impairment);
+      - one of the Stealth / Defense Impairment pair where the technique
+        only allows the other (T1578.002 labelled Stealth → Defense
+        Impairment);
+      - a technique with a single valid tactic (T1490 labelled Defense
+        Impairment → Impact). 633 of 794 techniques are single-tactic.
+      Attack-graph steps are corrected the same way so nodes and mappings
+      agree.
+   2. **Case fixed** — "Command And Control" becomes "Command and Control".
+   3. **Needs analyst review** — the technique has several valid tactics and
+      the LLM chose none of them. The label is kept (it may describe the
+      role the report gives the technique), and the entry is flagged with the
+      options:
+
+      ```json
+      {
+        "technique_id": "T1078",
+        "tactic": "Lateral Movement",
+        "mitre_validated": true,
+        "tactic_mismatch": true,
+        "allowed_tactics": ["Stealth", "Persistence", "Privilege Escalation", "Initial Access"]
+      }
+      ```
+
+      The run summary prints an `ACTION:` line listing these entries with
+      their allowed tactics, `summary.tactic_mismatch_count` counts them, and
+      `attack_path_visualizer` marks the node "tactic unconfirmed". To
+      resolve one, read the report context for that step and either accept
+      the label as the role described or pick one of `allowed_tactics`.
 
    - `mitre_validated: true` — the technique ID exists in ATT&CK.
-   - `tactic_mismatch: true` — the tactic is **not** in the technique's
-     allowed list. The mapping may still describe real attacker behavior, but
-     the tactic label may be an LLM hallucination. Analysts should treat these
-     entries with extra scrutiny.
-   - **Absent** `tactic_mismatch` — tactic matches an allowed ATT&CK tactic.
+   - `mitre_validated: false` — the ID is not in ATT&CK; the name is suffixed
+     "(non-ATT&CK ID)". Treat as an LLM guess.
 
    Re-run the script after a new ATT&CK version is released to pick up new
    techniques. The plugin works without the file but skips enrichment and

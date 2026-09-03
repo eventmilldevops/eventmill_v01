@@ -114,6 +114,7 @@ class DAGNode:
     controls: list[dict]
     gaps_detected: list[str]
     path_ids: list[str]       # which paths this node appears in
+    tactic_mismatch: bool = False  # ingester could not confirm the tactic
 
 
 @dataclass
@@ -166,6 +167,7 @@ def _build_dag_from_attack_graph(
             info_by_pair[(tid, tactic)] = {
                 "technique_name": m.get("technique_name", ""),
                 "tactic": tactic,
+                "tactic_mismatch": bool(m.get("tactic_mismatch")),
             }
             if tid not in info_by_tid:
                 info_by_tid[tid] = {
@@ -231,6 +233,7 @@ def _build_dag_from_attack_graph(
                     controls=[],
                     gaps_detected=[],
                     path_ids=[],
+                    tactic_mismatch=bool(info.get("tactic_mismatch")),
                 )
 
             # Resolve leads_to to composite keys within path context
@@ -612,6 +615,8 @@ def _render_mermaid_dag(
         if node.technique_name:
             label += f" - {node.technique_name[:30]}"
         label += "</small>"
+        if node.tactic_mismatch:
+            label += "<br/><small>tactic unconfirmed</small>"
         # Annotate entry-point nodes with their path name(s)
         if nk in entry_set and node.path_ids:
             path_tag = " | ".join(node.path_ids)
@@ -805,6 +810,8 @@ def _render_ascii_dag(dag: AttackDAG, attack_type: str) -> str:
                 tags.append("\u25a0 EXIT")
             if node.technique_id in convergence_set:
                 tags.append("\u25c6 CONVERGE")
+            if node.tactic_mismatch:
+                tags.append("? TACTIC")
             tag_str = " ".join(tags)
 
             # Box
@@ -842,7 +849,7 @@ def _render_ascii_dag(dag: AttackDAG, attack_type: str) -> str:
     lines.append("")
     lines.append("  " + "-" * (box_width + 2))
     lines.append("  Legend: \u25b7 Entry | \u25a0 Exit | \u25c6 Converge | \u25c7 Branch")
-    lines.append("          \u2713 control | \u2717 gap")
+    lines.append("          \u2713 control | \u2717 gap | ? TACTIC = tactic not confirmed by ATT&CK")
     lines.append("")
 
     return "\n".join(lines)

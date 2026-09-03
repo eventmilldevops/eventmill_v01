@@ -20,7 +20,9 @@ from typing import Any
 
 from framework.logging.structured import log_llm_interaction
 from framework.plugins.protocol import ToolResult, ValidationResult, QueryHints
+from framework.reference_data.mitre_attack import LEGACY_TACTIC_ALIASES
 from framework.reference_data.mitre_attack import TACTIC_ORDER as _TACTIC_SEQUENCE
+from framework.reference_data.mitre_attack import canonical_tactic as _canonical_tactic
 from framework.reference_data.mitre_attack import get_mitre_db as _get_mitre_db
 from framework.reference_data.mitre_attack import is_legacy_tactic as _is_legacy_tactic
 from framework.reference_data.mitre_attack import (
@@ -90,6 +92,14 @@ def was_defanged(original: str, refanged: str) -> bool:
 TACTIC_ORDER: dict[str, int] = {
     tactic: ordinal for ordinal, tactic in enumerate(_TACTIC_SEQUENCE, start=1)
 }
+
+# Tactics introduced together as replacements for one retired tactic (v19:
+# Stealth / Defense Impairment for Defense Evasion).  The LLM routinely picks
+# the wrong one of the pair; when a technique allows exactly one of them the
+# swap is unambiguous and is applied automatically.
+_SIBLING_TACTIC_SETS: list[set[str]] = [
+    set(successors) for successors in LEGACY_TACTIC_ALIASES.values()
+]
 
 # Tactics that should only appear at the entry point (first step) of a path.
 # If a later step is assigned one of these and the technique has alternatives,
@@ -416,76 +426,119 @@ def _repair_truncated_json(text: str) -> dict | None:
 # _get_mitre_db is imported above from framework.reference_data.mitre_attack
 
 
-def _migrate_legacy_tactics(
+def _resolve_tactic(
+    tid: str, tactic: str, mitre_db: dict[str, dict]
+) -> tuple[str, str] | None:
+    """Return ``(corrected_tactic, reason)`` when *tactic* can be fixed
+    deterministically for *tid*, else None.
+
+    Reasons, in order of precedence:
+
+    * ``legacy``  — a tactic retired by a later ATT&CK release, resolved to
+      the single successor the technique lists (see LEGACY_TACTIC_ALIASES).
+    * ``sibling`` — the LLM chose one of a pair of replacement tactics but
+      the technique only allows the other one.
+    * ``single``  — the technique has exactly one valid tactic in ATT&CK, so
+      any other label is simply wrong.
+
+    Anything else (a technique with several valid tactics, none of which
+    was chosen) is left for validation to flag with the allowed options.
+    """
+    if not tid or not tactic:
+        return None
+    allowed = mitre_db.get(tid, {}).get("tactics", [])
+    if _is_legacy_tactic(tactic):
+        successor = _resolve_legacy_tactic(tactic, allowed)
+        return (successor, "legacy") if successor else None
+    if not allowed:
+        return None
+    allowed_lower = {t.lower() for t in allowed}
+    if tactic.lower() in allowed_lower:
+        return None
+    canonical = _canonical_tactic(tactic)
+    if canonical:
+        for siblings in _SIBLING_TACTIC_SETS:
+            if canonical in siblings:
+                options = [t for t in allowed if t in siblings and t != canonical]
+                if len(options) == 1:
+                    return options[0], "sibling"
+    if len(allowed) == 1:
+        return allowed[0], "single"
+    return None
+
+
+def _normalize_tactics(
     all_mitre: list[dict],
     attack_graph: dict,
     mitre_db: dict[str, dict],
-) -> tuple[list[dict], int]:
-    """Rewrite tactics retired by a later ATT&CK release onto their successors.
+) -> tuple[list[dict], int, int]:
+    """Apply deterministic tactic corrections to graph steps and mappings.
 
-    ATT&CK v19 replaced "Defense Evasion" with "Stealth" and "Defense
-    Impairment".  LLM output and older artifacts still use the retired name,
-    so each occurrence — in attack_graph steps and in mitre_mappings — is
-    mapped onto whichever successor the technique actually lists in the local
-    ATT&CK database.  Occurrences that cannot be resolved (technique unknown,
-    or more than one successor allowed) are left untouched for validation to
-    flag as ``tactic_mismatch``.
+    Runs before backfill so that attack_graph steps and mitre_mappings
+    agree.  Each corrected mapping entry records the original label in
+    ``tactic_corrected_from`` so analysts can see what changed.  Occurrences
+    that cannot be resolved are left untouched for validation to flag as
+    ``tactic_mismatch`` alongside the technique's ``allowed_tactics``.
 
     Mutates ``attack_graph`` in place.  Returns the mapping list (with any
-    entries that now collide on ``(technique_id, tactic)`` merged) and the
-    number of rewrites made.
+    entries that now collide on ``(technique_id, tactic)`` merged), the
+    number of retired-tactic migrations and the number of other corrections.
     """
     if not mitre_db:
-        return all_mitre, 0
+        return all_mitre, 0, 0
 
     migrated = 0
-
-    def _successor(tid: str, tactic: str) -> str | None:
-        if not tid or not _is_legacy_tactic(tactic):
-            return None
-        allowed = mitre_db.get(tid, {}).get("tactics", [])
-        return _resolve_legacy_tactic(tactic, allowed)
+    corrected = 0
 
     for path in attack_graph.get("paths", []):
         path_id = path.get("path_id", "unknown")
         for step in path.get("steps", []):
             tid = step.get("technique_id", "")
             tactic = step.get("tactic", "")
-            new_tactic = _successor(tid, tactic)
-            if new_tactic is None:
+            resolved = _resolve_tactic(tid, tactic, mitre_db)
+            if resolved is None:
                 continue
+            new_tactic, reason = resolved
             logger.info(
-                "[LEGACY-TACTIC] Path %r: %s %r -> %r (retired tactic)",
-                path_id, tid, tactic, new_tactic,
+                "[TACTIC-FIX] Path %r: %s %r -> %r (%s)",
+                path_id, tid, tactic, new_tactic, reason,
             )
             step["tactic"] = new_tactic
-            migrated += 1
+            if reason == "legacy":
+                migrated += 1
+            else:
+                corrected += 1
 
-    migrated_keys: set[tuple[str, str]] = set()
+    changed_keys: set[tuple[str, str]] = set()
     for entry in all_mitre:
         tid = entry.get("technique_id", "")
         tactic = entry.get("tactic", "")
-        new_tactic = _successor(tid, tactic)
-        if new_tactic is None:
+        resolved = _resolve_tactic(tid, tactic, mitre_db)
+        if resolved is None:
             continue
+        new_tactic, reason = resolved
         logger.info(
-            "[LEGACY-TACTIC] Mapping %s %r -> %r (retired tactic)",
-            tid, tactic, new_tactic,
+            "[TACTIC-FIX] Mapping %s %r -> %r (%s)",
+            tid, tactic, new_tactic, reason,
         )
         entry["tactic"] = new_tactic
-        migrated_keys.add((tid, new_tactic))
-        migrated += 1
+        entry["tactic_corrected_from"] = tactic
+        changed_keys.add((tid, new_tactic))
+        if reason == "legacy":
+            migrated += 1
+        else:
+            corrected += 1
 
-    if not migrated_keys:
-        return all_mitre, migrated
+    if not changed_keys:
+        return all_mitre, migrated, corrected
 
-    # A migrated entry may now share its key with an entry the LLM already
-    # emitted under the successor tactic — fold them together.
+    # A corrected entry may now share its key with an entry the LLM already
+    # emitted under the right tactic — fold them together.
     kept: list[dict] = []
     seen: dict[tuple[str, str], dict] = {}
     for entry in all_mitre:
         key = (entry.get("technique_id", ""), entry.get("tactic", ""))
-        if key in migrated_keys and key in seen:
+        if key in changed_keys and key in seen:
             target = seen[key]
             paths_list = target.setdefault("context_paths", [])
             for pid in entry.get("context_paths", []):
@@ -494,7 +547,7 @@ def _migrate_legacy_tactics(
             continue
         seen.setdefault(key, entry)
         kept.append(entry)
-    return kept, migrated
+    return kept, migrated, corrected
 
 
 def _fix_tactic_progression(
@@ -572,8 +625,9 @@ def _reconcile_mitre_mappings(
     multiple times with different tactics when it serves different roles
     across attack paths.
 
-    0. Runs ``_migrate_legacy_tactics`` to map tactics retired by a later
-       ATT&CK release (e.g. "Defense Evasion") onto their successors, then
+    0. Runs ``_normalize_tactics`` to apply deterministic tactic fixes
+       (retired tactics such as "Defense Evasion", Stealth / Defense
+       Impairment sibling swaps, single-tactic techniques), then
        ``_fix_tactic_progression`` on the attack_graph to reassign
        entry-only tactics (Initial Access, etc.) on non-first steps.
     1. Backfills ``(technique_id, tactic)`` pairs from *attack_graph* steps,
@@ -587,8 +641,8 @@ def _reconcile_mitre_mappings(
     """
     mitre_db = _get_mitre_db()
 
-    # --- Step 0: retire legacy tactics, then fix progression in attack_graph ---
-    all_mitre, migrated_count = _migrate_legacy_tactics(
+    # --- Step 0: deterministic tactic fixes, then progression in attack_graph ---
+    all_mitre, migrated_count, corrected_count = _normalize_tactics(
         all_mitre, attack_graph, mitre_db
     )
     _fix_tactic_progression(attack_graph, mitre_db)
@@ -775,14 +829,22 @@ def _reconcile_mitre_mappings(
                         )
                         entry["tactic"] = canonical
                     else:
-                        # Genuine mismatch — flag in output
+                        # Genuine mismatch: the technique has several valid
+                        # tactics and the LLM chose none of them.  Keep the
+                        # LLM's label (it may describe the role in the
+                        # report) and record the options for the analyst.
                         tactic_mismatch_count += 1
                         entry["tactic_mismatch"] = True
+                        entry["allowed_tactics"] = list(allowed)
                         logger.warning(
-                            "[RECONCILE] Tactic mismatch: %s assigned "
-                            "tactic %r but ATT&CK allows %s — "
-                            "keeping LLM assignment, flagged in output",
-                            tid, entry_tactic, allowed,
+                            "[RECONCILE] Tactic needs analyst review: %s "
+                            "(%s) labelled %r by the LLM; ATT&CK allows %s. "
+                            "Kept as-is with tactic_mismatch=true and "
+                            "allowed_tactics listed in the output — confirm "
+                            "the role from the report or pick one of the "
+                            "allowed tactics.",
+                            tid, entry.get("technique_name", ""),
+                            entry_tactic, allowed,
                         )
             else:
                 entry["mitre_validated"] = False
@@ -802,15 +864,16 @@ def _reconcile_mitre_mappings(
                 )
 
     if (
-        migrated_count or backfill_count or enrich_count
+        migrated_count or corrected_count or backfill_count or enrich_count
         or unvalidated_count or tactic_mismatch_count
     ):
         logger.info(
-            "[RECONCILE] Summary: %d legacy tactics migrated, %d backfilled, "
-            "%d enriched, %d unvalidated, %d tactic mismatches, "
+            "[RECONCILE] Summary: %d legacy tactics migrated, %d tactics "
+            "auto-corrected, %d backfilled, %d enriched, %d unvalidated, "
+            "%d tactics needing analyst review, "
             "%d total mitre_mappings (local DB has %d techniques)",
-            migrated_count, backfill_count, enrich_count, unvalidated_count,
-            tactic_mismatch_count,
+            migrated_count, corrected_count, backfill_count, enrich_count,
+            unvalidated_count, tactic_mismatch_count,
             len(all_mitre), len(mitre_db),
         )
 
@@ -1592,6 +1655,12 @@ class ThreatIntelIngester:
                     ),
                     "confidence_distribution": confidence_dist,
                     "ingestion_mode": ingestion_mode,
+                    "tactic_corrected_count": sum(
+                        1 for m in all_mitre if m.get("tactic_corrected_from")
+                    ),
+                    "tactic_mismatch_count": sum(
+                        1 for m in all_mitre if m.get("tactic_mismatch")
+                    ),
                 },
             },
             output_artifacts=output_artifacts_list,
@@ -1689,6 +1758,30 @@ class ThreatIntelIngester:
                 f"Attack graph: {path_count} path(s) identified"
                 + (f", converging at {', '.join(convergence)}" if convergence else "")
                 + "."
+            )
+
+        # Tactic review guidance
+        corrected = summary.get("tactic_corrected_count", 0)
+        unresolved = [
+            m for m in r.get("mitre_mappings", []) if m.get("tactic_mismatch")
+        ]
+        if corrected:
+            parts.append(
+                f"Tactic review: {corrected} tactic label(s) corrected "
+                "automatically against ATT&CK (see tactic_corrected_from)."
+            )
+        if unresolved:
+            examples = "; ".join(
+                f"{m.get('technique_id')} labelled {m.get('tactic')!r}, "
+                f"ATT&CK allows {' / '.join(m.get('allowed_tactics', []))}"
+                for m in unresolved[:3]
+            )
+            more = f" (and {len(unresolved) - 3} more)" if len(unresolved) > 3 else ""
+            parts.append(
+                f"ACTION: {len(unresolved)} tactic label(s) need analyst "
+                f"confirmation — {examples}{more}. Entries carry "
+                "tactic_mismatch=true and allowed_tactics in the artifact; "
+                "the visualizer marks them 'tactic unconfirmed'."
             )
 
         # Ingestion mode warning

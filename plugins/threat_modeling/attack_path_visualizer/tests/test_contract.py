@@ -517,3 +517,45 @@ class TestTacticOrdering:
         }
         names = [s["name"] for s in _tool_mod._build_stages_from_threat_intel(data)]
         assert names == ["Impact", "Cyber Magic"]
+
+
+
+class TestTacticMismatchRendering:
+    """Unconfirmed tactics from the ingester are visible in both DAG renderers."""
+
+    @pytest.fixture
+    def mismatch_graph(self):
+        mappings = [
+            {"technique_id": "T1566", "technique_name": "Phishing",
+             "tactic": "Initial Access"},
+            {"technique_id": "T1078", "technique_name": "Valid Accounts",
+             "tactic": "Lateral Movement", "tactic_mismatch": True,
+             "allowed_tactics": ["Stealth", "Persistence"]},
+        ]
+        graph = {
+            "paths": [{
+                "path_id": "p1", "description": "test",
+                "steps": [
+                    {"technique_id": "T1566", "tactic": "Initial Access",
+                     "leads_to": ["T1078"]},
+                    {"technique_id": "T1078", "tactic": "Lateral Movement",
+                     "leads_to": []},
+                ],
+            }],
+            "convergence_points": [], "branch_points": [],
+        }
+        return graph, mappings
+
+    def test_mermaid_marks_unconfirmed(self, mismatch_graph):
+        graph, mappings = mismatch_graph
+        dag = _tool_mod._build_dag_from_attack_graph(graph, mappings)
+        raw, _md = _tool_mod._render_mermaid_dag(dag, "t")
+        assert raw.count("tactic unconfirmed") == 1
+        assert "T1078" in raw
+
+    def test_ascii_marks_unconfirmed(self, mismatch_graph):
+        graph, mappings = mismatch_graph
+        dag = _tool_mod._build_dag_from_attack_graph(graph, mappings)
+        out = _tool_mod._render_ascii_dag(dag, "t")
+        assert out.count("? TACTIC") >= 1
+        assert "tactic not confirmed" in out

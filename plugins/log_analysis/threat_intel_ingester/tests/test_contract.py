@@ -972,6 +972,8 @@ class TestTacticValidation:
         assert entry["tactic"] == "Lateral Movement"  # kept as-is
         assert entry.get("mitre_validated") is True
         assert entry.get("tactic_mismatch") is True
+        assert "Persistence" in entry["allowed_tactics"]
+        assert "tactic_corrected_from" not in entry
 
     def test_mismatch_absent_when_no_db(self):
         """When MITRE DB is empty, tactic_mismatch should not be set."""
@@ -1095,3 +1097,109 @@ class TestLegacyTacticMigration:
         with mock.patch.object(_tool_mod, "_get_mitre_db", return_value={}):
             result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
         assert result[0]["tactic"] == "Defense Evasion"
+
+
+# ---------------------------------------------------------------------------
+# Test 17: Deterministic tactic correction (sibling swap, single-tactic)
+# ---------------------------------------------------------------------------
+
+
+class TestTacticCorrection:
+    """Labels that are unambiguously wrong are fixed; ambiguous ones are
+    flagged with the allowed options and surfaced in the summary."""
+
+    def _entry(self, tid, name, tactic):
+        return {"technique_id": tid, "technique_name": name, "tactic": tactic,
+                "confidence": "inferred", "report_context": "test"}
+
+    def test_sibling_swap_when_only_other_sibling_allowed(self):
+        """T1578.002 allows only Defense Impairment; LLM said Stealth."""
+        result = _tool_mod._reconcile_mitre_mappings(
+            [self._entry("T1578.002", "Create Cloud Instance", "Stealth")],
+            {"paths": []},
+        )
+        e = result[0]
+        assert e["tactic"] == "Defense Impairment"
+        assert e["tactic_corrected_from"] == "Stealth"
+        assert "tactic_mismatch" not in e
+
+    def test_sibling_swap_with_multi_tactic_technique(self):
+        """T1556 allows Defense Impairment / Persistence / Credential Access;
+        Stealth is the wrong sibling and there is exactly one right one."""
+        result = _tool_mod._reconcile_mitre_mappings(
+            [self._entry("T1556", "Modify Authentication Process", "Stealth")],
+            {"paths": []},
+        )
+        assert result[0]["tactic"] == "Defense Impairment"
+        assert result[0]["tactic_corrected_from"] == "Stealth"
+
+    def test_single_tactic_technique_corrected(self):
+        """T1490 only allows Impact; any other label is replaced."""
+        result = _tool_mod._reconcile_mitre_mappings(
+            [self._entry("T1490", "Inhibit System Recovery", "Defense Impairment")],
+            {"paths": []},
+        )
+        assert result[0]["tactic"] == "Impact"
+        assert result[0]["tactic_corrected_from"] == "Defense Impairment"
+        assert "tactic_mismatch" not in result[0]
+
+    def test_graph_steps_corrected_to_match(self):
+        graph = {"paths": [{"path_id": "p", "steps": [
+            {"technique_id": "T1566", "tactic": "Initial Access", "leads_to": ["T1490"]},
+            {"technique_id": "T1490", "tactic": "Defense Impairment", "leads_to": []},
+        ]}]}
+        result = _tool_mod._reconcile_mitre_mappings([], graph)
+        assert graph["paths"][0]["steps"][1]["tactic"] == "Impact"
+        t1490 = next(e for e in result if e["technique_id"] == "T1490")
+        assert t1490["tactic"] == "Impact"
+        assert "tactic_mismatch" not in t1490
+
+    def test_ambiguous_label_is_flagged_not_corrected(self):
+        """T1078 allows four tactics; 'Execution' is none of them and no
+        sibling rule applies, so the analyst has to decide."""
+        result = _tool_mod._reconcile_mitre_mappings(
+            [self._entry("T1078", "Valid Accounts", "Execution")],
+            {"paths": []},
+        )
+        e = result[0]
+        assert e["tactic"] == "Execution"
+        assert e["tactic_mismatch"] is True
+        assert set(e["allowed_tactics"]) == {
+            "Stealth", "Persistence", "Privilege Escalation", "Initial Access",
+        }
+
+    def test_valid_label_untouched(self):
+        result = _tool_mod._reconcile_mitre_mappings(
+            [self._entry("T1556", "Modify Authentication Process", "Credential Access")],
+            {"paths": []},
+        )
+        assert result[0]["tactic"] == "Credential Access"
+        assert "tactic_corrected_from" not in result[0]
+
+    def test_summary_reports_corrections_and_action(self, tool_instance):
+        mappings = [
+            {"technique_id": "T1490", "technique_name": "Inhibit System Recovery",
+             "tactic": "Impact", "tactic_corrected_from": "Defense Impairment"},
+            {"technique_id": "T1078", "technique_name": "Valid Accounts",
+             "tactic": "Execution", "tactic_mismatch": True,
+             "allowed_tactics": ["Stealth", "Persistence"]},
+        ]
+        result = MockToolResult(
+            ok=True,
+            result={
+                "report_metadata": {"artifact_type": "text", "page_count": 1},
+                "iocs": [],
+                "mitre_mappings": mappings,
+                "attack_graph": {},
+                "summary": {
+                    "total_iocs": 0, "ioc_breakdown": {},
+                    "high_priority_count": 0,
+                    "mitre_technique_count": 2, "unique_technique_count": 2,
+                    "tactic_corrected_count": 1, "tactic_mismatch_count": 1,
+                },
+            },
+        )
+        text = tool_instance.summarize_for_llm(result)
+        assert "1 tactic label(s) corrected automatically" in text
+        assert "ACTION: 1 tactic label(s) need analyst confirmation" in text
+        assert "T1078 labelled 'Execution', ATT&CK allows Stealth / Persistence" in text

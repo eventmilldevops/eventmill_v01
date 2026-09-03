@@ -102,7 +102,16 @@
               },
               "tactic_mismatch": {
                 "type": "boolean",
-                "description": "Present and True when the assigned tactic is not in the official ATT&CK tactic list for this technique. The technique_id is valid (mitre_validated=true) but the tactic may be an LLM hallucination. Absent when the tactic matches or when no MITRE database is available."
+                "description": "Present and True when the assigned tactic is not in the official ATT&CK tactic list for this technique and could not be corrected deterministically. The technique_id is valid (mitre_validated=true) but the tactic needs analyst confirmation — see allowed_tactics. Absent when the tactic matches, was auto-corrected, or when no MITRE database is available."
+              },
+              "allowed_tactics": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Present only with tactic_mismatch=true: the tactics ATT&CK allows for this technique, so the analyst can pick one or confirm the LLM's label from the report."
+              },
+              "tactic_corrected_from": {
+                "type": "string",
+                "description": "Present when the reconciler replaced the LLM's tactic label deterministically (retired tactic, Stealth/Defense Impairment sibling swap, or a technique with a single valid tactic). Holds the original label."
               }
             }
           }
@@ -120,6 +129,8 @@
             "high_priority_count": { "type": "integer", "description": "Number of high-priority IOCs." },
             "mitre_technique_count": { "type": "integer", "description": "Total number of (technique_id, tactic) role entries." },
             "unique_technique_count": { "type": "integer", "description": "Count of distinct technique_ids." },
+            "tactic_corrected_count": { "type": "integer", "description": "Mapping entries whose tactic was corrected automatically against ATT&CK." },
+            "tactic_mismatch_count": { "type": "integer", "description": "Mapping entries whose tactic still needs analyst confirmation." },
             "confidence_distribution": {
               "type": "object",
               "properties": {

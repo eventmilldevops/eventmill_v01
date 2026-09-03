@@ -108,10 +108,12 @@ flattens the tactical context and loses per-path role distinctions.
 ### Tactic Mismatch Indicators
 
 Entries from `threat_intel_ingester` may carry `"tactic_mismatch": true` when
-the assigned tactic is not in the technique's official ATT&CK tactic list.
-These nodes represent real attacker behavior described in the report, but the
-tactic label may be an LLM inference rather than an exact MITRE matrix mapping.
-Analysts should treat them with appropriate scrutiny.
+the assigned tactic is not in the technique's official ATT&CK tactic list and
+the ingester could not correct it deterministically. Those nodes render with
+a "tactic unconfirmed" line in Mermaid and a `? TACTIC` tag in ASCII. The
+node still represents real attacker behaviour from the report; only the
+tactic label is unconfirmed. The ingester's `allowed_tactics` field on the
+mapping entry lists the options the analyst can choose from.
 
 ## Example — Inline stages
 
