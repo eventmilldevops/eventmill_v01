@@ -190,8 +190,35 @@ class TestListAttackTypes:
         assert "Impact/Action on Objective" in ransomware["required_stages"]
         assert "Exfiltration" in ransomware["not_applicable_stages"]
 
+    def test_stage_vocabulary_is_attack_v19(self, plugin_instance):
+        """Defense Evasion was split into Stealth and Defense Impairment in v19."""
+        result = plugin_instance.execute({"action": "list_attack_types"}, None)
+        for entry in result.result["attack_types"]:
+            every = (
+                entry["required_stages"]
+                + entry["optional_stages"]
+                + entry["not_applicable_stages"]
+            )
+            assert "Defense Evasion" not in every
+        ransomware = next(t for t in result.result["attack_types"] if t["name"] == "ransomware")
+        assert "Stealth" in ransomware["optional_stages"]
+        assert "Defense Impairment" in ransomware["optional_stages"]
+
 
 class TestValidateStages:
+    def test_legacy_defense_evasion_stage_inherits_relevance(self, plugin_instance):
+        """A pre-v19 'Defense Evasion' stage name is treated like Stealth."""
+        result = plugin_instance.execute({
+            "action": "validate_stages",
+            "attack_type": "ransomware",
+            "stages": [
+                {"name": "Defense Evasion", "mitre_technique_id": "T1027",
+                 "stage_present": True, "controls": []},
+            ],
+        }, None)
+        assert result.ok
+        assert result.result["stages"][0]["relevance"] == "optional"
+
     def test_full_ransomware(self, plugin_instance, sample_stages):
         result = plugin_instance.execute({
             "action": "validate_stages",

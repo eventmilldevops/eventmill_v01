@@ -18,44 +18,40 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from framework.reference_data.mitre_attack import LEGACY_TACTIC_ALIASES
+from framework.reference_data.mitre_attack import TACTIC_ORDER as _CANONICAL_TACTICS
+
 
 # ---------------------------------------------------------------------------
 # MITRE ATT&CK tactic → kill-chain stage mapping
 # ---------------------------------------------------------------------------
 
-TACTIC_ORDER = [
-    "reconnaissance",
-    "resource-development",
-    "initial-access",
-    "execution",
-    "persistence",
-    "privilege-escalation",
-    "defense-evasion",
-    "credential-access",
-    "discovery",
-    "lateral-movement",
-    "collection",
-    "command-and-control",
-    "exfiltration",
-    "impact",
-]
 
-TACTIC_DISPLAY = {
-    "reconnaissance": "Reconnaissance",
-    "resource-development": "Resource Development",
-    "initial-access": "Initial Access",
-    "execution": "Execution",
-    "persistence": "Persistence",
-    "privilege-escalation": "Privilege Escalation",
-    "defense-evasion": "Defense Evasion",
-    "credential-access": "Credential Access",
-    "discovery": "Discovery",
-    "lateral-movement": "Lateral Movement",
-    "collection": "Collection",
-    "command-and-control": "Command and Control",
-    "exfiltration": "Exfiltration",
-    "impact": "Impact",
+def _tactic_slug(name: str) -> str:
+    return name.lower().replace(" ", "-")
+
+
+# Kill-chain order as slugs, derived from the shared ATT&CK tactic sequence
+TACTIC_ORDER = [_tactic_slug(t) for t in _CANONICAL_TACTICS]
+
+TACTIC_DISPLAY = {_tactic_slug(t): t for t in _CANONICAL_TACTICS}
+
+# Retired tactics (e.g. "defense-evasion" from pre-v19 artifacts) keep their
+# original label but sort at the position of their first successor.
+_LEGACY_TACTIC_SLUGS = {
+    _tactic_slug(old): _tactic_slug(successors[0])
+    for old, successors in LEGACY_TACTIC_ALIASES.items()
 }
+TACTIC_DISPLAY.update({_tactic_slug(old): old for old in LEGACY_TACTIC_ALIASES})
+
+
+def _tactic_rank(slug: str) -> int:
+    """Kill-chain position of a tactic slug; unknown tactics sort last."""
+    canonical = _LEGACY_TACTIC_SLUGS.get(slug, slug)
+    if canonical in TACTIC_ORDER:
+        return TACTIC_ORDER.index(canonical)
+    return len(TACTIC_ORDER)
+
 
 _CONF_RANK = {"high": 2, "medium": 1, "low": 0}
 
@@ -74,15 +70,14 @@ def _build_stages_from_threat_intel(data: dict) -> list[dict]:
     # Group by normalised tactic label
     buckets: dict[str, list[dict]] = {}
     for mapping in mitre_mappings:
-        tactic = mapping.get("tactic", "unknown").lower().replace(" ", "-")
+        tactic = _tactic_slug(mapping.get("tactic", "unknown"))
         buckets.setdefault(tactic, []).append(mapping)
 
     stages: list[dict] = []
 
-    # Known tactics in kill-chain order
-    for tactic in TACTIC_ORDER:
-        if tactic not in buckets:
-            continue
+    # Kill-chain order; retired tactics sort with their successor and
+    # unknown tactics are appended at the end
+    for tactic in sorted(buckets, key=lambda t: (_tactic_rank(t), t)):
         techniques = sorted(
             buckets[tactic],
             key=lambda t: _CONF_RANK.get(t.get("confidence", "low"), 0),
@@ -101,24 +96,6 @@ def _build_stages_from_threat_intel(data: dict) -> list[dict]:
         if extra_ids:
             stage["additional_techniques"] = extra_ids
         stages.append(stage)
-
-    # Unknown / ICS-only tactics appended at end
-    for tactic, techniques in buckets.items():
-        if tactic in TACTIC_ORDER:
-            continue
-        primary = sorted(
-            techniques,
-            key=lambda t: _CONF_RANK.get(t.get("confidence", "low"), 0),
-            reverse=True,
-        )[0]
-        stages.append({
-            "name": tactic.replace("-", " ").title(),
-            "mitre_technique_id": primary.get("technique_id", ""),
-            "technique_claimed": primary.get("technique_name", ""),
-            "stage_present": True,
-            "controls": [],
-            "gaps_detected": [],
-        })
 
     return stages
 

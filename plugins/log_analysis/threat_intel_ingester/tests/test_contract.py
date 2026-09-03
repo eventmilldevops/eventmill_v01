@@ -786,7 +786,7 @@ class TestTacticProgression:
             "T1078.004": {
                 "name": "Cloud Accounts",
                 "tactics": [
-                    "Defense Evasion", "Persistence",
+                    "Stealth", "Persistence",
                     "Privilege Escalation", "Initial Access",
                 ],
             },
@@ -808,8 +808,8 @@ class TestTacticProgression:
         assert count == 1
         step2 = attack_graph["paths"][0]["steps"][1]
         assert step2["tactic"] != "Initial Access"
-        # Should pick highest ordinal non-entry tactic = Defense Evasion (7)
-        assert step2["tactic"] == "Defense Evasion"
+        # Should pick highest ordinal non-entry tactic = Stealth (7)
+        assert step2["tactic"] == "Stealth"
 
     def test_preserves_first_step_initial_access(self):
         """Initial Access at step 0 should NOT be reassigned."""
@@ -817,7 +817,7 @@ class TestTacticProgression:
             "T1078": {
                 "name": "Valid Accounts",
                 "tactics": [
-                    "Defense Evasion", "Persistence",
+                    "Stealth", "Persistence",
                     "Privilege Escalation", "Initial Access",
                 ],
             },
@@ -843,7 +843,7 @@ class TestTacticProgression:
             "T1078": {
                 "name": "Valid Accounts",
                 "tactics": [
-                    "Defense Evasion", "Persistence",
+                    "Stealth", "Persistence",
                     "Privilege Escalation", "Initial Access",
                 ],
             },
@@ -935,15 +935,15 @@ class TestTacticValidation:
     """Verify case-insensitive tactic comparison and tactic_mismatch flag."""
 
     def test_auto_corrects_tactic_casing(self):
-        """'Command and Control' should be auto-corrected to 'Command And Control'."""
+        """'Command And Control' should be auto-corrected to the DB's 'Command and Control'."""
         all_mitre = [
             {"technique_id": "T1219", "technique_name": "Remote Access Software",
-             "tactic": "Command and Control", "confidence": "inferred",
+             "tactic": "Command And Control", "confidence": "inferred",
              "report_context": "test"},
         ]
         result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
         entry = result[0]
-        assert entry["tactic"] == "Command And Control"
+        assert entry["tactic"] == "Command and Control"
         assert entry.get("mitre_validated") is True
         assert "tactic_mismatch" not in entry
 
@@ -986,3 +986,112 @@ class TestTacticValidation:
         entry = result[0]
         assert "tactic_mismatch" not in entry
         assert "mitre_validated" not in entry
+
+
+# ---------------------------------------------------------------------------
+# Test 16: Legacy tactic migration (ATT&CK v19 retired "Defense Evasion")
+# ---------------------------------------------------------------------------
+
+
+class TestLegacyTacticMigration:
+    """Verify retired tactics are mapped onto their v19 successors."""
+
+    def test_tactic_order_uses_v19_vocabulary(self):
+        assert "Defense Evasion" not in _tool_mod.TACTIC_ORDER
+        assert "Stealth" in _tool_mod.TACTIC_ORDER
+        assert "Defense Impairment" in _tool_mod.TACTIC_ORDER
+        assert (
+            _tool_mod.TACTIC_ORDER["Privilege Escalation"]
+            < _tool_mod.TACTIC_ORDER["Stealth"]
+            < _tool_mod.TACTIC_ORDER["Defense Impairment"]
+            < _tool_mod.TACTIC_ORDER["Credential Access"]
+        )
+
+    def test_prompt_uses_v19_vocabulary(self):
+        prompt = _tool_mod.LLM_REFINEMENT_PROMPT
+        assert "Stealth, Defense Impairment" in prompt
+        assert "Never output \"Defense Evasion\"" in prompt
+
+    def test_mapping_migrates_to_stealth(self):
+        """T1027 only lists Stealth, so 'Defense Evasion' resolves to it."""
+        all_mitre = [
+            {"technique_id": "T1027", "technique_name": "Obfuscated Files or Information",
+             "tactic": "Defense Evasion", "confidence": "inferred",
+             "report_context": "test"},
+        ]
+        result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
+        entry = result[0]
+        assert entry["tactic"] == "Stealth"
+        assert entry.get("mitre_validated") is True
+        assert "tactic_mismatch" not in entry
+
+    def test_mapping_migrates_to_defense_impairment(self):
+        """T1553 only lists Defense Impairment."""
+        all_mitre = [
+            {"technique_id": "T1553", "technique_name": "Subvert Trust Controls",
+             "tactic": "Defense Evasion", "confidence": "inferred",
+             "report_context": "test"},
+        ]
+        result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
+        assert result[0]["tactic"] == "Defense Impairment"
+        assert "tactic_mismatch" not in result[0]
+
+    def test_graph_steps_migrate_and_backfill_under_successor(self):
+        """Attack-graph steps are rewritten before backfill, so the backfilled
+        mapping entry carries the successor tactic and no mismatch."""
+        attack_graph = {
+            "paths": [
+                {
+                    "path_id": "obf-path",
+                    "steps": [
+                        {"technique_id": "T1566", "tactic": "Initial Access",
+                         "leads_to": ["T1027"]},
+                        {"technique_id": "T1027", "tactic": "Defense Evasion",
+                         "leads_to": []},
+                    ],
+                },
+            ],
+        }
+        result = _tool_mod._reconcile_mitre_mappings([], attack_graph)
+        assert attack_graph["paths"][0]["steps"][1]["tactic"] == "Stealth"
+        t1027 = next(e for e in result if e["technique_id"] == "T1027")
+        assert t1027["tactic"] == "Stealth"
+        assert t1027["context_paths"] == ["obf-path"]
+        assert "tactic_mismatch" not in t1027
+
+    def test_migrated_entry_merges_with_existing_successor_entry(self):
+        all_mitre = [
+            {"technique_id": "T1027", "technique_name": "Obfuscated Files or Information",
+             "tactic": "Stealth", "confidence": "explicit",
+             "report_context": "a", "context_paths": ["p1"]},
+            {"technique_id": "T1027", "technique_name": "Obfuscated Files or Information",
+             "tactic": "Defense Evasion", "confidence": "inferred",
+             "report_context": "b", "context_paths": ["p2"]},
+        ]
+        result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
+        t1027 = [e for e in result if e["technique_id"] == "T1027"]
+        assert len(t1027) == 1
+        assert t1027[0]["tactic"] == "Stealth"
+        assert sorted(t1027[0]["context_paths"]) == ["p1", "p2"]
+
+    def test_unknown_technique_keeps_legacy_tactic(self):
+        """A non-ATT&CK ID cannot be resolved, so the value is left alone."""
+        all_mitre = [
+            {"technique_id": "T9999", "technique_name": "Made Up",
+             "tactic": "Defense Evasion", "confidence": "inferred",
+             "report_context": "test"},
+        ]
+        result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
+        assert result[0]["tactic"] == "Defense Evasion"
+        assert result[0].get("mitre_validated") is False
+
+    def test_no_db_leaves_everything_untouched(self):
+        import unittest.mock as mock
+        all_mitre = [
+            {"technique_id": "T1027", "technique_name": "Obfuscated Files or Information",
+             "tactic": "Defense Evasion", "confidence": "inferred",
+             "report_context": "test"},
+        ]
+        with mock.patch.object(_tool_mod, "_get_mitre_db", return_value={}):
+            result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
+        assert result[0]["tactic"] == "Defense Evasion"

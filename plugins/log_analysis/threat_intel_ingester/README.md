@@ -24,8 +24,8 @@ For **PDF reports**, the plugin now supports **native PDF ingestion via the Gemi
    ```
    This downloads the Enterprise and ICS ATT&CK STIX bundles from the
    [MITRE CTI repository](https://github.com/mitre/cti) (currently pinned
-   to **ATT&CK v18.1**) and writes a compact lookup file to
-   `framework/reference_data/mitre_techniques.json` (~774 techniques).
+   to **ATT&CK v19.2**) and writes a compact lookup file to
+   `framework/reference_data/mitre_techniques.json` (~794 techniques).
    The shared MITRE module (`framework.reference_data.mitre_attack`) is
    used by this plugin and others to:
    - **Enrich** LLM output with authoritative technique names and tactics
@@ -33,9 +33,19 @@ For **PDF reports**, the plugin now supports **native PDF ingestion via the Gemi
    - **Validate** every technique ID and mark non-ATT&CK IDs with `(non-ATT&CK ID)`
      and `"mitre_validated": false` so analysts know when an ID was LLM-generated
    - **Validate tactics** against each technique's allowed tactics. Case
-     differences are auto-corrected (e.g. "Command and Control" →
-     "Command And Control"). Genuine mismatches are flagged with
-     `"tactic_mismatch": true` in the output entry (see below).
+     differences are auto-corrected to the official spelling (e.g.
+     "Command And Control" → "Command and Control"). Genuine mismatches
+     are flagged with `"tactic_mismatch": true` in the output entry (see
+     below).
+   - **Migrate retired tactics.** ATT&CK v19 replaced "Defense Evasion"
+     with "Stealth" and "Defense Impairment". When the LLM or an older
+     artifact still says "Defense Evasion", the reconciler rewrites it to
+     whichever successor the technique actually lists (T1027 → Stealth,
+     T1553 → Defense Impairment). Occurrences it cannot resolve — an ID not
+     in ATT&CK, or a technique allowing both successors — are left as-is
+     and flagged as a mismatch. The tactic vocabulary and kill-chain order
+     live in `framework.reference_data.mitre_attack` (`TACTIC_ORDER`,
+     `LEGACY_TACTIC_ALIASES`) so every plugin shares one definition.
 
    ### Multi-Role Tactic Mappings
 

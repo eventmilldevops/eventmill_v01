@@ -20,7 +20,12 @@ from typing import Any
 
 from framework.logging.structured import log_llm_interaction
 from framework.plugins.protocol import ToolResult, ValidationResult, QueryHints
+from framework.reference_data.mitre_attack import TACTIC_ORDER as _TACTIC_SEQUENCE
 from framework.reference_data.mitre_attack import get_mitre_db as _get_mitre_db
+from framework.reference_data.mitre_attack import is_legacy_tactic as _is_legacy_tactic
+from framework.reference_data.mitre_attack import (
+    resolve_legacy_tactic as _resolve_legacy_tactic,
+)
 
 logger = logging.getLogger("eventmill.plugin.threat_intel_ingester")
 
@@ -79,21 +84,11 @@ def was_defanged(original: str, refanged: str) -> bool:
 # MITRE ATT&CK Kill-Chain Ordering
 # ---------------------------------------------------------------------------
 
+# Tactic name -> 1-based kill-chain ordinal.  The sequence itself lives in
+# framework.reference_data.mitre_attack so it stays in step with the ATT&CK
+# release the technique database was built from.
 TACTIC_ORDER: dict[str, int] = {
-    "Reconnaissance": 1,
-    "Resource Development": 2,
-    "Initial Access": 3,
-    "Execution": 4,
-    "Persistence": 5,
-    "Privilege Escalation": 6,
-    "Defense Evasion": 7,
-    "Credential Access": 8,
-    "Discovery": 9,
-    "Lateral Movement": 10,
-    "Collection": 11,
-    "Command and Control": 12,
-    "Exfiltration": 13,
-    "Impact": 14,
+    tactic: ordinal for ordinal, tactic in enumerate(_TACTIC_SEQUENCE, start=1)
 }
 
 # Tactics that should only appear at the entry point (first step) of a path.
@@ -421,6 +416,87 @@ def _repair_truncated_json(text: str) -> dict | None:
 # _get_mitre_db is imported above from framework.reference_data.mitre_attack
 
 
+def _migrate_legacy_tactics(
+    all_mitre: list[dict],
+    attack_graph: dict,
+    mitre_db: dict[str, dict],
+) -> tuple[list[dict], int]:
+    """Rewrite tactics retired by a later ATT&CK release onto their successors.
+
+    ATT&CK v19 replaced "Defense Evasion" with "Stealth" and "Defense
+    Impairment".  LLM output and older artifacts still use the retired name,
+    so each occurrence — in attack_graph steps and in mitre_mappings — is
+    mapped onto whichever successor the technique actually lists in the local
+    ATT&CK database.  Occurrences that cannot be resolved (technique unknown,
+    or more than one successor allowed) are left untouched for validation to
+    flag as ``tactic_mismatch``.
+
+    Mutates ``attack_graph`` in place.  Returns the mapping list (with any
+    entries that now collide on ``(technique_id, tactic)`` merged) and the
+    number of rewrites made.
+    """
+    if not mitre_db:
+        return all_mitre, 0
+
+    migrated = 0
+
+    def _successor(tid: str, tactic: str) -> str | None:
+        if not tid or not _is_legacy_tactic(tactic):
+            return None
+        allowed = mitre_db.get(tid, {}).get("tactics", [])
+        return _resolve_legacy_tactic(tactic, allowed)
+
+    for path in attack_graph.get("paths", []):
+        path_id = path.get("path_id", "unknown")
+        for step in path.get("steps", []):
+            tid = step.get("technique_id", "")
+            tactic = step.get("tactic", "")
+            new_tactic = _successor(tid, tactic)
+            if new_tactic is None:
+                continue
+            logger.info(
+                "[LEGACY-TACTIC] Path %r: %s %r -> %r (retired tactic)",
+                path_id, tid, tactic, new_tactic,
+            )
+            step["tactic"] = new_tactic
+            migrated += 1
+
+    migrated_keys: set[tuple[str, str]] = set()
+    for entry in all_mitre:
+        tid = entry.get("technique_id", "")
+        tactic = entry.get("tactic", "")
+        new_tactic = _successor(tid, tactic)
+        if new_tactic is None:
+            continue
+        logger.info(
+            "[LEGACY-TACTIC] Mapping %s %r -> %r (retired tactic)",
+            tid, tactic, new_tactic,
+        )
+        entry["tactic"] = new_tactic
+        migrated_keys.add((tid, new_tactic))
+        migrated += 1
+
+    if not migrated_keys:
+        return all_mitre, migrated
+
+    # A migrated entry may now share its key with an entry the LLM already
+    # emitted under the successor tactic — fold them together.
+    kept: list[dict] = []
+    seen: dict[tuple[str, str], dict] = {}
+    for entry in all_mitre:
+        key = (entry.get("technique_id", ""), entry.get("tactic", ""))
+        if key in migrated_keys and key in seen:
+            target = seen[key]
+            paths_list = target.setdefault("context_paths", [])
+            for pid in entry.get("context_paths", []):
+                if pid not in paths_list:
+                    paths_list.append(pid)
+            continue
+        seen.setdefault(key, entry)
+        kept.append(entry)
+    return kept, migrated
+
+
 def _fix_tactic_progression(
     attack_graph: dict,
     mitre_db: dict[str, dict],
@@ -496,7 +572,9 @@ def _reconcile_mitre_mappings(
     multiple times with different tactics when it serves different roles
     across attack paths.
 
-    0. Runs ``_fix_tactic_progression`` on the attack_graph to reassign
+    0. Runs ``_migrate_legacy_tactics`` to map tactics retired by a later
+       ATT&CK release (e.g. "Defense Evasion") onto their successors, then
+       ``_fix_tactic_progression`` on the attack_graph to reassign
        entry-only tactics (Initial Access, etc.) on non-first steps.
     1. Backfills ``(technique_id, tactic)`` pairs from *attack_graph* steps,
        populating ``context_paths`` with the path IDs where each pair appears.
@@ -509,7 +587,10 @@ def _reconcile_mitre_mappings(
     """
     mitre_db = _get_mitre_db()
 
-    # --- Step 0: fix tactic progression in attack_graph ---
+    # --- Step 0: retire legacy tactics, then fix progression in attack_graph ---
+    all_mitre, migrated_count = _migrate_legacy_tactics(
+        all_mitre, attack_graph, mitre_db
+    )
     _fix_tactic_progression(attack_graph, mitre_db)
 
     # --- Index existing entries by (technique_id, tactic) ---
@@ -715,17 +796,20 @@ def _reconcile_mitre_mappings(
                     entry["technique_name"] = "(non-ATT&CK ID)"
                 logger.warning(
                     "[RECONCILE] Unvalidated technique %s (%s) — "
-                    "not found in ATT&CK v18.1 (DB has %d techniques). "
+                    "not found in the local ATT&CK database (%d techniques). "
                     "Keeping entry but marking as non-ATT&CK.",
                     tid, entry["technique_name"], len(mitre_db),
                 )
 
-    if backfill_count or enrich_count or unvalidated_count or tactic_mismatch_count:
+    if (
+        migrated_count or backfill_count or enrich_count
+        or unvalidated_count or tactic_mismatch_count
+    ):
         logger.info(
-            "[RECONCILE] Summary: %d backfilled, %d enriched, "
-            "%d unvalidated, %d tactic mismatches, "
+            "[RECONCILE] Summary: %d legacy tactics migrated, %d backfilled, "
+            "%d enriched, %d unvalidated, %d tactic mismatches, "
             "%d total mitre_mappings (local DB has %d techniques)",
-            backfill_count, enrich_count, unvalidated_count,
+            migrated_count, backfill_count, enrich_count, unvalidated_count,
             tactic_mismatch_count,
             len(all_mitre), len(mitre_db),
         )
@@ -752,8 +836,9 @@ SECTION 2 — ADDITIONAL MITRE TECHNIQUES: Identify any MITRE ATT&CK techniques 
 
 SECTION 3 — REPORT METADATA: Extract the report title, campaign name, attributed threat actor, and attribution confidence.
 
-SECTION 4 — TECHNIQUE TACTIC ASSIGNMENT: For EVERY technique in both refined_iocs.related_mitre AND additional_mitre_techniques, you MUST populate the "tactic" field with the correct MITRE ATT&CK tactic name. Use the official tactic names exactly as written:
-Reconnaissance, Resource Development, Initial Access, Execution, Persistence, Privilege Escalation, Defense Evasion, Credential Access, Discovery, Lateral Movement, Collection, Command and Control, Exfiltration, Impact.
+SECTION 4 — TECHNIQUE TACTIC ASSIGNMENT: For EVERY technique in both refined_iocs.related_mitre AND additional_mitre_techniques, you MUST populate the "tactic" field with the correct MITRE ATT&CK tactic name. Use the official ATT&CK v19 tactic names exactly as written:
+Reconnaissance, Resource Development, Initial Access, Execution, Persistence, Privilege Escalation, Stealth, Defense Impairment, Credential Access, Discovery, Lateral Movement, Collection, Command and Control, Exfiltration, Impact.
+ATT&CK v19 retired "Defense Evasion". Use "Stealth" for hiding, blending in, obfuscation, masquerading, or indicator removal, and "Defense Impairment" for disabling, degrading, or tampering with security controls. Never output "Defense Evasion".
 If a technique maps to multiple tactics, use the tactic most relevant to how the report describes its use. When the same technique ID appears in multiple attack paths serving different attacker objectives, include it multiple times in `additional_mitre_techniques` — once per distinct role — with the tactic that matches each role. This is expected, not a duplication error. NEVER leave the tactic field empty.
 
 SECTION 5 — ATTACK GRAPH: Analyze how the techniques described in the report relate to each other operationally. Real attacks have multiple paths, branches, and convergence points.
@@ -770,7 +855,7 @@ CRITICAL — TACTIC ASSIGNMENT IN ATTACK PATHS:
 Each step's tactic MUST reflect the technique's ROLE AT THAT POSITION in the path, not its most common tactic. "Initial Access" should only appear at the FIRST step of a path — it means the entry point. If the same technique appears later (after access was already gained), assign the tactic that matches its role at that later stage.
 
 Many techniques have multiple valid MITRE tactics. Common multi-tactic techniques:
-- T1078 (Valid Accounts): Initial Access, Persistence, Privilege Escalation, Defense Evasion
+- T1078 (Valid Accounts): Initial Access, Persistence, Privilege Escalation, Stealth
 - T1053 (Scheduled Task/Job): Execution, Persistence, Privilege Escalation
 - T1098 (Account Manipulation): Persistence, Privilege Escalation
 

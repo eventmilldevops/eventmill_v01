@@ -42,7 +42,7 @@ from ..plugins.protocol import (
     ReferenceDataView,
     TimeoutClass,
 )
-from ..reference_data.mitre_attack import get_mitre_db
+from ..reference_data.mitre_attack import get_mitre_db, get_mitre_relationships
 from ..cloud.resolver import (
     StorageResolver,
     StorageResolverConfig,
@@ -2329,7 +2329,12 @@ class EventMillShell(cmd.Cmd):
             llm_query=scoped_llm,
             model_tier=model_tier,
             register_artifact=_register_artifact,
-            reference_data=ReferenceDataView({"mitre_techniques": get_mitre_db()}),
+            reference_data=ReferenceDataView(
+                {
+                    "mitre_techniques": get_mitre_db(),
+                    "mitre_relationships": get_mitre_relationships(),
+                }
+            ),
         )
         
         # Track execution

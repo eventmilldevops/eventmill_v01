@@ -49,7 +49,8 @@ class AttackStage(Enum):
     EXECUTION = "Execution"
     PERSISTENCE = "Persistence"
     PRIVILEGE_ESCALATION = "Privilege Escalation"
-    DEFENSE_EVASION = "Defense Evasion"
+    STEALTH = "Stealth"
+    DEFENSE_IMPAIRMENT = "Defense Impairment"
     CREDENTIAL_ACCESS = "Credential Access"
     DISCOVERY = "Discovery"
     LATERAL_MOVEMENT = "Lateral Movement"
@@ -57,6 +58,14 @@ class AttackStage(Enum):
     COMMAND_AND_CONTROL = "Command and Control"
     EXFILTRATION = "Exfiltration"
     IMPACT = "Impact/Action on Objective"
+
+
+# Stage names retired by a later ATT&CK release, mapped to the stage whose
+# relevance they inherit.  ATT&CK v19 split "Defense Evasion" into Stealth
+# and Defense Impairment; older documents and payloads still use the old name.
+_LEGACY_STAGE_NAMES: dict[str, AttackStage] = {
+    "Defense Evasion": AttackStage.STEALTH,
+}
 
 
 ATTACK_TYPE_STAGES: dict[str, dict[str, list[AttackStage]]] = {
@@ -75,9 +84,9 @@ ATTACK_TYPE_STAGES: dict[str, dict[str, list[AttackStage]]] = {
             AttackStage.PRIVILEGE_ESCALATION, AttackStage.IMPACT,
         ],
         "optional": [
-            AttackStage.PERSISTENCE, AttackStage.DEFENSE_EVASION,
-            AttackStage.CREDENTIAL_ACCESS, AttackStage.DISCOVERY,
-            AttackStage.LATERAL_MOVEMENT,
+            AttackStage.PERSISTENCE, AttackStage.STEALTH,
+            AttackStage.DEFENSE_IMPAIRMENT, AttackStage.CREDENTIAL_ACCESS,
+            AttackStage.DISCOVERY, AttackStage.LATERAL_MOVEMENT,
         ],
         "not_applicable": [AttackStage.EXFILTRATION],
     },
@@ -88,9 +97,10 @@ ATTACK_TYPE_STAGES: dict[str, dict[str, list[AttackStage]]] = {
         ],
         "optional": [
             AttackStage.EXECUTION, AttackStage.PERSISTENCE,
-            AttackStage.PRIVILEGE_ESCALATION, AttackStage.DEFENSE_EVASION,
-            AttackStage.CREDENTIAL_ACCESS, AttackStage.DISCOVERY,
-            AttackStage.LATERAL_MOVEMENT, AttackStage.COMMAND_AND_CONTROL,
+            AttackStage.PRIVILEGE_ESCALATION, AttackStage.STEALTH,
+            AttackStage.DEFENSE_IMPAIRMENT, AttackStage.CREDENTIAL_ACCESS,
+            AttackStage.DISCOVERY, AttackStage.LATERAL_MOVEMENT,
+            AttackStage.COMMAND_AND_CONTROL,
         ],
         "not_applicable": [],
     },
@@ -100,10 +110,11 @@ ATTACK_TYPE_STAGES: dict[str, dict[str, list[AttackStage]]] = {
             AttackStage.PERSISTENCE, AttackStage.DISCOVERY,
         ],
         "optional": [
-            AttackStage.PRIVILEGE_ESCALATION, AttackStage.DEFENSE_EVASION,
-            AttackStage.CREDENTIAL_ACCESS, AttackStage.LATERAL_MOVEMENT,
-            AttackStage.COLLECTION, AttackStage.COMMAND_AND_CONTROL,
-            AttackStage.EXFILTRATION, AttackStage.IMPACT,
+            AttackStage.PRIVILEGE_ESCALATION, AttackStage.STEALTH,
+            AttackStage.DEFENSE_IMPAIRMENT, AttackStage.CREDENTIAL_ACCESS,
+            AttackStage.LATERAL_MOVEMENT, AttackStage.COLLECTION,
+            AttackStage.COMMAND_AND_CONTROL, AttackStage.EXFILTRATION,
+            AttackStage.IMPACT,
         ],
         "not_applicable": [],
     },
@@ -530,6 +541,9 @@ class RiskAssessmentAnalyzer:
 
     def _stage_relevance(self, stage_name: str, config: dict) -> str:
         """Determine relevance of a stage for an attack type."""
+        legacy = _LEGACY_STAGE_NAMES.get(stage_name)
+        if legacy is not None:
+            stage_name = legacy.value
         for s in config.get("required", []):
             if s.value == stage_name:
                 return "required"
