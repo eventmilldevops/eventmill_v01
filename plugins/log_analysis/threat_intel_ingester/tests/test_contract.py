@@ -1203,3 +1203,274 @@ class TestTacticCorrection:
         assert "1 tactic label(s) corrected automatically" in text
         assert "ACTION: 1 tactic label(s) need analyst confirmation" in text
         assert "T1078 labelled 'Execution', ATT&CK allows Stealth / Persistence" in text
+
+
+# ---------------------------------------------------------------------------
+# Test 18: Document profile (pre-flight, no LLM)
+# ---------------------------------------------------------------------------
+
+
+class TestDocumentProfile:
+    def _pdf_text(self, pages: list[str]) -> str:
+        return "\n\n".join(pages)
+
+    def test_narrative_document(self):
+        text = self._pdf_text([
+            "The actor used spearphishing (T1566.001) to gain access.",
+            "They then moved laterally and encrypted files (T1486).",
+            "Contact was made with 203.0.113.5 for C2.",
+        ])
+        iocs = _tool_mod.extract_iocs_regex(text, ["ip", "mitre_technique"])
+        prof = _tool_mod._profile_document(text, iocs, "pdf_report", 3)
+        assert prof["pages"] == 3
+        assert prof["candidates"] == 3
+        assert prof["candidates_by_type"] == {"ip": 1, "mitre_technique": 2}
+        assert prof["profile"] == "narrative"
+        assert prof["candidates_per_page"] == 1.0
+        assert prof["max_candidates_on_a_page"] == 1
+        assert prof["estimated_output_tokens"] == (
+            _tool_mod._OUTPUT_TOKENS_BASE + 3 * _tool_mod._OUTPUT_TOKENS_PER_IOC
+        )
+
+    def test_ioc_dense_document(self):
+        page1 = "\n".join(f"198.51.100.{i} scanning" for i in range(1, 41))
+        page2 = "\n".join(f"198.51.101.{i} scanning" for i in range(1, 41))
+        text = self._pdf_text([page1, page2])
+        iocs = _tool_mod.extract_iocs_regex(text, ["ip"])
+        prof = _tool_mod._profile_document(text, iocs, "pdf_report", 2)
+        assert prof["candidates"] == 80
+        assert prof["candidates_per_page"] == 40.0
+        assert prof["max_candidates_on_a_page"] == 40
+        assert prof["profile"] == "ioc_dense"
+
+    def test_non_pdf_is_one_page(self):
+        text = "203.0.113.9 and 203.0.113.10"
+        iocs = _tool_mod.extract_iocs_regex(text, ["ip"])
+        prof = _tool_mod._profile_document(text, iocs, "text", 2)
+        assert prof["pages"] == 1
+        assert prof["max_candidates_on_a_page"] == 2
+        assert prof["candidates_per_page"] == 2.0
+
+    def test_dense_text_dump_exceeds_single_call(self):
+        text = "\n".join(f"198.51.{i // 250}.{i % 250} node" for i in range(1, 400))
+        iocs = _tool_mod.extract_iocs_regex(text, ["ip"])
+        prof = _tool_mod._profile_document(text, iocs, "text", 399)
+        assert prof["profile"] == "ioc_dense"
+        assert prof["exceeds_single_call_output"] is True
+
+    def test_no_candidates(self):
+        prof = _tool_mod._profile_document("nothing here", [], "text", 1)
+        assert prof["candidates"] == 0
+        assert prof["profile"] == "narrative"
+        assert prof["estimated_output_tokens"] == _tool_mod._OUTPUT_TOKENS_BASE
+
+
+class TestTruncatedRepairLogging:
+    def test_repair_is_a_warning_with_counts(self, caplog):
+        import logging
+        truncated = (
+            '{"refined_iocs": [{"value": "1.2.3.4", "ioc_type": "ip"}, '
+            '{"value": "5.6.7.8", "ioc_type": "ip"}], '
+            '"additional_mitre_techniques": [{"technique_id": "T1566"}], '
+            '"report_metadata": {"title": "cut off he'
+        )
+        with caplog.at_level(logging.WARNING, logger="eventmill.plugin.threat_intel_ingester"):
+            parsed = _tool_mod._parse_llm_json(truncated)
+        assert parsed is not None
+        assert len(parsed["refined_iocs"]) == 2
+        msgs = [r.getMessage() for r in caplog.records if "[TRUNCATED]" in r.getMessage()]
+        assert msgs, "repair outcome must be logged at WARNING"
+        assert "2 refined_iocs and 1 techniques kept" in msgs[0]
+
+
+# ---------------------------------------------------------------------------
+# Test 19: Page-range batched native ingestion
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Resp:
+    ok: bool = True
+    text: str | None = None
+    error: str | None = None
+    token_usage: dict | None = None
+    model_used: str | None = "mock-heavy"
+    transport_path: str | None = "inline_bytes"
+    fallback_reason: str | None = None
+
+
+class _NativeLLM:
+    """Records every document / text call and answers with JSON that echoes
+    the first two candidates it was given, so merged results are checkable."""
+
+    def __init__(self, fail_labels: set[str] | None = None):
+        self.doc_calls: list[dict] = []
+        self.text_calls: list[dict] = []
+        self.fail_labels = fail_labels or set()
+
+    def supports_native_document(self, mime_type: str) -> bool:
+        return mime_type == "application/pdf"
+
+    @staticmethod
+    def _candidates_from_prompt(prompt: str) -> list[str]:
+        vals = []
+        for line in prompt.splitlines():
+            if line.startswith("- [ip] "):
+                vals.append(line.split("- [ip] ", 1)[1].split(" |", 1)[0])
+        return vals
+
+    def _reply(self, values: list[str], label: str) -> str:
+        return json.dumps({
+            "refined_iocs": [
+                {"value": v, "ioc_type": "ip", "confidence": "high", "priority": "medium",
+                 "context": f"seen in {label}", "related_mitre": [], "is_false_positive": False}
+                for v in values[:2]
+            ],
+            "additional_mitre_techniques": [
+                {"technique_id": "T1595.001", "technique_name": "Scanning IP Blocks",
+                 "tactic": "Reconnaissance", "confidence": "inferred", "report_context": label},
+            ],
+            "report_metadata": {"title": "Batched Report", "attributed_actor": "Unattributed"},
+            "attack_graph": {"paths": [], "convergence_points": [], "branch_points": []},
+        })
+
+    def query_with_document(self, prompt, artifact, system_context=None, max_tokens=8192,
+                            grounding_data=None, hints=None):
+        label = (artifact.metadata or {}).get("page_range", "whole")
+        self.doc_calls.append({
+            "artifact_id": artifact.artifact_id,
+            "file_path": artifact.file_path,
+            "page_range": label,
+            "candidates": self._candidates_from_prompt(prompt),
+            "prompt": prompt,
+        })
+        if str(label) in self.fail_labels:
+            return _Resp(ok=False, text=None, error="504 DEADLINE_EXCEEDED")
+        return _Resp(text=self._reply(self._candidates_from_prompt(prompt), str(label)))
+
+    def query_text(self, prompt, system_context=None, max_tokens=4096, grounding_data=None,
+                   hints=None):
+        vals = self._candidates_from_prompt(prompt)
+        self.text_calls.append({"candidates": vals})
+        return _Resp(text=self._reply(vals, "chunk"))
+
+
+def _dense_pages(n_pages: int, per_page: int) -> list[str]:
+    pages = []
+    for pg in range(n_pages):
+        pages.append("\n".join(
+            f"198.{pg + 1}.{i // 250}.{i % 250} scanner" for i in range(per_page)
+        ))
+    return pages
+
+
+@pytest.fixture
+def batched_run(tmp_path, monkeypatch):
+    """Wire the ingester for a 12-page, 30-candidates-per-page PDF without
+    touching pdfplumber or pypdf."""
+    pages = _dense_pages(12, 30)
+    monkeypatch.setattr(_tool_mod, "extract_pdf_page_texts", lambda path, max_pages=50: pages[:max_pages])
+
+    written: list[list[tuple[int, int]]] = []
+
+    def fake_split(path, ranges, out_dir, stem=None):
+        written.append(list(ranges))
+        out = []
+        for a, b in ranges:
+            f = Path(out_dir) / f"{stem}_p{a}-{b}.pdf"
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"%PDF-fake")
+            out.append(f)
+        return out
+
+    monkeypatch.setattr(_tool_mod, "split_pdf", fake_split)
+    monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+
+    pdf = tmp_path / "dense.pdf"
+    pdf.write_bytes(b"%PDF-fake")
+    artifact = MockArtifactRef(artifact_id="art_dense", artifact_type="pdf_report", file_path=str(pdf))
+    registered: list[dict] = []
+
+    def register(artifact_type, file_path, source_tool, metadata):
+        registered.append({"artifact_type": artifact_type, "file_path": file_path})
+        return MockArtifactRef(artifact_id="art_out", artifact_type=artifact_type, file_path=file_path)
+
+    def make_context(llm):
+        return MockExecutionContext(
+            artifacts=[artifact], llm_enabled=True, llm_query=llm, register_artifact=register,
+        )
+
+    return {"pages": pages, "written": written, "make_context": make_context, "tmp": tmp_path}
+
+
+class TestBatchedNativeIngestion:
+    def test_dense_pdf_is_split_and_every_batch_sent_natively(self, tool_instance, batched_run):
+        llm = _NativeLLM()
+        result = tool_instance.execute({"artifact_id": "art_dense"}, batched_run["make_context"](llm))
+        assert result.ok, result.message
+        summary = result.result["summary"]
+        plan = summary["ingestion_plan"]
+        assert plan["strategy"] == "native_batched"
+        assert plan["batch_count"] > 1
+        # one document call per batch, each with its own sub-PDF and page range
+        assert len(llm.doc_calls) == plan["batch_count"]
+        assert batched_run["written"][0] == [(b["start"], b["end"]) for b in plan["batches"]]
+        for call, batch in zip(llm.doc_calls, plan["batches"]):
+            assert call["page_range"] == [batch["start"], batch["end"]]
+            assert call["file_path"].endswith(f"_p{batch['start']}-{batch['end']}.pdf")
+            assert f"pages {batch['start']}-{batch['end']} of 12" in call["prompt"]
+            # only that batch's candidates were sent
+            assert len(call["candidates"]) == batch["candidates"]
+        # every page covered exactly once
+        covered = [pg for b in plan["batches"] for pg in range(b["start"], b["end"] + 1)]
+        assert covered == list(range(1, 13))
+        # results merged across batches; no chunked text calls were needed
+        assert llm.text_calls == []
+        assert summary["ingestion_mode"] == "llm"
+        assert len(result.result["iocs"]) == 2 * plan["batch_count"]
+        assert "native_s" in summary["timings"] and "chunks_s" not in summary["timings"]
+        # temp sub-PDFs are cleaned up
+        assert not list((batched_run["tmp"] / "artifacts").glob("*_batches_*"))
+
+    def test_failed_batch_falls_back_to_chunked_text_for_its_pages_only(self, tool_instance, batched_run):
+        probe = _NativeLLM()
+        tool_instance.execute({"artifact_id": "art_dense"}, batched_run["make_context"](probe))
+        second = probe.doc_calls[1]["page_range"]
+        llm = _NativeLLM(fail_labels={str(second)})
+        result = tool_instance.execute({"artifact_id": "art_dense"}, batched_run["make_context"](llm))
+        assert result.ok
+        summary = result.result["summary"]
+        # chunked path ran, and only over the failed batch's candidates
+        failed_candidates = set(probe.doc_calls[1]["candidates"])
+        sent = {c for call in llm.text_calls for c in call["candidates"]}
+        assert sent == failed_candidates
+        assert "chunks_s" in summary["timings"]
+        # native results from the surviving batches plus the chunked results
+        # for the failed pages are all in the merge (2 records per call)
+        surviving_native = len(llm.doc_calls) - 1
+        assert len(result.result["iocs"]) == 2 * (surviving_native + len(llm.text_calls))
+        assert any("seen in chunk" in i.get("context", "") for i in result.result["iocs"])
+        assert summary["ingestion_mode"] == "llm"
+
+    def test_small_pdf_still_single_native_call(self, tool_instance, batched_run, monkeypatch):
+        monkeypatch.setattr(_tool_mod, "extract_pdf_page_texts", lambda path, max_pages=50: _dense_pages(2, 3))
+        llm = _NativeLLM()
+        result = tool_instance.execute({"artifact_id": "art_dense"}, batched_run["make_context"](llm))
+        assert result.ok
+        assert result.result["summary"]["ingestion_plan"]["strategy"] == "native"
+        assert len(llm.doc_calls) == 1
+        assert llm.doc_calls[0]["artifact_id"] == "art_dense"  # original artifact, no split
+        assert batched_run["written"] == []
+
+    def test_split_failure_degrades_to_whole_document_call(self, tool_instance, batched_run, monkeypatch):
+        def boom(*a, **k):
+            raise _tool_mod.PdfSplitError("pypdf missing")
+        monkeypatch.setattr(_tool_mod, "split_pdf", boom)
+        llm = _NativeLLM()
+        result = tool_instance.execute({"artifact_id": "art_dense"}, batched_run["make_context"](llm))
+        assert result.ok
+        assert len(llm.doc_calls) == 1
+        assert llm.doc_calls[0]["artifact_id"] == "art_dense"
+
+    def test_manifest_budget_covers_batched_runs(self, manifest):
+        assert manifest["timeout_class"] == "long"

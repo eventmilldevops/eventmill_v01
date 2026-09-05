@@ -198,6 +198,33 @@ LLM call with `max_tokens=8192`, eliminating the context loss from chunking.
 
 The `LLMResponse.transport_path` field records which ingestion method was used.
 
+### Page-range batching (dense documents)
+
+Before any model call the plugin measures the document: pages, regex
+candidates per page, and an estimate of the output tokens the model will
+have to write (about 70 per candidate). The reply grows with the candidate
+count, not the page count, so a 20-page IOC appendix costs more than a
+100-page narrative report. `framework.documents.plan_ingestion` turns
+those numbers into one of three strategies, logged as `[PLAN]` and stored
+in `summary.ingestion_plan`:
+
+| Strategy | When | What happens |
+|---|---|---|
+| `native` | whole document fits one call's output cap and request deadline (with headroom) | single `query_with_document()` call, as before |
+| `native_batched` | it does not | the PDF is cut into page-range sub-PDFs with pypdf (splits only on page boundaries), each sent natively with only that range's candidates; results are merged |
+| `chunked_text` | native ingestion unavailable | Path 2 below |
+
+A batch that fails (deadline, parse error) sends **only its pages** to the
+chunked text path; the other batches' native results are kept. Sub-PDFs are
+written under `workspace/artifacts/<artifact_id>_batches_*/` and deleted
+when the run ends.
+
+Batch sizing uses a latency model calibrated on the heavy tier (~10 s base,
+~12 s per page, ~0.2 s per candidate). Override per deployment with
+`EVENTMILL_NATIVE_BASE_S`, `EVENTMILL_NATIVE_S_PER_PAGE`,
+`EVENTMILL_NATIVE_S_PER_CANDIDATE`. If batches are still hitting 504s, the
+`[NATIVE]` log line reports the observed seconds per page to set them from.
+
 ### Path 2: Chunked Text Extraction (fallback)
 
 If native ingestion is unavailable (no API connection, model doesn't support PDFs, or
@@ -253,12 +280,32 @@ The **Quick chart** command at the end lets an analyst immediately generate a
 Mermaid attack path diagram from the ingester output. Copy the command, adjust
 the artifact ID if needed, and paste it into the Event Mill shell.
 
+## Reading the Logs
+
+Every run writes a small set of tagged lines (local log file, or Cloud
+Logging on Cloud Run). Grep for the tag:
+
+| Tag | When | What it tells you |
+|---|---|---|
+| `[PROFILE]` | before any LLM call | pages, text size, regex candidates by type and per page, estimated output tokens, and `narrative` vs `ioc_dense`. An `ioc_dense` warning means the model's reply will grow with the candidate count, not the page count. |
+| `[PLAN]` | after the profile | chosen strategy, page-range batches with candidate counts, estimated seconds, and why. |
+| `[BATCH]` | batched runs | the sub-PDFs written, or why splitting failed. |
+| `[NATIVE]` | each native call start / end | batch label, candidates sent, elapsed seconds, model, transport, response size, token usage. On a 504 it reports the observed seconds-per-page for recalibrating the latency model. |
+| `[CHUNK]` | each fallback call | elapsed seconds, candidates in, response size, token usage. |
+| `[TRUNCATED]` | a reply hit the output-token limit | how many records were recovered by bracket repair; anything after the cut is lost. |
+| `[TACTIC-FIX]` / `[RECONCILE]` | post-processing | tactic corrections, backfills, and entries needing analyst review. |
+| `[TIMING]` | end of run | seconds per phase: `extract_s`, `native_s`, `chunks_s`, `reconcile_s`, `total_s`. |
+
+The same profile and timings are stored in the result under
+`summary.document_profile` and `summary.timings`, so they travel with the
+artifact.
+
 ## Limitations
 
 - Native PDF ingestion requires a live Gemini API connection with `GEMINI_PRO_API_KEY`
 - Chunked fallback path may lose table formatting and cross-page context
 - Maximum 200 pages per PDF (Gemini native limit: 1000 pages / 50 MB)
-- LLM refinement adds latency (~5-15 seconds chunked, ~10-30 seconds native for large PDFs)
+- Native calls on the heavy tier take roughly 10 s + 12 s per page + 0.2 s per candidate; the plan estimate is printed before the run starts and the manifest budget is `long` (600 s)
 - STIX 2.1 parsing not yet implemented
 
 ## Safety Notes

@@ -129,6 +129,19 @@
             "high_priority_count": { "type": "integer", "description": "Number of high-priority IOCs." },
             "mitre_technique_count": { "type": "integer", "description": "Total number of (technique_id, tactic) role entries." },
             "unique_technique_count": { "type": "integer", "description": "Count of distinct technique_ids." },
+            "document_profile": {
+              "type": "object",
+              "description": "Deterministic pre-flight description of the document: pages, text size, regex candidate counts (total, by type, per page), estimated output tokens and a 'narrative' / 'ioc_dense' classification. Computed before any LLM call."
+            },
+            "ingestion_plan": {
+              "type": "object",
+              "description": "How the document was sent: strategy ('native', 'native_batched', 'chunked_text'), the page-range batches with candidate counts and estimates, and the reason."
+            },
+            "timings": {
+              "type": "object",
+              "additionalProperties": { "type": "number" },
+              "description": "Seconds spent per phase: extract_s, native_s, chunks_s, reconcile_s, total_s."
+            },
             "tactic_corrected_count": { "type": "integer", "description": "Mapping entries whose tactic was corrected automatically against ATT&CK." },
             "tactic_mismatch_count": { "type": "integer", "description": "Mapping entries whose tactic still needs analyst confirmation." },
             "confidence_distribution": {

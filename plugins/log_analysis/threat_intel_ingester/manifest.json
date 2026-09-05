@@ -33,7 +33,7 @@
   ],
   "input_schema": "schemas/input.schema.json",
   "output_schema": "schemas/output.schema.json",
-  "timeout_class": "medium",
+  "timeout_class": "long",
   "cost_hint": "moderate",
   "model_tier": "light",
   "safe_for_auto_invoke": true,

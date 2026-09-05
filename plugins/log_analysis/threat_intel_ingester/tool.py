@@ -13,13 +13,25 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import shutil
+import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from framework.logging.structured import log_llm_interaction
-from framework.plugins.protocol import ToolResult, ValidationResult, QueryHints
+from framework.documents import (
+    LatencyModel,
+    PageRange,
+    PdfSplitError,
+    plan_ingestion,
+    profile_document,
+    split_pdf,
+)
+from framework.plugins.protocol import ArtifactRef, QueryHints, ToolResult, ValidationResult
 from framework.reference_data.mitre_attack import LEGACY_TACTIC_ALIASES
 from framework.reference_data.mitre_attack import TACTIC_ORDER as _TACTIC_SEQUENCE
 from framework.reference_data.mitre_attack import canonical_tactic as _canonical_tactic
@@ -112,22 +124,30 @@ ENTRY_ONLY_TACTICS: set[str] = {"Reconnaissance", "Resource Development", "Initi
 # ---------------------------------------------------------------------------
 
 
-def extract_text_from_pdf(file_path: str, max_pages: int = 50) -> str:
-    """Extract text from a PDF file using pdfplumber."""
+def extract_pdf_page_texts(file_path: str, max_pages: int = 50) -> list[str]:
+    """Extract text per page from a PDF using pdfplumber.
+
+    One entry per page in document order (empty string for pages with no
+    extractable text), so list index + 1 is the 1-based page number used by
+    page-range batching.
+    """
     try:
         import pdfplumber
     except ImportError:
         raise RuntimeError("pdfplumber is required for PDF processing")
 
-    text_parts = []
+    pages: list[str] = []
     with pdfplumber.open(file_path) as pdf:
         for i, page in enumerate(pdf.pages):
             if i >= max_pages:
                 break
-            page_text = page.extract_text()
-            if page_text:
-                text_parts.append(page_text)
-    return "\n\n".join(text_parts)
+            pages.append(page.extract_text() or "")
+    return pages
+
+
+def extract_text_from_pdf(file_path: str, max_pages: int = 50) -> str:
+    """Extract text from a PDF file using pdfplumber."""
+    return "\n\n".join(t for t in extract_pdf_page_texts(file_path, max_pages) if t)
 
 
 def extract_text_from_html(file_path: str) -> str:
@@ -254,6 +274,102 @@ def extract_iocs_regex(
 _MAX_IOC_PER_CHUNK: int = 50        # IOC candidates per LLM call
 _MAX_TEXT_CHARS_PER_CHUNK: int = 6_000  # Report text chars per LLM call
 
+# Output-token cost model and density threshold live in framework.documents;
+# these aliases keep the plugin's log messages and tests on the same numbers.
+from framework.documents.profile import (  # noqa: E402
+    IOC_DENSE_PER_PAGE as _IOC_DENSE_PER_PAGE,
+    OUTPUT_TOKENS_BASE as _OUTPUT_TOKENS_BASE,
+    OUTPUT_TOKENS_PER_CANDIDATE as _OUTPUT_TOKENS_PER_IOC,
+)
+
+_NATIVE_MAX_OUTPUT_TOKENS: int = 16_384  # max_tokens on each native PDF call
+# Request deadline the LLM client enforces (framework/llm/client.py sets
+# http_options timeout = 120 s, which the SDK also sends as a server deadline).
+_NATIVE_CALL_DEADLINE_S: float = 120.0
+
+
+def _latency_model() -> LatencyModel:
+    """Native-call latency model, overridable per deployment via env vars."""
+    def _env(name: str, default: float) -> float:
+        raw = os.environ.get(name)
+        try:
+            return float(raw) if raw else default
+        except ValueError:
+            return default
+    base = LatencyModel()
+    return LatencyModel(
+        base_seconds=_env("EVENTMILL_NATIVE_BASE_S", base.base_seconds),
+        seconds_per_page=_env("EVENTMILL_NATIVE_S_PER_PAGE", base.seconds_per_page),
+        seconds_per_candidate=_env(
+            "EVENTMILL_NATIVE_S_PER_CANDIDATE", base.seconds_per_candidate
+        ),
+    )
+
+
+def _page_iocs(page_texts: list[str], ioc_types: list[str]) -> list[list[RawIOC]]:
+    """Regex candidates per page (deduplicated within a page)."""
+    return [extract_iocs_regex(t, ioc_types) for t in page_texts]
+
+
+def _dedupe_iocs(iocs: list[RawIOC]) -> list[RawIOC]:
+    seen: set[tuple[str, str]] = set()
+    out: list[RawIOC] = []
+    for ioc in iocs:
+        key = (ioc.ioc_type, ioc.value)
+        if key not in seen:
+            seen.add(key)
+            out.append(ioc)
+    return out
+
+
+def _build_profile(
+    artifact_type: str,
+    page_texts: list[str],
+    page_iocs: list[list[RawIOC]],
+    raw_iocs: list[RawIOC],
+):
+    """Framework DocumentProfile plus the plugin's by-type breakdown dict."""
+    doc_profile = profile_document(
+        artifact_type=artifact_type,
+        page_chars=[len(t) for t in page_texts] or [0],
+        page_candidates=[len(p) for p in page_iocs] or [0],
+        max_output_tokens=_NATIVE_MAX_OUTPUT_TOKENS,
+    )
+    by_type: dict[str, int] = {}
+    for ioc in raw_iocs:
+        by_type[ioc.ioc_type] = by_type.get(ioc.ioc_type, 0) + 1
+    profile = doc_profile.to_dict()
+    profile["candidates"] = len(raw_iocs)
+    profile["candidates_by_type"] = by_type
+    return doc_profile, profile
+
+
+def _profile_document(
+    raw_text: str,
+    raw_iocs: list,
+    artifact_type: str,
+    page_count: int,
+) -> dict:
+    """Describe the document before any LLM call (see framework.documents).
+
+    Convenience wrapper over ``_build_profile`` for callers that only have
+    the joined text: PDF pages are recovered from the blank-line join used
+    by ``extract_text_from_pdf``; anything else is a single page.
+    """
+    if artifact_type == "pdf_report":
+        page_texts = raw_text.split("\n\n")
+    else:
+        page_texts = [raw_text]
+    ioc_types = sorted({i.ioc_type for i in raw_iocs}) or ["ip"]
+    _, profile = _build_profile(
+        artifact_type, page_texts, _page_iocs(page_texts, ioc_types), raw_iocs
+    )
+    return profile
+
+
+def _elapsed(start: float) -> float:
+    return round(time.monotonic() - start, 1)
+
 
 def _chunk_text(text: str, max_chars: int = _MAX_TEXT_CHARS_PER_CHUNK) -> list[str]:
     """Split text into paragraph-bounded chunks, each under max_chars."""
@@ -370,9 +486,13 @@ def _parse_llm_json(response_text: str) -> dict | None:
     # --- Slow path: repair truncated JSON ---
     repaired = _repair_truncated_json(text)
     if repaired is not None:
-        _log.info(
-            "Recovered truncated JSON via bracket repair "
-            "(original_length=%d, keys=%s)",
+        _log.warning(
+            "[TRUNCATED] Recovered a truncated JSON reply by closing brackets "
+            "— %d refined_iocs and %d techniques kept; anything the model had "
+            "not yet written is lost (original_length=%d, keys=%s). "
+            "The reply hit the output-token limit; fewer IOCs per call fixes it.",
+            len(repaired.get("refined_iocs", []) or []),
+            len(repaired.get("additional_mitre_techniques", []) or []),
             resp_len, list(repaired.keys()),
         )
         return repaired
@@ -1131,17 +1251,22 @@ class ThreatIntelIngester:
             )
 
         # --- Extract text ---
+        t_start = time.monotonic()
+        timings: dict[str, float] = {}
         logger.info(
             "Extracting text from %s artifact %s",
             artifact.artifact_type,
             artifact_id,
         )
         extractor = TEXT_EXTRACTORS[artifact.artifact_type]
+        page_texts: list[str] = []
         try:
             if artifact.artifact_type == "pdf_report":
-                raw_text = extractor(artifact.file_path, max_pages)
+                page_texts = extract_pdf_page_texts(artifact.file_path, max_pages)
+                raw_text = "\n\n".join(t for t in page_texts if t)
             else:
                 raw_text = extractor(str(artifact.file_path))
+                page_texts = [raw_text]
         except Exception as e:
             logger.error("Text extraction failed: %s", e)
             return ToolResult(
@@ -1151,20 +1276,71 @@ class ThreatIntelIngester:
             )
 
         if artifact.artifact_type == "pdf_report":
-            page_count = raw_text.count("\n\n") + 1
+            page_count = len(page_texts)
         else:
             page_count = len(raw_text.splitlines())
+
+        timings["extract_s"] = _elapsed(t_start)
 
         # --- Regex extraction pass ---
         logger.info("Running regex IOC extraction for types: %s", ioc_types)
         raw_iocs = extract_iocs_regex(raw_text, ioc_types)
         logger.info("Regex pass found %d IOC candidates", len(raw_iocs))
 
+        # --- Document profile: what are we about to send to the model? ---
+        page_iocs = _page_iocs(page_texts, ioc_types)
+        doc_profile, profile = _build_profile(
+            artifact.artifact_type, page_texts, page_iocs, raw_iocs
+        )
+        logger.info(
+            "[PROFILE] %s: %d page(s), %d chars, %d candidates (%s), "
+            "%.1f/page (max %d on one page), est. output ~%d tokens -> %s",
+            artifact.artifact_type, profile["pages"], profile["text_chars"],
+            profile["candidates"],
+            ", ".join(f"{k}={v}" for k, v in sorted(profile["candidates_by_type"].items()))
+            or "none",
+            profile["candidates_per_page"], profile["max_candidates_on_a_page"],
+            profile["estimated_output_tokens"], profile["profile"],
+        )
+        if profile["profile"] == "ioc_dense":
+            logger.warning(
+                "[PROFILE] IOC-dense document: the model's reply grows with "
+                "the %d candidates, not the page count (est. ~%d output tokens "
+                "vs %d max per call%s). A single native call may exceed the "
+                "request deadline; if it does, the chunked path runs at %d "
+                "candidates per call.",
+                profile["candidates"], profile["estimated_output_tokens"],
+                _NATIVE_MAX_OUTPUT_TOKENS,
+                " - WILL BE TRUNCATED" if profile["exceeds_single_call_output"] else "",
+                _MAX_IOC_PER_CHUNK,
+            )
+
+        # --- Ingestion plan: whole document, page-range batches, or text ---
+        native_capable = bool(
+            artifact.artifact_type == "pdf_report"
+            and context.llm_enabled and context.llm_query is not None
+            and hasattr(context.llm_query, "supports_native_document")
+            and context.llm_query.supports_native_document("application/pdf")
+        )
+        plan = plan_ingestion(
+            doc_profile,
+            native_available=native_capable,
+            max_output_tokens=_NATIVE_MAX_OUTPUT_TOKENS,
+            call_deadline_s=_NATIVE_CALL_DEADLINE_S,
+            latency=_latency_model(),
+        )
+        logger.info("[PLAN] %s", plan.describe())
+
         # --- LLM refinement pass ---
         refined_iocs = []
         mitre_mappings = []
         report_meta = {}
         attack_graph = {}  # multi-path attack graph from LLM
+        native_batch_results: list[dict] = []
+        # Text and candidates for the chunked path: the whole document unless
+        # native batches covered some pages, in which case only the failed ones.
+        fallback_text = raw_text
+        fallback_iocs = raw_iocs
 
         if context.llm_enabled and context.llm_query is not None:
             logger.info("[DIAG] LLM enabled, llm_query type=%s", type(context.llm_query).__name__)
@@ -1180,136 +1356,224 @@ class ThreatIntelIngester:
                         "for validation. Use official technique IDs."
                     )
 
-            # --- Native PDF path: send full document to LLM directly ---
+            # --- Native PDF path: whole document, or page-range batches ---
             native_pdf_succeeded = False
-            if (artifact.artifact_type == "pdf_report"
-                    and hasattr(context.llm_query, 'supports_native_document')
-                    and context.llm_query.supports_native_document("application/pdf")):
-                logger.info(
-                    "Native PDF ingestion available — attempting "
-                    "query_with_document()"
-                )
-                candidates_text = (
-                    "\n".join(
-                        f"- [{ioc.ioc_type}] {ioc.value} "
-                        f"| Context: {ioc.context[:200]}"
-                        for ioc in raw_iocs
-                    )
-                    or "(none found by regex pre-scan)"
-                )
-                native_prompt = LLM_REFINEMENT_PROMPT.format(
-                    source_context=source_context or "Not provided",
-                    ioc_candidates=candidates_text,
-                    report_text=(
-                        "[Full PDF document is attached — analyze the "
-                        "complete document directly instead of this "
-                        "placeholder text.]"
-                    ),
-                )
-                try:
-                    native_response = context.llm_query.query_with_document(
-                        prompt=native_prompt,
-                        artifact=artifact,
-                        system_context=(
-                            "You are a threat intelligence analyst. "
-                            "Respond only with valid JSON."
-                        ),
-                        max_tokens=16384,
-                        grounding_data=grounding,
-                        hints=QueryHints(
-                            tier="heavy",
-                            prefers_native_file=True,
-                            needs_structured_output=True,
-                        ),
-                    )
-                    log_llm_interaction(
-                        prompt=(
-                            f"[ti_ingester native_pdf] "
-                            f"{native_prompt[:500]}"
-                        ),
-                        response_text=native_response.text,
-                        model_id=(
-                            native_response.model_used
-                            or "threat_intel_ingester"
-                        ),
-                        error=(
-                            str(native_response.error)
-                            if not native_response.ok else None
-                        ),
-                    )
-                    if native_response.ok and native_response.text:
-                        parsed = _parse_llm_json(native_response.text)
-                        if parsed:
-                            logger.info(
-                                "Native PDF ingestion succeeded "
-                                "(transport=%s, model=%s)",
-                                native_response.transport_path,
-                                native_response.model_used,
-                            )
-                            all_refined = parsed.get("refined_iocs", [])
-                            refined_iocs = [
-                                r for r in all_refined
-                                if not r.get("is_false_positive", False)
-                            ]
-                            mitre_mappings = parsed.get(
-                                "additional_mitre_techniques", [],
-                            )
-                            report_meta = parsed.get(
-                                "report_metadata", {},
-                            )
-                            attack_graph = parsed.get(
-                                "attack_graph", {},
-                            )
-                            native_pdf_succeeded = True
-                        else:
-                            logger.warning(
-                                "Native PDF JSON parse failed — "
-                                "falling back to chunked text path "
-                                "| response_length=%d, model=%s, "
-                                "transport=%s, token_usage=%s, "
-                                "first_200=%r, last_200=%r",
-                                len(native_response.text),
-                                native_response.model_used,
-                                native_response.transport_path,
-                                native_response.token_usage,
-                                native_response.text[:200],
-                                native_response.text[-200:],
-                            )
-                            # Also log to activity so it shows in GCP
-                            log_llm_interaction(
-                                prompt="[ti_ingester native_pdf] JSON_PARSE_FAILED",
-                                response_text=native_response.text,
-                                model_id=(
-                                    native_response.model_used
-                                    or "threat_intel_ingester"
-                                ),
-                                error=(
-                                    f"JSON parse failed on {len(native_response.text)}-char "
-                                    f"response. first_100={native_response.text[:100]!r}"
-                                ),
-                            )
-                    else:
-                        logger.warning(
-                            "Native PDF query returned failure — "
-                            "falling back to chunked text path "
-                            "| ok=%s, error=%r, model=%s, "
-                            "transport=%s, fallback_reason=%s, "
-                            "has_text=%s, text_length=%d",
-                            native_response.ok,
-                            native_response.error,
-                            native_response.model_used,
-                            native_response.transport_path,
-                            native_response.fallback_reason,
-                            native_response.text is not None,
-                            len(native_response.text or ""),
+            if native_capable and plan.strategy in ("native", "native_batched"):
+                batches = plan.batches
+                batched = plan.strategy == "native_batched"
+                sub_paths: dict[str, str] = {}
+                tmp_dir: str | None = None
+                if batched:
+                    try:
+                        workspace = os.environ.get("EVENTMILL_WORKSPACE", "./workspace")
+                        batch_root = os.path.join(workspace, "artifacts")
+                        os.makedirs(batch_root, exist_ok=True)
+                        tmp_dir = tempfile.mkdtemp(
+                            prefix=f"{artifact_id}_batches_", dir=batch_root,
                         )
-                except Exception as e:
-                    logger.error(
-                        "Native PDF path exception — "
-                        "falling back to chunked text path "
-                        "| exception_type=%s, message=%s",
-                        type(e).__name__, e,
-                        exc_info=True,
+                        written = split_pdf(
+                            artifact.file_path,
+                            [(b.start, b.end) for b in batches],
+                            tmp_dir,
+                            stem=artifact_id,
+                        )
+                        sub_paths = {b.label: str(pth) for b, pth in zip(batches, written)}
+                        logger.info(
+                            "[BATCH] Split %s into %d page-range sub-PDF(s): %s",
+                            artifact_id, len(written),
+                            ", ".join(b.label for b in batches),
+                        )
+                    except (PdfSplitError, OSError) as exc:
+                        logger.warning(
+                            "[BATCH] Could not split PDF (%s) — sending the whole "
+                            "document in one call instead; expect the request "
+                            "deadline to be at risk.", exc,
+                        )
+                        batched = False
+                        batches = [PageRange(
+                            start=1, end=doc_profile.pages,
+                            candidates=len(raw_iocs),
+                            estimated_output_tokens=doc_profile.estimated_output_tokens,
+                            estimated_seconds=plan.estimated_seconds,
+                        )]
+
+                failed_pages: list[int] = []
+                t_native = time.monotonic()
+                try:
+                    for bi, batch in enumerate(batches, start=1):
+                        if batched:
+                            batch_iocs = _dedupe_iocs([
+                                ioc for pg in range(batch.start, batch.end + 1)
+                                for ioc in page_iocs[pg - 1]
+                            ])
+                            doc_ref = ArtifactRef(
+                                artifact_id=f"{artifact_id}_{batch.label}",
+                                artifact_type="pdf_report",
+                                file_path=sub_paths[batch.label],
+                                metadata={
+                                    "mime_type": "application/pdf",
+                                    "page_range": [batch.start, batch.end],
+                                    "parent_artifact_id": artifact_id,
+                                },
+                            )
+                            page_note = (
+                                f" [pages {batch.start}-{batch.end} of "
+                                f"{doc_profile.pages}; other pages are "
+                                f"processed separately]"
+                            )
+                        else:
+                            batch_iocs = raw_iocs
+                            doc_ref = artifact
+                            page_note = ""
+
+                        candidates_text = (
+                            "\n".join(
+                                f"- [{ioc.ioc_type}] {ioc.value} "
+                                f"| Context: {ioc.context[:200]}"
+                                for ioc in batch_iocs
+                            )
+                            or "(none found by regex pre-scan)"
+                        )
+                        native_prompt = LLM_REFINEMENT_PROMPT.format(
+                            source_context=(source_context or "Not provided") + page_note,
+                            ioc_candidates=candidates_text,
+                            report_text=(
+                                "[Full PDF document is attached — analyze the "
+                                "complete document directly instead of this "
+                                "placeholder text.]"
+                            ),
+                        )
+                        t_call = time.monotonic()
+                        logger.info(
+                            "[NATIVE] %s start: %d candidates in prompt (%d chars), "
+                            "max_tokens=%d, tier=heavy, pages=%d-%d, "
+                            "est. ~%d output tokens / ~%.0fs",
+                            batch.label if batched else "whole",
+                            len(batch_iocs), len(native_prompt),
+                            _NATIVE_MAX_OUTPUT_TOKENS, batch.start, batch.end,
+                            batch.estimated_output_tokens, batch.estimated_seconds,
+                        )
+                        try:
+                            native_response = context.llm_query.query_with_document(
+                                prompt=native_prompt,
+                                artifact=doc_ref,
+                                system_context=(
+                                    "You are a threat intelligence analyst. "
+                                    "Respond only with valid JSON."
+                                ),
+                                max_tokens=_NATIVE_MAX_OUTPUT_TOKENS,
+                                grounding_data=grounding,
+                                hints=QueryHints(
+                                    tier="heavy",
+                                    prefers_native_file=True,
+                                    needs_structured_output=True,
+                                ),
+                            )
+                        except Exception as e:
+                            logger.error(
+                                "[NATIVE] %s exception after %.1fs — pages %d-%d go "
+                                "to the chunked text path | exception_type=%s, message=%s",
+                                batch.label, _elapsed(t_call), batch.start, batch.end,
+                                type(e).__name__, e, exc_info=True,
+                            )
+                            failed_pages.extend(range(batch.start, batch.end + 1))
+                            continue
+
+                        call_s = _elapsed(t_call)
+                        log_llm_interaction(
+                            prompt=f"[ti_ingester native_pdf {batch.label}] {native_prompt[:500]}",
+                            response_text=native_response.text,
+                            model_id=native_response.model_used or "threat_intel_ingester",
+                            error=str(native_response.error) if not native_response.ok else None,
+                        )
+                        logger.info(
+                            "[NATIVE] %s done in %.1fs (%d/%d): ok=%s, model=%s, "
+                            "transport=%s, response=%d chars, token_usage=%s",
+                            batch.label if batched else "whole", call_s, bi, len(batches),
+                            native_response.ok, native_response.model_used,
+                            native_response.transport_path,
+                            len(native_response.text or ""), native_response.token_usage,
+                        )
+                        if not native_response.ok and (
+                            "DEADLINE" in (native_response.error or "").upper()
+                            or "504" in (native_response.error or "")
+                        ):
+                            logger.warning(
+                                "[NATIVE] %s hit the request deadline (%.0fs) with "
+                                "%d candidates on %d page(s) (~%.0fs/page observed). "
+                                "Lower EVENTMILL_NATIVE_S_PER_PAGE is too optimistic "
+                                "for this deployment; these pages go to the chunked path.",
+                                batch.label, call_s, len(batch_iocs), batch.pages,
+                                call_s / max(1, batch.pages),
+                            )
+
+                        parsed = None
+                        if native_response.ok and native_response.text:
+                            parsed = _parse_llm_json(native_response.text)
+                            if parsed is None:
+                                logger.warning(
+                                    "[NATIVE] %s JSON parse failed — pages %d-%d go "
+                                    "to the chunked text path | response_length=%d, "
+                                    "first_200=%r, last_200=%r",
+                                    batch.label, batch.start, batch.end,
+                                    len(native_response.text),
+                                    native_response.text[:200],
+                                    native_response.text[-200:],
+                                )
+                                log_llm_interaction(
+                                    prompt=f"[ti_ingester native_pdf {batch.label}] JSON_PARSE_FAILED",
+                                    response_text=native_response.text,
+                                    model_id=native_response.model_used or "threat_intel_ingester",
+                                    error=(
+                                        f"JSON parse failed on {len(native_response.text)}-char "
+                                        f"response. first_100={native_response.text[:100]!r}"
+                                    ),
+                                )
+                        elif not native_response.ok:
+                            logger.warning(
+                                "[NATIVE] %s returned failure — pages %d-%d go to the "
+                                "chunked text path | error=%r, fallback_reason=%s",
+                                batch.label, batch.start, batch.end,
+                                native_response.error, native_response.fallback_reason,
+                            )
+
+                        if parsed:
+                            native_batch_results.append(parsed)
+                            logger.info(
+                                "[NATIVE] %s parsed OK — %d refined_iocs, %d techniques, "
+                                "%d attack paths",
+                                batch.label,
+                                len(parsed.get("refined_iocs", [])),
+                                len(parsed.get("additional_mitre_techniques", [])),
+                                len(parsed.get("attack_graph", {}).get("paths", [])),
+                            )
+                        else:
+                            failed_pages.extend(range(batch.start, batch.end + 1))
+                finally:
+                    timings["native_s"] = _elapsed(t_native)
+                    if tmp_dir:
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+                if native_batch_results and not failed_pages:
+                    native_pdf_succeeded = True
+                    logger.info(
+                        "Native PDF ingestion succeeded in %.1fs (%d call(s))",
+                        timings["native_s"], len(native_batch_results),
+                    )
+                elif failed_pages:
+                    fallback_text = "\n\n".join(
+                        page_texts[pg - 1] for pg in failed_pages if page_texts[pg - 1]
+                    )
+                    fallback_iocs = _dedupe_iocs([
+                        ioc for pg in failed_pages for ioc in page_iocs[pg - 1]
+                    ])
+                    logger.warning(
+                        "[NATIVE] %d/%d batch(es) succeeded; %d page(s) (%s) with %d "
+                        "candidates fall back to the chunked text path",
+                        len(native_batch_results), len(batches), len(failed_pages),
+                        ", ".join(str(pg) for pg in failed_pages[:12])
+                        + (" ..." if len(failed_pages) > 12 else ""),
+                        len(fallback_iocs),
                     )
 
             # Split large inputs into chunks to stay within LLM context limits.
@@ -1317,10 +1581,10 @@ class ThreatIntelIngester:
             # the monolithic prompt (100 IOCs + 8 kB text) exceeded the model's
             # comfortable input window.  Each chunk call is ~7-10 kB total.
             ioc_batches = [
-                raw_iocs[i:i + _MAX_IOC_PER_CHUNK]
-                for i in range(0, max(1, len(raw_iocs)), _MAX_IOC_PER_CHUNK)
+                fallback_iocs[i:i + _MAX_IOC_PER_CHUNK]
+                for i in range(0, max(1, len(fallback_iocs)), _MAX_IOC_PER_CHUNK)
             ]
-            text_chunks = _chunk_text(raw_text, _MAX_TEXT_CHARS_PER_CHUNK)
+            text_chunks = _chunk_text(fallback_text, _MAX_TEXT_CHARS_PER_CHUNK)
             n_chunks = max(len(ioc_batches), len(text_chunks))
 
             if native_pdf_succeeded:
@@ -1335,11 +1599,14 @@ class ThreatIntelIngester:
                 n_chunks, len(ioc_batches), len(text_chunks),
             )
 
-            chunk_results: list[dict] = []
+            # Native batch results are merged together with any chunk results
+            chunk_results: list[dict] = list(native_batch_results)
             chunk_json_failures = 0
             chunk_llm_failures = 0
             chunk_exceptions = 0
+            t_chunks = time.monotonic()
             for i in range(n_chunks):
+                t_chunk = time.monotonic()
                 ioc_batch = ioc_batches[i] if i < len(ioc_batches) else []
                 text_chunk = text_chunks[i] if i < len(text_chunks) else ""
 
@@ -1400,6 +1667,13 @@ class ThreatIntelIngester:
                         ),
                     )
 
+                    logger.info(
+                        "[CHUNK] %d/%d done in %.1fs: ok=%s, model=%s, "
+                        "%d candidates in, response=%d chars, token_usage=%s",
+                        i + 1, n_chunks, _elapsed(t_chunk), llm_response.ok,
+                        llm_response.model_used, len(ioc_batch),
+                        len(llm_response.text or ""), llm_response.token_usage,
+                    )
                     if llm_response.ok and llm_response.text:
                         logger.info(
                             "[DIAG] Chunk %d/%d LLM RESPONSE (%d chars). "
@@ -1466,9 +1740,16 @@ class ThreatIntelIngester:
                         exc_info=True,
                     )
 
+            if n_chunks:
+                timings["chunks_s"] = _elapsed(t_chunks)
             logger.info(
-                "[DIAG] LLM loop done — %d/%d chunks produced parseable JSON",
-                len(chunk_results), n_chunks,
+                "[DIAG] LLM loop done in %.1fs — %d/%d chunks produced parseable JSON "
+                "(%d JSON failures, %d LLM failures, %d exceptions); "
+                "%d native batch result(s) carried in",
+                timings.get("chunks_s", 0.0),
+                len(chunk_results) - len(native_batch_results), n_chunks,
+                chunk_json_failures, chunk_llm_failures, chunk_exceptions,
+                len(native_batch_results),
             )
 
             if chunk_results:
@@ -1551,7 +1832,10 @@ class ThreatIntelIngester:
                     )
 
         # --- Reconcile: backfill + enrich from local ATT&CK data ---
+        t_reconcile = time.monotonic()
         all_mitre = _reconcile_mitre_mappings(all_mitre, attack_graph)
+        timings["reconcile_s"] = _elapsed(t_reconcile)
+        timings["total_s"] = _elapsed(t_start)
 
         # --- Build summary ---
         ioc_breakdown: dict[str, int] = {}
@@ -1579,8 +1863,6 @@ class ThreatIntelIngester:
             }
 
             # Write artifact file
-            import tempfile
-            import os
 
             workspace = os.environ.get("EVENTMILL_WORKSPACE", "/tmp")
             artifact_dir = os.path.join(workspace, "artifacts")
@@ -1620,6 +1902,11 @@ class ThreatIntelIngester:
             ]
 
         logger.info(
+            "[TIMING] %s | mode=%s | %s",
+            artifact_id, ingestion_mode,
+            ", ".join(f"{k}={v}" for k, v in timings.items()),
+        )
+        logger.info(
             "Ingestion complete: %d IOCs, %d MITRE techniques, %d high-priority",
             len(filtered_iocs),
             len(all_mitre),
@@ -1655,6 +1942,9 @@ class ThreatIntelIngester:
                     ),
                     "confidence_distribution": confidence_dist,
                     "ingestion_mode": ingestion_mode,
+                    "document_profile": profile,
+                    "ingestion_plan": plan.to_dict(),
+                    "timings": timings,
                     "tactic_corrected_count": sum(
                         1 for m in all_mitre if m.get("tactic_corrected_from")
                     ),

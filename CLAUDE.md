@@ -134,6 +134,7 @@ and is silently wrong, which is why the deploy scripts guard it.
 | Manifest fields and validation | `framework/plugins/loader.py`, `docs/specs/manifest_schema.json` |
 | Tier routing, clamping, fallback | `framework/llm/client.py` |
 | Model facts | `framework/llm/providers/gcp_gemini.json` |
+| Document profiling, page-range batching plan | `framework/documents/profile.py`, `framework/documents/pdf_split.py` |
 | Normative plugin spec | `docs/specs/tool_plugin_spec.md` |
 | How to write a plugin | `docs/guides/plugin_development.md` |
 | Why the LLM layer looks like this | `docs/specs/llm-dispatcher-native-document-handling.md` |

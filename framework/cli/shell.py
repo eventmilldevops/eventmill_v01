@@ -2471,9 +2471,18 @@ class EventMillShell(cmd.Cmd):
                 raise RuntimeError("Plugin returned None instead of ToolResult")
             
             if result.ok:
-                # Register output_artifacts declared by the plugin
+                # Register output_artifacts declared by the plugin — unless the
+                # plugin already registered that file via context.register_artifact
+                # (threat_intel_ingester does both), which would list it twice.
+                _already_registered = {
+                    str(Path(a.file_path).resolve())
+                    for a in self.session_manager.list_artifacts()
+                    if a.artifact_id not in _artifacts_before
+                }
                 for oa in (result.output_artifacts or []):
                     oa_path = Path(oa.get("file_path", ""))
+                    if str(oa_path.resolve()) in _already_registered:
+                        continue
                     if oa_path.exists():
                         self.session_manager.register_artifact(
                             artifact_type=oa.get("artifact_type", "text"),

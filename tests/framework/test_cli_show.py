@@ -125,3 +125,25 @@ class TestRunPrintsFullRender:
         out = capsys.readouterr().out
         assert "```mermaid" in out
         assert "6. Stage 05" in out
+
+
+class TestNoDuplicateOutputArtifacts:
+    def test_ingester_output_listed_once(self, shell, tmp_path, capsys):
+        """threat_intel_ingester registers its JSON via context.register_artifact
+        and also declares it in output_artifacts; the shell must list it once."""
+        report = tmp_path / "advisory.txt"
+        report.write_text(
+            "Actor used T1566.001 and T1486. C2 at 203.0.113.42 and CVE-2024-3400.",
+            encoding="utf-8",
+        )
+        src = _register_text(shell, report, artifact_type="text")
+        before = {a.artifact_id for a in shell.session_manager.list_artifacts()}
+
+        shell.do_run(f"threat_intel_ingester --artifact_id {src}")
+        out = capsys.readouterr().out
+        assert "Completed successfully" in out
+
+        new = [a for a in shell.session_manager.list_artifacts() if a.artifact_id not in before]
+        assert len(new) == 1, [(a.artifact_id, a.file_path) for a in new]
+        assert new[0].artifact_type == "json_events"
+        assert out.count("_ti_iocs.json") == 1
