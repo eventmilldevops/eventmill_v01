@@ -414,7 +414,7 @@ pillar.
 | `files [filters]` | List available files; `--path`, `--ext`, `--newer`, `--match`, `--sort`, `--limit` |
 | `load <filename\|#N>` | Download and register a file as an artifact |
 | `artifacts` | List loaded artifacts |
-| `tools` | List available tools |
+| `tools [pillar] [--all]` | Tools for the active pillar; `--all` shows every tool |
 | `run <tool> <json>` | Execute a tool with a JSON payload |
 | `status` | Show current session state |
 | `history` | Merged timeline of tool executions and LLM turns |

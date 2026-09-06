@@ -1859,29 +1859,132 @@ class EventMillShell(cmd.Cmd):
     # -------------------------------------------------------------------
     
     def do_tools(self, arg: str) -> None:
-        """List available tools.
-        
-        Usage: tools [pillar]
+        """List available tools, scoped to the active pillar.
+
+        Usage: tools [pillar] [--all]
+
+        With a pillar active, the listing is that pillar's tools plus any
+        tool from another pillar that consumes an artifact type you have
+        loaded. '--all' shows every tool; naming a pillar shows that one.
         """
-        pillar = arg.strip() if arg else None
-        
+        stripped = arg.strip()
+        pillar = ""
+        show_all = False
+
+        if stripped:
+            try:
+                tokens = shlex.split(stripped)
+            except ValueError as e:
+                print(f"  Could not parse arguments: {e}")
+                return
+            for token in tokens:
+                if token == "--all":
+                    show_all = True
+                elif token.startswith("--"):
+                    print(f"  Unknown flag {token}. Use --all, or name a pillar.")
+                    return
+                elif pillar:
+                    print("  Usage: tools [pillar] [--all]")
+                    return
+                else:
+                    pillar = token
+
+        if pillar and show_all:
+            print("  Name a pillar or pass --all, not both.")
+            return
+
+        known_pillars = self.plugin_loader.list_pillars()
+
         if pillar:
-            plugins = self.plugin_loader.get_by_pillar(pillar)
-        else:
-            plugins = self.plugin_loader.list_all()
-        
+            if pillar not in known_pillars:
+                print(f"  No tools for pillar {pillar!r}.")
+                print(f"  Loaded pillars: {', '.join(sorted(known_pillars))}")
+                return
+            self._print_tool_rows(self.plugin_loader.get_by_pillar(pillar), show_pillar=False)
+            return
+
+        all_plugins = self.plugin_loader.list_all()
+        if not all_plugins:
+            print("  No tools available.")
+            return
+
+        session = self.session_manager.get_current_session()
+        active = session.active_pillar if session else None
+
+        if show_all or not active or active not in known_pillars:
+            self._print_tool_rows(all_plugins, show_pillar=True)
+            if not show_all and not active:
+                print()
+                print("  Set a pillar with 'pillar <name>' to narrow this list.")
+            return
+
+        pillar_plugins = self.plugin_loader.get_by_pillar(active)
+        related = self._related_tools(active, pillar_plugins)
+
+        print(f"  {active} tools")
+        self._print_tool_rows(pillar_plugins, show_pillar=False)
+
+        if related:
+            print()
+            print("  Related — these consume artifacts you have loaded")
+            self._print_tool_rows(related, show_pillar=True)
+
+        shown = {p.tool_name for p in pillar_plugins} | {p.tool_name for p in related}
+        hidden = [p for p in all_plugins if p.tool_name not in shown]
+        if hidden:
+            others = sorted({p.pillar for p in hidden})
+            print()
+            print(f"  {len(hidden)} more in other pillars: 'tools --all', or 'tools <pillar>'")
+            print(f"  ({', '.join(others)})")
+
+    def _related_tools(
+        self,
+        active_pillar: str,
+        pillar_plugins: list[LoadedPlugin],
+    ) -> list[LoadedPlugin]:
+        """Tools outside the active pillar that consume a loaded artifact type.
+
+        Adjacency alone does not narrow anything — every pillar is adjacent to
+        most others — so relevance comes from the session: a PCAP tool earns a
+        place in a threat_modeling listing once a PCAP is loaded.
+        """
+        try:
+            loaded_types = {a.artifact_type for a in self.session_manager.list_artifacts()}
+        except ValueError:
+            return []
+        if not loaded_types:
+            return []
+
+        in_pillar = {p.tool_name for p in pillar_plugins}
+        related = [
+            p
+            for p in self.plugin_loader.list_all()
+            if p.tool_name not in in_pillar
+            and loaded_types.intersection(p.manifest.artifacts_consumed or [])
+        ]
+        return sorted(related, key=lambda p: (p.pillar, p.tool_name))
+
+    def _print_tool_rows(self, plugins: list[LoadedPlugin], show_pillar: bool) -> None:
+        """Print a tool table, with the pillar column only when it varies."""
         if not plugins:
             print("  No tools available.")
             return
-        
-        print(f"  {'Display Name':30s} {'Invoke As':30s} {'Pillar':20s} {'Stability':12s} Description")
-        print(f"  {'─' * 30} {'─' * 30} {'─' * 20} {'─' * 12} {'─' * 50}")
-        
-        for p in plugins:
-            m = p.manifest
+
+        if show_pillar:
+            print(f"  {'Display Name':30s} {'Invoke As':30s} {'Pillar':20s} {'Stability':12s} Description")
+            print(f"  {'─' * 30} {'─' * 30} {'─' * 20} {'─' * 12} {'─' * 50}")
+        else:
+            print(f"  {'Display Name':30s} {'Invoke As':30s} {'Stability':12s} Description")
+            print(f"  {'─' * 30} {'─' * 30} {'─' * 12} {'─' * 50}")
+
+        for plugin in plugins:
+            m = plugin.manifest
             desc = m.description_short[:80] if m.description_short else "—"
             invoke = f"run {m.tool_name}"
-            print(f"  {m.display_name:30s} {invoke:30s} {m.pillar:20s} {m.stability:12s} {desc}")
+            if show_pillar:
+                print(f"  {m.display_name:30s} {invoke:30s} {m.pillar:20s} {m.stability:12s} {desc}")
+            else:
+                print(f"  {m.display_name:30s} {invoke:30s} {m.stability:12s} {desc}")
     
     def do_help(self, arg: str) -> None:
         """Show help for a command or tool.

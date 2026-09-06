@@ -521,7 +521,7 @@ The CLI follows Metasploit conventions. Core commands for MVP:
 | `use <pillar>` | Select active investigation pillar |
 | `load <file>` | Load an artifact file into the session |
 | `artifacts` | List registered artifacts with IDs and types |
-| `tools` | List available tools for the current pillar |
+| `tools [pillar] [--all]` | Tools for the active pillar, plus any tool elsewhere that consumes a loaded artifact type; `--all` shows every tool |
 | `info <tool_name>` | Show tool details (description, input schema, examples) |
 | `run <tool_name> [options]` | Execute a tool with the given options |
 | `set <option> <value>` | Set a tool option before running |
