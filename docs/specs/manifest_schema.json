@@ -47,6 +47,21 @@
       ],
       "description": "Investigation pillar this plugin belongs to. MUST match the directory the plugin is stored under."
     },
+    "also_useful_in": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "network_forensics",
+          "cloud_investigation",
+          "log_analysis",
+          "risk_assessment",
+          "threat_modeling"
+        ]
+      },
+      "uniqueItems": true,
+      "description": "Other pillars where this tool is a sensible choice even though it belongs to `pillar`. Advisory for discovery and tool listings; MUST NOT contain the tool's own pillar."
+    },
     "display_name": {
       "type": "string",
       "minLength": 1,

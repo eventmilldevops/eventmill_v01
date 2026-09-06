@@ -115,6 +115,9 @@ Key changes from 0.1.0:
 - `model_tier` declares the default LLM tier (`light`, `heavy`, `none`) for the plugin's queries
 - `reference_data_overrides` declares which framework reference data entries the plugin extends
 - `chains_to` is an advisory field for the router describing downstream tool compatibility
+- `also_useful_in` names other pillars where the tool is a sensible choice. A plugin still
+  belongs to exactly one pillar - the directory it lives in - and MUST NOT list that pillar
+  here. The field is advisory: it widens where the tool is *offered*, never where it lives
 
 See `manifest_schema.json` for the complete field reference.
 

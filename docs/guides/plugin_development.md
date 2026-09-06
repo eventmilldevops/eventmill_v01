@@ -44,6 +44,7 @@ Create `manifest.json` with your plugin's metadata:
   "tool_name": "my_new_tool",
   "version": "1.0.0",
   "pillar": "log_analysis",
+  "also_useful_in": [],
   "display_name": "My New Tool",
   "description_short": "One-line description of what this tool does.",
   "description_long": "Detailed explanation of the tool's purpose and behavior.",
@@ -512,6 +513,9 @@ The router uses your manifest to determine when your tool should be suggested:
 - **`artifacts_consumed`**: Tools are suggested when matching artifacts are loaded.
 - **`tags`**: Secondary signal for keyword-based routing.
 - **`chains_to` / `chains_from`**: Suggests tool sequences to the LLM.
+- **`also_useful_in`**: Other pillars whose tool listing should offer this tool. Use it for
+  a tool that is a natural *first* step in another pillar's work, where there is no loaded
+  artifact or upstream tool to infer the relevance from.
 
 ## Troubleshooting
 

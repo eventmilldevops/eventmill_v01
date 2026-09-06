@@ -3,8 +3,9 @@ Tests for the 'tools' CLI command.
 
 'tools' listed every loaded plugin regardless of the active pillar, which
 is not what the architecture spec describes. It is now scoped to the
-active pillar, with tools from other pillars surfacing only when they
-consume an artifact type the session has loaded.
+active pillar, with tools from other pillars surfacing when they name it
+in their manifest's also_useful_in, or when they consume an artifact type
+the session has loaded.
 """
 
 from pathlib import Path
@@ -66,8 +67,8 @@ class TestPillarScoping:
         shell.onecmd("tools")
         out = capsys.readouterr().out
         total = len(shell.plugin_loader.list_all())
-        in_pillar = len(shell.plugin_loader.get_by_pillar(Pillar.THREAT_MODELING))
-        assert f"{total - in_pillar} more in other pillars" in out
+        offered = len(shell.plugin_loader.get_for_pillar(Pillar.THREAT_MODELING))
+        assert f"{total - offered} more in other pillars" in out
         assert "tools --all" in out
 
     def test_all_shows_every_pillar(self, shell, capsys):
@@ -150,6 +151,43 @@ class TestRelatedTools:
         shell.onecmd("tools")
         out = capsys.readouterr().out
         assert out.count("run attack_path_visualizer") == 1
+
+
+# ---------------------------------------------------------------------------
+# also_useful_in
+# ---------------------------------------------------------------------------
+
+
+class TestBorrowedTools:
+    """A manifest can offer a tool in a pillar it does not belong to."""
+
+    def test_borrowed_tool_is_listed(self, shell, capsys):
+        shell.onecmd("tools")
+        out = capsys.readouterr().out
+        assert "threat_intel_ingester" in out
+
+    def test_borrowed_tool_shows_its_real_pillar(self, shell, capsys):
+        shell.onecmd("tools")
+        out = capsys.readouterr().out
+        assert "log_analysis" in out.split("Related")[0]
+        assert "also_useful_in" in out
+
+    def test_borrowed_tool_is_not_counted_as_hidden(self, shell, capsys):
+        shell.onecmd("tools")
+        out = capsys.readouterr().out
+        total = len(shell.plugin_loader.list_all())
+        offered = len(shell.plugin_loader.get_for_pillar(Pillar.THREAT_MODELING))
+        assert f"{total - offered} more in other pillars" in out
+
+    def test_borrowed_tool_still_listed_under_its_own_pillar(self, shell, capsys):
+        shell.onecmd("tools log_analysis")
+        out = capsys.readouterr().out
+        assert "threat_intel_ingester" in out
+        assert "also_useful_in" not in out
+
+    def test_no_footnote_when_nothing_is_borrowed(self, shell, capsys):
+        shell.onecmd("tools network_forensics")
+        assert "also_useful_in" not in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

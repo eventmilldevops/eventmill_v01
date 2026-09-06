@@ -1863,9 +1863,10 @@ class EventMillShell(cmd.Cmd):
 
         Usage: tools [pillar] [--all]
 
-        With a pillar active, the listing is that pillar's tools plus any
-        tool from another pillar that consumes an artifact type you have
-        loaded. '--all' shows every tool; naming a pillar shows that one.
+        With a pillar active, the listing is that pillar's tools - including
+        tools from elsewhere that name it in their manifest's also_useful_in -
+        plus any tool that consumes an artifact type you have loaded.
+        '--all' shows every tool; naming a pillar shows that one.
         """
         stripped = arg.strip()
         pillar = ""
@@ -1900,7 +1901,7 @@ class EventMillShell(cmd.Cmd):
                 print(f"  No tools for pillar {pillar!r}.")
                 print(f"  Loaded pillars: {', '.join(sorted(known_pillars))}")
                 return
-            self._print_tool_rows(self.plugin_loader.get_by_pillar(pillar), show_pillar=False)
+            self._print_pillar_rows(pillar, self.plugin_loader.get_for_pillar(pillar))
             return
 
         all_plugins = self.plugin_loader.list_all()
@@ -1918,11 +1919,11 @@ class EventMillShell(cmd.Cmd):
                 print("  Set a pillar with 'pillar <name>' to narrow this list.")
             return
 
-        pillar_plugins = self.plugin_loader.get_by_pillar(active)
+        pillar_plugins = self.plugin_loader.get_for_pillar(active)
         related = self._related_tools(active, pillar_plugins)
 
         print(f"  {active} tools")
-        self._print_tool_rows(pillar_plugins, show_pillar=False)
+        self._print_pillar_rows(active, pillar_plugins)
 
         if related:
             print()
@@ -1963,6 +1964,17 @@ class EventMillShell(cmd.Cmd):
             and loaded_types.intersection(p.manifest.artifacts_consumed or [])
         ]
         return sorted(related, key=lambda p: (p.pillar, p.tool_name))
+
+    def _print_pillar_rows(self, pillar: str, plugins: list[LoadedPlugin]) -> None:
+        """Print one pillar's tools, including any that only declare it.
+
+        The pillar column appears only when a borrowed tool makes it vary, and
+        a footnote says why a row from another pillar is in the listing.
+        """
+        borrowed = [p for p in plugins if p.pillar != pillar]
+        self._print_tool_rows(plugins, show_pillar=bool(borrowed))
+        if borrowed:
+            print(f"  Rows outside {pillar} declare it in the manifest's also_useful_in.")
 
     def _print_tool_rows(self, plugins: list[LoadedPlugin], show_pillar: bool) -> None:
         """Print a tool table, with the pillar column only when it varies."""

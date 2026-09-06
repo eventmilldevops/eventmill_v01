@@ -54,6 +54,9 @@ class PluginManifest:
         self.tags: list[str] = data.get("tags", [])
         self.chains_to: list[str] = data.get("chains_to", [])
         self.chains_from: list[str] = data.get("chains_from", [])
+        self.also_useful_in: list[str] = [
+            p for p in data.get("also_useful_in", []) if p != self.pillar
+        ]
     
     def get_entry_point_path(self) -> Path:
         """Get the full path to the entry point module."""
@@ -234,6 +237,31 @@ class PluginLoader:
         """
         tool_names = self._by_pillar.get(pillar, [])
         return [self._plugins[name] for name in tool_names]
+    
+    def get_for_pillar(self, pillar: str) -> list[LoadedPlugin]:
+        """Get the plugins that belong to a pillar, plus those that declare it.
+        
+        A plugin belongs to exactly one pillar - the directory it lives in -
+        but may name others in its manifest's `also_useful_in`. Those are
+        returned after the pillar's own, so callers can tell them apart by
+        `plugin.pillar`.
+        
+        Args:
+            pillar: The pillar name.
+        
+        Returns:
+            List of LoadedPlugin instances.
+        """
+        own = self.get_by_pillar(pillar)
+        borrowed = sorted(
+            (
+                p
+                for p in self._plugins.values()
+                if p.pillar != pillar and pillar in p.manifest.also_useful_in
+            ),
+            key=lambda p: (p.pillar, p.tool_name),
+        )
+        return own + borrowed
     
     def list_all(self) -> list[LoadedPlugin]:
         """List all loaded plugins."""
