@@ -12,11 +12,20 @@ from __future__ import annotations
 
 import pytest
 
-from framework.llm.client import LLMDispatcher, TierScopedLLMClient, _build_config
+from framework.llm.backends.base import DocumentPart
+from framework.llm.client import (
+    LLMDispatcher,
+    TierScopedLLMClient,
+    _build_config,
+    _finish_reason,
+    _usage,
+)
 from framework.llm.providers import (
     TierSpec,
     default_media_resolution,
     load_tier_specs,
+    max_output_tokens_for_tier,
+    thinking_reserve_tokens,
     tokens_per_pdf_page,
 )
 from framework.plugins.protocol import ArtifactRef, LLMResponse, QueryHints
@@ -372,6 +381,107 @@ class TestProviderManifest:
 
     def test_unknown_provider_returns_empty(self):
         assert load_tier_specs("no_such_provider") == {}
+
+    def test_tier_output_cap_helper_matches_the_manifest(self):
+        specs = load_tier_specs()
+        assert max_output_tokens_for_tier("heavy") == specs["heavy"].max_output_tokens
+        assert max_output_tokens_for_tier("no_such_tier") == 65_536
+
+    def test_thinking_reserve_grows_with_thinking_level(self):
+        """Thinking tokens are spent from max_output_tokens, so a caller that
+        wants a long reply has to hold some of the cap back for reasoning."""
+        reserves = [
+            thinking_reserve_tokens(lv)
+            for lv in ("minimal", "low", "medium", "high")
+        ]
+        assert reserves == sorted(reserves)
+        assert all(0 < r < max_output_tokens_for_tier("heavy") for r in reserves)
+        assert thinking_reserve_tokens() == thinking_reserve_tokens("medium")
+        assert thinking_reserve_tokens("nonsense") == thinking_reserve_tokens("medium")
+
+
+# ---------------------------------------------------------------------------
+# Truncated replies
+# ---------------------------------------------------------------------------
+
+
+class _FakeEnum:
+    """finish_reason arrives as an SDK enum, not a string."""
+    name = "MAX_TOKENS"
+
+
+class _FakeUsage:
+    prompt_token_count = 1000
+    candidates_token_count = 5200
+    thoughts_token_count = 11000
+    total_token_count = 17200
+
+
+class _FakeSDKResponse:
+    def __init__(self, reason=None, usage=None):
+        self.text = '{"refined_iocs": [{"value": "1.2.3'
+        self.candidates = (
+            [type("C", (), {"finish_reason": reason})()] if reason is not None else []
+        )
+        self.usage_metadata = usage
+
+
+class _FakeGenaiClient:
+    def __init__(self, response):
+        self.models = type("M", (), {"generate_content": lambda _self, **kw: response})()
+
+
+class _FakeDocClient:
+    """Enough of MCPLLMClient for the document execution path."""
+
+    def __init__(self, response):
+        self.model_id = "pro"
+        self.max_retries = 0
+        self._total_tokens_used = 0
+        self._genai_client = _FakeGenaiClient(response)
+
+    @staticmethod
+    def _is_retriable(exc):
+        return False
+
+
+class TestTruncationIsVisible:
+    """The SDK returns a half-written reply with no error — a caller that only
+    checks ok gets a partial answer it believes is complete."""
+
+    def test_finish_reason_reads_enum_or_string(self):
+        assert _finish_reason(_FakeSDKResponse(_FakeEnum())) == "MAX_TOKENS"
+        assert _finish_reason(_FakeSDKResponse("STOP")) == "STOP"
+        assert _finish_reason(_FakeSDKResponse()) is None
+
+    def test_usage_reports_thinking_tokens(self):
+        usage = _usage(_FakeSDKResponse(usage=_FakeUsage()))
+        assert usage["thinking_tokens"] == 11000
+        assert usage["completion_tokens"] == 5200
+        assert usage["total_tokens"] == 17200
+        assert _usage(_FakeSDKResponse()) is None
+
+    @staticmethod
+    def _run(response):
+        return LLMDispatcher._execute_document_query(
+            client=_FakeDocClient(response),
+            prompt="p",
+            doc=DocumentPart(mime_type="application/pdf", inline_bytes=b"%PDF"),
+            system_context=None,
+            max_tokens=16384,
+        )
+
+    def test_document_query_flags_a_capped_reply(self):
+        result = self._run(_FakeSDKResponse(_FakeEnum(), _FakeUsage()))
+        assert result.ok is True          # the provider reports no error
+        assert result.truncated is True   # but the JSON stops mid-record
+        assert result.finish_reason == "MAX_TOKENS"
+        assert result.token_usage["thinking_tokens"] == 11000
+
+    def test_complete_reply_is_not_flagged(self):
+        result = self._run(_FakeSDKResponse("STOP", _FakeUsage()))
+        assert result.ok is True and result.truncated is False
+        assert result.finish_reason == "STOP"
 
 
 # ---------------------------------------------------------------------------

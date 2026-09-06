@@ -9,8 +9,10 @@ import pytest
 from framework.documents import (
     LatencyModel,
     PdfSplitError,
+    bisect_range,
     plan_ingestion,
     profile_document,
+    range_from_pages,
     split_pdf,
 )
 from framework.documents.profile import (
@@ -125,6 +127,90 @@ class TestPlan:
         d = plan.to_dict()
         assert d["batch_count"] == len(plan.batches)
         assert d["batches"][0]["pages"] == plan.batches[0].pages
+
+
+class TestOutputReserve:
+    """A thinking model spends reasoning tokens from the reply's budget, so
+    only the remainder can hold JSON — batches sized against the full cap come
+    back cut off mid-record."""
+
+    def test_reserve_shrinks_the_usable_cap(self):
+        # 80 records (~7.1k tokens) fit one call against the full cap
+        prof = profile_document("pdf_report", [3000] * 4, [20] * 4, CAP)
+        fast = LatencyModel(seconds_per_candidate=0.0)
+        whole = plan_ingestion(
+            prof, native_available=True, max_output_tokens=CAP,
+            call_deadline_s=DEADLINE, latency=fast,
+        )
+        assert whole.strategy == "native"
+        assert prof.estimated_output_tokens < whole.output_cap_per_call
+
+        # …but not once most of that cap is reserved for thinking
+        reserved = plan_ingestion(
+            prof, native_available=True, max_output_tokens=CAP,
+            output_reserve_tokens=10_000, call_deadline_s=DEADLINE, latency=fast,
+        )
+        assert reserved.strategy == "native_batched"
+        assert reserved.output_cap_per_call < whole.output_cap_per_call
+        assert all(
+            b.estimated_output_tokens <= reserved.output_cap_per_call
+            for b in reserved.batches
+        )
+
+    def test_reserve_never_drives_the_cap_negative(self):
+        prof = profile_document("pdf_report", [3000], [5], CAP)
+        plan = plan_ingestion(
+            prof, native_available=True, max_output_tokens=CAP,
+            output_reserve_tokens=CAP * 10, call_deadline_s=DEADLINE,
+        )
+        assert plan.output_cap_per_call >= 0
+        assert plan.batches
+
+
+class TestBisectRange:
+    """The retry path for a batch whose reply was truncated."""
+
+    def test_splits_near_half_the_candidates(self):
+        per_page = [10, 10, 10, 10]
+        rng = range_from_pages(1, 4, per_page)
+        halves = bisect_range(rng, per_page)
+        assert [(h.start, h.end) for h in halves] == [(1, 2), (3, 4)]
+        assert sum(h.candidates for h in halves) == rng.candidates
+
+    def test_cut_follows_the_candidates_not_the_pages(self):
+        per_page = [90, 2, 2, 2]
+        halves = bisect_range(range_from_pages(1, 4, per_page), per_page)
+        assert [(h.start, h.end) for h in halves] == [(1, 1), (2, 4)]
+        assert halves[0].candidates == 90
+
+    def test_two_pages_split_into_one_each(self):
+        per_page = [7, 3]
+        halves = bisect_range(range_from_pages(1, 2, per_page), per_page)
+        assert [(h.start, h.end) for h in halves] == [(1, 1), (2, 2)]
+
+    def test_single_page_cannot_be_split(self):
+        per_page = [50]
+        rng = range_from_pages(1, 1, per_page)
+        assert bisect_range(rng, per_page) == [rng]
+
+    def test_repeated_bisection_terminates_at_single_pages(self):
+        per_page = [12] * 8
+        queue = [range_from_pages(1, 8, per_page)]
+        seen = []
+        while queue:
+            rng = queue.pop(0)
+            halves = bisect_range(rng, per_page)
+            if halves == [rng]:
+                seen.append(rng)
+            else:
+                queue.extend(halves)
+        assert [r.start for r in sorted(seen, key=lambda r: r.start)] == list(range(1, 9))
+
+    def test_costs_come_from_the_latency_model(self):
+        per_page = [10, 10]
+        slow = LatencyModel(base_seconds=0, seconds_per_page=100, seconds_per_candidate=0)
+        halves = bisect_range(range_from_pages(1, 2, per_page), per_page, latency=slow)
+        assert all(h.estimated_seconds == 100 for h in halves)
 
 
 @pytest.fixture

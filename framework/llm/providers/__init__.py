@@ -152,6 +152,13 @@ def load_tier_specs(
 _FALLBACK_TOKENS_PER_PAGE = {"low": 280, "medium": 560, "high": 1120}
 DEFAULT_MEDIA_RESOLUTION = "medium"
 
+# Thinking tokens come out of max_output_tokens on Gemini 3.x; these are the
+# reserves used when the provider manifest declares none.
+_FALLBACK_THINKING_RESERVE = {
+    "minimal": 1024, "low": 4096, "medium": 16384, "high": 32768,
+}
+DEFAULT_THINKING_LEVEL = "medium"
+
 
 def pdf_handling(provider_id: str = DEFAULT_PROVIDER_ID) -> dict[str, Any]:
     """PDF limits for a provider: page/size caps and per-resolution page cost."""
@@ -186,8 +193,37 @@ def tokens_per_pdf_page(
     return handling.get("tokens_per_page", _FALLBACK_TOKENS_PER_PAGE["medium"])
 
 
+def thinking_reserve_tokens(
+    thinking_level: str | None = None, provider_id: str = DEFAULT_PROVIDER_ID,
+) -> int:
+    """Output tokens to hold back for reasoning at a given thinking_level.
+
+    Gemini 3.x spends thinking tokens from the same budget as the reply, so a
+    caller that sizes a reply against the full ``max_output_tokens`` gets it
+    cut off mid-record. Subtract this first; the remainder is what the model
+    can actually spend on content.
+    """
+    budget = (load_provider_manifest(provider_id) or {}).get("output_budget") or {}
+    level = thinking_level or budget.get(
+        "default_thinking_level", DEFAULT_THINKING_LEVEL,
+    )
+    reserves = budget.get("thinking_reserve_tokens") or _FALLBACK_THINKING_RESERVE
+    if level in reserves:
+        return reserves[level]
+    return _FALLBACK_THINKING_RESERVE.get(level, _FALLBACK_THINKING_RESERVE["medium"])
+
+
+def max_output_tokens_for_tier(
+    tier: str, provider_id: str = DEFAULT_PROVIDER_ID,
+) -> int:
+    """Declared output-token cap of a tier, or the built-in default."""
+    spec = load_tier_specs(provider_id).get(tier)
+    return spec.max_output_tokens if spec else _DEFAULT_MAX_OUTPUT_TOKENS
+
+
 __all__ = [
     "DEFAULT_MEDIA_RESOLUTION",
+    "DEFAULT_THINKING_LEVEL",
     "DEFAULT_PROVIDER_ID",
     "TierSpec",
     "load_provider_manifest",
@@ -195,5 +231,7 @@ __all__ = [
     "manifest_path",
     "pdf_handling",
     "default_media_resolution",
+    "max_output_tokens_for_tier",
+    "thinking_reserve_tokens",
     "tokens_per_pdf_page",
 ]

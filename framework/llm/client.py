@@ -91,6 +91,39 @@ def _build_config(
     return config
 
 
+def _finish_reason(response: Any) -> str | None:
+    """Stop reason of the first candidate, as a plain string.
+
+    "MAX_TOKENS" means the reply was cut off at the output cap — the SDK
+    still returns text and no error, so a caller that ignores this treats a
+    half-written answer as a complete one.
+    """
+    candidates = getattr(response, "candidates", None)
+    if not candidates:
+        return None
+    reason = getattr(candidates[0], "finish_reason", None)
+    if reason is None:
+        return None
+    return str(getattr(reason, "name", None) or reason)
+
+
+def _usage(response: Any) -> dict[str, int] | None:
+    """Token counts from the response, including thinking tokens."""
+    um = getattr(response, "usage_metadata", None)
+    if not um:
+        return None
+    prompt = getattr(um, "prompt_token_count", 0) or 0
+    completion = getattr(um, "candidates_token_count", 0) or 0
+    thoughts = getattr(um, "thoughts_token_count", 0) or 0
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "thinking_tokens": thoughts,
+        "total_tokens": getattr(um, "total_token_count", 0)
+        or (prompt + completion + thoughts),
+    }
+
+
 class MCPLLMClient:
     """LLM client communicating via Model Context Protocol.
     
@@ -221,7 +254,7 @@ class MCPLLMClient:
             # MCP query execution will be implemented when
             # the mcp package is integrated. For now, return
             # a placeholder indicating the query would be sent.
-            response_text, prompt_tokens, completion_tokens = self._execute_mcp_query(
+            response_text, usage, reason = self._execute_mcp_query(
                 prompt=full_prompt,
                 system_context=system_context,
                 max_tokens=max_tokens,
@@ -231,11 +264,9 @@ class MCPLLMClient:
             return LLMResponse(
                 ok=True,
                 text=response_text,
-                token_usage={
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
-                },
+                token_usage=usage,
+                finish_reason=reason,
+                truncated=reason == "MAX_TOKENS",
             )
         except Exception as e:
             if self._is_quota_exhausted(e):
@@ -354,11 +385,11 @@ class MCPLLMClient:
         system_context: str | None,
         max_tokens: int,
         hints: QueryHints | None = None,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, dict[str, int] | None, str | None]:
         """Execute a text query via Google GenAI SDK (MCP bridge).
 
         Returns:
-            Tuple of (response_text, prompt_tokens, completion_tokens).
+            Tuple of (response_text, token_usage, finish_reason).
 
         Uses google.genai directly until full MCP transport
         is integrated.
@@ -377,19 +408,18 @@ class MCPLLMClient:
                     config=config,
                 )
                 text = response.text or ""
-                # Debug: log finish reason
-                if hasattr(response, "candidates") and response.candidates:
-                    fr = response.candidates[0].finish_reason
-                    print(f"  🔎 Finish reason: {fr}")
-                prompt_tokens = 0
-                completion_tokens = 0
-                if hasattr(response, "usage_metadata") and response.usage_metadata:
-                    um = response.usage_metadata
-                    prompt_tokens = getattr(um, "prompt_token_count", 0)
-                    completion_tokens = getattr(um, "candidates_token_count", 0)
-                    total = getattr(um, "total_token_count", prompt_tokens + completion_tokens)
-                    self._total_tokens_used += total
-                return text, prompt_tokens, completion_tokens
+                reason = _finish_reason(response)
+                usage = _usage(response)
+                if usage:
+                    self._total_tokens_used += usage["total_tokens"]
+                if reason == "MAX_TOKENS":
+                    logger.warning(
+                        "Reply hit the %d-token output cap on %s (%s thinking "
+                        "tokens spent) — the text is partial",
+                        max_tokens, self.model_id,
+                        (usage or {}).get("thinking_tokens", "?"),
+                    )
+                return text, usage, reason
             except Exception as exc:
                 if self._is_quota_exhausted(exc):
                     logger.warning(
@@ -1164,14 +1194,25 @@ class LLMDispatcher:
                         contents=parts,
                         config=config,
                     )
-                    if hasattr(response, "usage_metadata") and response.usage_metadata:
-                        um = response.usage_metadata
-                        client._total_tokens_used += getattr(um, "total_token_count", 0)
+                    usage = _usage(response)
+                    if usage:
+                        client._total_tokens_used += usage["total_tokens"]
+                    reason = _finish_reason(response)
+                    if reason == "MAX_TOKENS":
+                        logger.warning(
+                            "Document reply hit the %d-token output cap on %s "
+                            "(%s thinking tokens spent) — the text is partial",
+                            max_tokens, client.model_id,
+                            (usage or {}).get("thinking_tokens", "?"),
+                        )
                     return LLMResponse(
                         ok=True,
                         text=response.text or "",
                         model_used=client.model_id,
                         transport_path=transport_path,
+                        token_usage=usage,
+                        finish_reason=reason,
+                        truncated=reason == "MAX_TOKENS",
                     )
                 except Exception as exc:
                     if attempt < client.max_retries and client._is_retriable(exc):

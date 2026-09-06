@@ -107,6 +107,14 @@ Non-obvious things that have already caused bugs here:
 - **Default thinking effort moved to `medium` in 3.x.** Bulk extraction should
   pass `thinking_level="low"` or it pays reasoning cost per chunk for
   pattern-matching work.
+- **Thinking tokens are spent from `max_output_tokens`.** The cap is not a
+  content budget: reasoning is drawn from it first and the answer is cut off
+  with `finish_reason="MAX_TOKENS"`, `ok=True` and no error — a caller that
+  checks only `ok` treats half a reply as a whole one. Size a long reply
+  against `max_output_tokens - thinking_reserve_tokens(level)` (declared in
+  `output_budget` in the provider manifest), and check `LLMResponse.truncated`.
+  A 16,384-token document call once returned 70 of ~150 expected IOC records
+  because ~11k of that cap went to thinking.
 - **`temperature`, `top_p`, `top_k` are deprecated in 3.x.** The code sets none
   of them. Do not add them back.
 - **The heavy tier is a Preview endpoint** and can be retired with ~2 weeks'

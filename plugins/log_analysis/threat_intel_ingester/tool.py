@@ -27,10 +27,12 @@ from framework.documents import (
     LatencyModel,
     PageRange,
     PdfSplitError,
+    bisect_range,
     plan_ingestion,
     profile_document,
     split_pdf,
 )
+from framework.llm.providers import max_output_tokens_for_tier, thinking_reserve_tokens
 from framework.plugins.protocol import ArtifactRef, QueryHints, ToolResult, ValidationResult
 from framework.reference_data.mitre_attack import LEGACY_TACTIC_ALIASES
 from framework.reference_data.mitre_attack import TACTIC_ORDER as _TACTIC_SEQUENCE
@@ -282,10 +284,37 @@ from framework.documents.profile import (  # noqa: E402
     OUTPUT_TOKENS_PER_CANDIDATE as _OUTPUT_TOKENS_PER_IOC,
 )
 
-_NATIVE_MAX_OUTPUT_TOKENS: int = 16_384  # max_tokens on each native PDF call
+# Tier and thinking depth for the native PDF calls. Refining regex hits into
+# JSON records is pattern work, not reasoning, and thinking tokens are spent
+# from the same budget as the reply — "low" keeps that budget for content.
+_NATIVE_TIER: str = "heavy"
+_NATIVE_THINKING_LEVEL: str = "low"
+
 # Request deadline the LLM client enforces (framework/llm/client.py sets
 # http_options timeout = 120 s, which the SDK also sends as a server deadline).
 _NATIVE_CALL_DEADLINE_S: float = 120.0
+
+# A truncated batch is halved and retried; this bounds the extra calls that
+# can generate, so a persistently bad estimate cannot loop.
+_NATIVE_MAX_EXTRA_CALLS: int = 8
+
+
+def _native_max_output_tokens() -> int:
+    """What one native call may emit — the tier's real cap, not a guess."""
+    return max_output_tokens_for_tier(_NATIVE_TIER)
+
+
+def _native_content_budget() -> int:
+    """Of that cap, how much can go to JSON once thinking has taken its share.
+
+    Sizing batches against the full cap is what truncated replies mid-record:
+    the model spends thinking tokens first and the answer is cut off with no
+    error from the provider.
+    """
+    return max(
+        1,
+        _native_max_output_tokens() - thinking_reserve_tokens(_NATIVE_THINKING_LEVEL),
+    )
 
 
 def _latency_model() -> LatencyModel:
@@ -333,7 +362,7 @@ def _build_profile(
         artifact_type=artifact_type,
         page_chars=[len(t) for t in page_texts] or [0],
         page_candidates=[len(p) for p in page_iocs] or [0],
-        max_output_tokens=_NATIVE_MAX_OUTPUT_TOKENS,
+        max_output_tokens=_native_content_budget(),
     )
     by_type: dict[str, int] = {}
     for ioc in raw_iocs:
@@ -448,7 +477,18 @@ def _merge_llm_chunk_results(chunk_results: list[dict]) -> dict:
 
 
 def _parse_llm_json(response_text: str) -> dict | None:
-    """Strip markdown code fences and parse JSON from LLM response.
+    """Strip markdown code fences and parse JSON from LLM response."""
+    parsed, _ = _parse_llm_json_result(response_text)
+    return parsed
+
+
+def _parse_llm_json_result(response_text: str) -> tuple[dict | None, bool]:
+    """Parse an LLM JSON reply, reporting whether it had to be repaired.
+
+    Returns ``(parsed, truncated)``. A truncated reply parses only after
+    unmatched brackets are closed, and whatever the model had not written
+    yet is gone — the caller must treat it as a partial answer, not a
+    successful one, or those indicators are silently dropped.
 
     Logs the exact parse error on failure.  If the JSON appears truncated
     (common when the model hits its output-token limit), attempts
@@ -467,7 +507,7 @@ def _parse_llm_json(response_text: str) -> dict | None:
 
     # --- Fast path: direct parse ---
     try:
-        return json.loads(text)
+        return json.loads(text), False
     except json.JSONDecodeError as exc:
         _log.warning(
             "JSON parse error at char %d (line %d col %d): %s "
@@ -490,19 +530,20 @@ def _parse_llm_json(response_text: str) -> dict | None:
             "[TRUNCATED] Recovered a truncated JSON reply by closing brackets "
             "— %d refined_iocs and %d techniques kept; anything the model had "
             "not yet written is lost (original_length=%d, keys=%s). "
-            "The reply hit the output-token limit; fewer IOCs per call fixes it.",
+            "The reply hit the output-token limit — the caller must re-run "
+            "the remainder in smaller pieces rather than accept this.",
             len(repaired.get("refined_iocs", []) or []),
             len(repaired.get("additional_mitre_techniques", []) or []),
             resp_len, list(repaired.keys()),
         )
-        return repaired
+        return repaired, True
 
     _log.warning(
         "JSON repair also failed "
         "| response_length=%d, starts_with_brace=%s",
         resp_len, text[:1] == '{',
     )
-    return None
+    return None, True
 
 
 def _repair_truncated_json(text: str) -> dict | None:
@@ -1303,16 +1344,16 @@ class ThreatIntelIngester:
             profile["estimated_output_tokens"], profile["profile"],
         )
         if profile["profile"] == "ioc_dense":
-            logger.warning(
-                "[PROFILE] IOC-dense document: the model's reply grows with "
-                "the %d candidates, not the page count (est. ~%d output tokens "
-                "vs %d max per call%s). A single native call may exceed the "
-                "request deadline; if it does, the chunked path runs at %d "
-                "candidates per call.",
+            logger.info(
+                "[PROFILE] IOC-dense document: the model's reply grows with the "
+                "%d candidates, not the page count (est. ~%d output tokens vs "
+                "~%d usable per call, of a %d-token cap less the %s-thinking "
+                "reserve)%s",
                 profile["candidates"], profile["estimated_output_tokens"],
-                _NATIVE_MAX_OUTPUT_TOKENS,
-                " - WILL BE TRUNCATED" if profile["exceeds_single_call_output"] else "",
-                _MAX_IOC_PER_CHUNK,
+                _native_content_budget(), _native_max_output_tokens(),
+                _NATIVE_THINKING_LEVEL,
+                " — too much for one call, so it is split below."
+                if profile["exceeds_single_call_output"] else ".",
             )
 
         # --- Ingestion plan: whole document, page-range batches, or text ---
@@ -1325,11 +1366,17 @@ class ThreatIntelIngester:
         plan = plan_ingestion(
             doc_profile,
             native_available=native_capable,
-            max_output_tokens=_NATIVE_MAX_OUTPUT_TOKENS,
+            max_output_tokens=_native_max_output_tokens(),
+            output_reserve_tokens=thinking_reserve_tokens(_NATIVE_THINKING_LEVEL),
             call_deadline_s=_NATIVE_CALL_DEADLINE_S,
             latency=_latency_model(),
         )
-        logger.info("[PLAN] %s", plan.describe())
+        # The console shows WARNING and above: a document that had to be split
+        # says so there, so a multi-minute run is never silent about why.
+        logger.log(
+            logging.WARNING if plan.strategy != "native" else logging.INFO,
+            "[PLAN] %s", plan.describe(),
+        )
 
         # --- LLM refinement pass ---
         refined_iocs = []
@@ -1337,6 +1384,7 @@ class ThreatIntelIngester:
         report_meta = {}
         attack_graph = {}  # multi-path attack graph from LLM
         native_batch_results: list[dict] = []
+        native_calls = 0
         # Text and candidates for the chunked path: the whole document unless
         # native batches covered some pages, in which case only the failed ones.
         fallback_text = raw_text
@@ -1359,72 +1407,95 @@ class ThreatIntelIngester:
             # --- Native PDF path: whole document, or page-range batches ---
             native_pdf_succeeded = False
             if native_capable and plan.strategy in ("native", "native_batched"):
-                batches = plan.batches
-                batched = plan.strategy == "native_batched"
+                native_cap = _native_max_output_tokens()
+                latency = _latency_model()
+                page_candidate_counts = [len(pg) for pg in page_iocs]
                 sub_paths: dict[str, str] = {}
                 tmp_dir: str | None = None
-                if batched:
-                    try:
-                        workspace = os.environ.get("EVENTMILL_WORKSPACE", "./workspace")
-                        batch_root = os.path.join(workspace, "artifacts")
-                        os.makedirs(batch_root, exist_ok=True)
-                        tmp_dir = tempfile.mkdtemp(
-                            prefix=f"{artifact_id}_batches_", dir=batch_root,
-                        )
-                        written = split_pdf(
-                            artifact.file_path,
-                            [(b.start, b.end) for b in batches],
-                            tmp_dir,
-                            stem=artifact_id,
-                        )
-                        sub_paths = {b.label: str(pth) for b, pth in zip(batches, written)}
-                        logger.info(
-                            "[BATCH] Split %s into %d page-range sub-PDF(s): %s",
-                            artifact_id, len(written),
-                            ", ".join(b.label for b in batches),
-                        )
-                    except (PdfSplitError, OSError) as exc:
-                        logger.warning(
-                            "[BATCH] Could not split PDF (%s) — sending the whole "
-                            "document in one call instead; expect the request "
-                            "deadline to be at risk.", exc,
-                        )
-                        batched = False
-                        batches = [PageRange(
-                            start=1, end=doc_profile.pages,
-                            candidates=len(raw_iocs),
-                            estimated_output_tokens=doc_profile.estimated_output_tokens,
-                            estimated_seconds=plan.estimated_seconds,
-                        )]
 
+                def _batch_document(rng: PageRange) -> ArtifactRef | None:
+                    """The document to attach for one range, cut on first use.
+
+                    A range covering every page is the artifact itself; any
+                    narrower range becomes a sub-PDF, so the model still sees
+                    page images and layout rather than extracted text.
+                    """
+                    nonlocal tmp_dir
+                    if rng.start == 1 and rng.end == doc_profile.pages:
+                        return artifact
+                    if rng.label not in sub_paths:
+                        try:
+                            if tmp_dir is None:
+                                workspace = os.environ.get(
+                                    "EVENTMILL_WORKSPACE", "./workspace",
+                                )
+                                batch_root = os.path.join(workspace, "artifacts")
+                                os.makedirs(batch_root, exist_ok=True)
+                                tmp_dir = tempfile.mkdtemp(
+                                    prefix=f"{artifact_id}_batches_", dir=batch_root,
+                                )
+                            written = split_pdf(
+                                artifact.file_path,
+                                [(rng.start, rng.end)],
+                                tmp_dir,
+                                stem=artifact_id,
+                            )
+                        except (PdfSplitError, OSError) as exc:
+                            logger.warning(
+                                "[BATCH] Could not cut pages %d-%d out of %s (%s) — "
+                                "those pages go to the chunked text path",
+                                rng.start, rng.end, artifact_id, exc,
+                            )
+                            return None
+                        sub_paths[rng.label] = str(written[0])
+                        logger.info(
+                            "[BATCH] Cut %s from %s (%d page(s), %d candidates)",
+                            rng.label, artifact_id, rng.pages, rng.candidates,
+                        )
+                    return ArtifactRef(
+                        artifact_id=f"{artifact_id}_{rng.label}",
+                        artifact_type="pdf_report",
+                        file_path=sub_paths[rng.label],
+                        metadata={
+                            "mime_type": "application/pdf",
+                            "page_range": [rng.start, rng.end],
+                            "parent_artifact_id": artifact_id,
+                        },
+                    )
+
+                # The batches are a queue, not a fixed list: a reply that comes
+                # back truncated proves the estimate was wrong for this
+                # document, so that range is halved and re-run instead of being
+                # accepted with indicators missing.
+                pending: list[PageRange] = list(plan.batches)
+                calls_left = len(pending) + _NATIVE_MAX_EXTRA_CALLS
                 failed_pages: list[int] = []
+                batch_no = 0
                 t_native = time.monotonic()
                 try:
-                    for bi, batch in enumerate(batches, start=1):
-                        if batched:
+                    while pending and calls_left > 0:
+                        batch = pending.pop(0)
+                        calls_left -= 1
+                        batch_no += 1
+                        doc_ref = _batch_document(batch)
+                        if doc_ref is None:
+                            failed_pages.extend(range(batch.start, batch.end + 1))
+                            continue
+
+                        whole = batch.pages == doc_profile.pages
+                        if whole:
+                            batch_iocs = raw_iocs
+                            page_note = ""
+                        else:
                             batch_iocs = _dedupe_iocs([
                                 ioc for pg in range(batch.start, batch.end + 1)
                                 for ioc in page_iocs[pg - 1]
                             ])
-                            doc_ref = ArtifactRef(
-                                artifact_id=f"{artifact_id}_{batch.label}",
-                                artifact_type="pdf_report",
-                                file_path=sub_paths[batch.label],
-                                metadata={
-                                    "mime_type": "application/pdf",
-                                    "page_range": [batch.start, batch.end],
-                                    "parent_artifact_id": artifact_id,
-                                },
-                            )
                             page_note = (
                                 f" [pages {batch.start}-{batch.end} of "
                                 f"{doc_profile.pages}; other pages are "
                                 f"processed separately]"
                             )
-                        else:
-                            batch_iocs = raw_iocs
-                            doc_ref = artifact
-                            page_note = ""
 
                         candidates_text = (
                             "\n".join(
@@ -1445,12 +1516,12 @@ class ThreatIntelIngester:
                         )
                         t_call = time.monotonic()
                         logger.info(
-                            "[NATIVE] %s start: %d candidates in prompt (%d chars), "
-                            "max_tokens=%d, tier=heavy, pages=%d-%d, "
-                            "est. ~%d output tokens / ~%.0fs",
-                            batch.label if batched else "whole",
-                            len(batch_iocs), len(native_prompt),
-                            _NATIVE_MAX_OUTPUT_TOKENS, batch.start, batch.end,
+                            "[NATIVE] %s start (call %d): %d candidates in prompt "
+                            "(%d chars), max_tokens=%d, tier=%s, thinking=%s, "
+                            "pages=%d-%d, est. ~%d output tokens / ~%.0fs",
+                            batch.label, batch_no, len(batch_iocs),
+                            len(native_prompt), native_cap, _NATIVE_TIER,
+                            _NATIVE_THINKING_LEVEL, batch.start, batch.end,
                             batch.estimated_output_tokens, batch.estimated_seconds,
                         )
                         try:
@@ -1461,12 +1532,16 @@ class ThreatIntelIngester:
                                     "You are a threat intelligence analyst. "
                                     "Respond only with valid JSON."
                                 ),
-                                max_tokens=_NATIVE_MAX_OUTPUT_TOKENS,
+                                max_tokens=native_cap,
                                 grounding_data=grounding,
                                 hints=QueryHints(
-                                    tier="heavy",
+                                    tier=_NATIVE_TIER,
                                     prefers_native_file=True,
                                     needs_structured_output=True,
+                                    # Refining regex hits into records is
+                                    # extraction, not reasoning, and thinking
+                                    # tokens come out of the reply's budget.
+                                    thinking_level=_NATIVE_THINKING_LEVEL,
                                 ),
                             )
                         except Exception as e:
@@ -1487,11 +1562,11 @@ class ThreatIntelIngester:
                             error=str(native_response.error) if not native_response.ok else None,
                         )
                         logger.info(
-                            "[NATIVE] %s done in %.1fs (%d/%d): ok=%s, model=%s, "
-                            "transport=%s, response=%d chars, token_usage=%s",
-                            batch.label if batched else "whole", call_s, bi, len(batches),
-                            native_response.ok, native_response.model_used,
-                            native_response.transport_path,
+                            "[NATIVE] %s done in %.1fs: ok=%s, model=%s, transport=%s, "
+                            "finish=%s, response=%d chars, token_usage=%s",
+                            batch.label, call_s, native_response.ok,
+                            native_response.model_used, native_response.transport_path,
+                            native_response.finish_reason,
                             len(native_response.text or ""), native_response.token_usage,
                         )
                         if not native_response.ok and (
@@ -1508,8 +1583,10 @@ class ThreatIntelIngester:
                             )
 
                         parsed = None
+                        truncated = bool(native_response.truncated)
                         if native_response.ok and native_response.text:
-                            parsed = _parse_llm_json(native_response.text)
+                            parsed, repaired = _parse_llm_json_result(native_response.text)
+                            truncated = truncated or repaired
                             if parsed is None:
                                 logger.warning(
                                     "[NATIVE] %s JSON parse failed — pages %d-%d go "
@@ -1540,20 +1617,59 @@ class ThreatIntelIngester:
                         if parsed:
                             native_batch_results.append(parsed)
                             logger.info(
-                                "[NATIVE] %s parsed OK — %d refined_iocs, %d techniques, "
+                                "[NATIVE] %s parsed %s — %d refined_iocs, %d techniques, "
                                 "%d attack paths",
-                                batch.label,
+                                batch.label, "PARTIAL" if truncated else "OK",
                                 len(parsed.get("refined_iocs", [])),
                                 len(parsed.get("additional_mitre_techniques", [])),
                                 len(parsed.get("attack_graph", {}).get("paths", [])),
                             )
-                        else:
-                            failed_pages.extend(range(batch.start, batch.end + 1))
+                            if not truncated:
+                                continue
+
+                        if truncated:
+                            halves = bisect_range(
+                                batch, page_candidate_counts, latency=latency,
+                            )
+                            returned = len(parsed.get("refined_iocs", [])) if parsed else 0
+                            if len(halves) > 1 and calls_left >= len(halves):
+                                logger.warning(
+                                    "[NATIVE] %s was cut off at the output cap after "
+                                    "%d of %d candidate(s) — re-running those pages as "
+                                    "%s and %s instead of dropping the remainder",
+                                    batch.label, returned, len(batch_iocs),
+                                    halves[0].label, halves[1].label,
+                                )
+                                pending[:0] = halves
+                                continue
+                            logger.warning(
+                                "[NATIVE] %s was cut off at the output cap after %d of "
+                                "%d candidate(s) and cannot be split further (%d page(s), "
+                                "%d call(s) left) — pages %d-%d go to the chunked path "
+                                "at %d candidates per call",
+                                batch.label, returned, len(batch_iocs), batch.pages,
+                                calls_left, batch.start, batch.end, _MAX_IOC_PER_CHUNK,
+                            )
+                        failed_pages.extend(range(batch.start, batch.end + 1))
+
+                    if pending:
+                        leftover = [
+                            pg for rng in pending
+                            for pg in range(rng.start, rng.end + 1)
+                        ]
+                        logger.warning(
+                            "[NATIVE] Call budget spent with %d page(s) still "
+                            "unprocessed (%s) — they go to the chunked text path",
+                            len(leftover), ", ".join(rng.label for rng in pending),
+                        )
+                        failed_pages.extend(leftover)
                 finally:
                     timings["native_s"] = _elapsed(t_native)
                     if tmp_dir:
                         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+                native_calls = batch_no
+                failed_pages = sorted(set(failed_pages))
                 if native_batch_results and not failed_pages:
                     native_pdf_succeeded = True
                     logger.info(
@@ -1568,9 +1684,9 @@ class ThreatIntelIngester:
                         ioc for pg in failed_pages for ioc in page_iocs[pg - 1]
                     ])
                     logger.warning(
-                        "[NATIVE] %d/%d batch(es) succeeded; %d page(s) (%s) with %d "
-                        "candidates fall back to the chunked text path",
-                        len(native_batch_results), len(batches), len(failed_pages),
+                        "[NATIVE] %d call(s) returned usable JSON; %d page(s) (%s) with "
+                        "%d candidates fall back to the chunked text path",
+                        len(native_batch_results), len(failed_pages),
                         ", ".join(str(pg) for pg in failed_pages[:12])
                         + (" ..." if len(failed_pages) > 12 else ""),
                         len(fallback_iocs),
@@ -1944,6 +2060,7 @@ class ThreatIntelIngester:
                     "ingestion_mode": ingestion_mode,
                     "document_profile": profile,
                     "ingestion_plan": plan.to_dict(),
+                    "native_calls": native_calls,
                     "timings": timings,
                     "tactic_corrected_count": sum(
                         1 for m in all_mitre if m.get("tactic_corrected_from")

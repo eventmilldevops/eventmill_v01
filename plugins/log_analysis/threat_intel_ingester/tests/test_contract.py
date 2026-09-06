@@ -1256,6 +1256,13 @@ class TestDocumentProfile:
         iocs = _tool_mod.extract_iocs_regex(text, ["ip"])
         prof = _tool_mod._profile_document(text, iocs, "text", 399)
         assert prof["profile"] == "ioc_dense"
+        # 399 records fit the tier's real reply budget; only latency splits them
+        assert prof["exceeds_single_call_output"] is False
+
+        bigger = "\n".join(f"198.51.{i // 250}.{i % 250} node" for i in range(1, 1200))
+        prof = _tool_mod._profile_document(
+            bigger, _tool_mod.extract_iocs_regex(bigger, ["ip"]), "text", 1199,
+        )
         assert prof["exceeds_single_call_output"] is True
 
     def test_no_candidates(self):
@@ -1297,16 +1304,25 @@ class _Resp:
     model_used: str | None = "mock-heavy"
     transport_path: str | None = "inline_bytes"
     fallback_reason: str | None = None
+    finish_reason: str | None = "STOP"
+    truncated: bool = False
 
 
 class _NativeLLM:
     """Records every document / text call and answers with JSON that echoes
     the first two candidates it was given, so merged results are checkable."""
 
-    def __init__(self, fail_labels: set[str] | None = None):
+    def __init__(
+        self,
+        fail_labels: set[str] | None = None,
+        truncate_over: int | None = None,
+    ):
         self.doc_calls: list[dict] = []
         self.text_calls: list[dict] = []
         self.fail_labels = fail_labels or set()
+        # A call carrying more than this many candidates comes back cut off at
+        # the output cap, the way a real over-large batch does.
+        self.truncate_over = truncate_over
 
     def supports_native_document(self, mime_type: str) -> bool:
         return mime_type == "application/pdf"
@@ -1346,7 +1362,15 @@ class _NativeLLM:
         })
         if str(label) in self.fail_labels:
             return _Resp(ok=False, text=None, error="504 DEADLINE_EXCEEDED")
-        return _Resp(text=self._reply(self._candidates_from_prompt(prompt), str(label)))
+        values = self._candidates_from_prompt(prompt)
+        if self.truncate_over is not None and len(values) > self.truncate_over:
+            body = self._reply(values, str(label))
+            return _Resp(
+                text=body[: len(body) // 2],
+                finish_reason="MAX_TOKENS",
+                truncated=True,
+            )
+        return _Resp(text=self._reply(values, str(label)))
 
     def query_text(self, prompt, system_context=None, max_tokens=4096, grounding_data=None,
                    hints=None):
@@ -1414,7 +1438,9 @@ class TestBatchedNativeIngestion:
         assert plan["batch_count"] > 1
         # one document call per batch, each with its own sub-PDF and page range
         assert len(llm.doc_calls) == plan["batch_count"]
-        assert batched_run["written"][0] == [(b["start"], b["end"]) for b in plan["batches"]]
+        # each range is cut only when its call is about to run
+        cut = [rng for call in batched_run["written"] for rng in call]
+        assert cut == [(b["start"], b["end"]) for b in plan["batches"]]
         for call, batch in zip(llm.doc_calls, plan["batches"]):
             assert call["page_range"] == [batch["start"], batch["end"]]
             assert call["file_path"].endswith(f"_p{batch['start']}-{batch['end']}.pdf")
@@ -1462,15 +1488,57 @@ class TestBatchedNativeIngestion:
         assert llm.doc_calls[0]["artifact_id"] == "art_dense"  # original artifact, no split
         assert batched_run["written"] == []
 
-    def test_split_failure_degrades_to_whole_document_call(self, tool_instance, batched_run, monkeypatch):
+    def test_split_failure_falls_back_to_chunked_text_not_one_giant_call(
+        self, tool_instance, batched_run, monkeypatch,
+    ):
+        """Sending the whole dense document in one call is what truncates it —
+        when the pages cannot be cut, the small-chunk text path takes over."""
         def boom(*a, **k):
             raise _tool_mod.PdfSplitError("pypdf missing")
         monkeypatch.setattr(_tool_mod, "split_pdf", boom)
         llm = _NativeLLM()
         result = tool_instance.execute({"artifact_id": "art_dense"}, batched_run["make_context"](llm))
         assert result.ok
-        assert len(llm.doc_calls) == 1
-        assert llm.doc_calls[0]["artifact_id"] == "art_dense"
+        assert llm.doc_calls == []
+        assert llm.text_calls
+        for call in llm.text_calls:
+            assert len(call["candidates"]) <= _tool_mod._MAX_IOC_PER_CHUNK
+
+    def test_truncated_batch_is_halved_and_rerun(self, tool_instance, batched_run):
+        """A reply cut off at the output cap is a partial answer: the range is
+        split and re-sent, not accepted with the missing indicators dropped."""
+        llm = _NativeLLM(truncate_over=20)
+        result = tool_instance.execute({"artifact_id": "art_dense"}, batched_run["make_context"](llm))
+        assert result.ok
+        summary = result.result["summary"]
+        plan = summary["ingestion_plan"]
+        # more calls than the plan asked for, and the extra ones are narrower
+        assert len(llm.doc_calls) > plan["batch_count"]
+        assert summary["native_calls"] == len(llm.doc_calls)
+        first_over = next(c for c in llm.doc_calls if len(c["candidates"]) > 20)
+        halves = [
+            c for c in llm.doc_calls
+            if c["page_range"] != first_over["page_range"]
+            and first_over["page_range"][0] <= c["page_range"][0]
+            and c["page_range"][1] <= first_over["page_range"][1]
+        ]
+        assert halves, "the truncated range was never re-run in smaller pieces"
+        assert sum(len(h["candidates"]) for h in halves) >= len(first_over["candidates"])
+
+    def test_truncated_single_page_falls_back_to_chunked_text(
+        self, tool_instance, batched_run, monkeypatch,
+    ):
+        """A page that truncates on its own cannot be split further, so its
+        candidates go to the text path rather than being lost."""
+        monkeypatch.setattr(
+            _tool_mod, "extract_pdf_page_texts",
+            lambda path, max_pages=50: _dense_pages(1, 40),
+        )
+        llm = _NativeLLM(truncate_over=1)
+        result = tool_instance.execute({"artifact_id": "art_dense"}, batched_run["make_context"](llm))
+        assert result.ok
+        assert llm.text_calls
+        assert result.result["summary"]["ingestion_mode"] == "llm"
 
     def test_manifest_budget_covers_batched_runs(self, manifest):
         assert manifest["timeout_class"] == "long"

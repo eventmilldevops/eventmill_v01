@@ -57,6 +57,16 @@
       "preferred_ingestion": "gs_uri"
     }
   },
+  "output_budget": {
+    "_note": "Gemini 3.x spends thinking tokens from the same budget as the reply, so max_output_tokens is not all available for content. Reserve this much when sizing how much a single call is asked to produce; ignoring it truncates a long JSON reply mid-record.",
+    "default_thinking_level": "medium",
+    "thinking_reserve_tokens": {
+      "minimal": 1024,
+      "low": 4096,
+      "medium": 16384,
+      "high": 32768
+    }
+  },
   "document_strategies": {
     "application/pdf": "native",
     "application/json": "extract_text",

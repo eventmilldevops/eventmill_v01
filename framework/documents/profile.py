@@ -43,13 +43,17 @@ DEADLINE_HEADROOM = 0.80
 class LatencyModel:
     """Seconds a native document call takes, as a function of its inputs.
 
-    Calibrated from observed runs on the heavy tier (a 5-page, 14-candidate
-    PDF took ~80 s). Override per deployment if the model or tier changes.
+    Calibrated from observed runs on the heavy tier: a 5-page, 14-candidate
+    PDF took ~80 s, and a 133-candidate batch was still generating past the
+    120 s deadline. Writing the records dominates — the per-candidate term is
+    what keeps a batch inside the deadline, and at these values a batch lands
+    near the ~50 candidates per call the chunked path already sustains.
+    Override per deployment if the model or tier changes.
     """
 
     base_seconds: float = 10.0
     seconds_per_page: float = 12.0
-    seconds_per_candidate: float = 0.2
+    seconds_per_candidate: float = 0.7
 
     def estimate(self, pages: int, candidates: int) -> float:
         return (
@@ -215,6 +219,7 @@ def plan_ingestion(
     native_available: bool,
     max_output_tokens: int,
     call_deadline_s: float,
+    output_reserve_tokens: int = 0,
     latency: LatencyModel | None = None,
 ) -> IngestionPlan:
     """Decide how to send the document to the model.
@@ -223,9 +228,15 @@ def plan_ingestion(
     is the request deadline the client enforces. Both are reduced by a
     headroom factor before comparison so estimate error does not turn into a
     truncated reply or a 504.
+
+    ``output_reserve_tokens`` is subtracted from the cap first: on a thinking
+    model the reasoning tokens are drawn from the same budget as the reply,
+    so only the remainder is available for JSON. Sizing batches against the
+    full cap is what truncates a reply mid-record.
     """
     latency = latency or LatencyModel()
-    cap = int(max_output_tokens * OUTPUT_HEADROOM)
+    content_budget = max(1, max_output_tokens - max(0, output_reserve_tokens))
+    cap = int(content_budget * OUTPUT_HEADROOM)
     deadline = call_deadline_s * DEADLINE_HEADROOM
 
     whole_tokens = profile.estimated_output_tokens
@@ -291,6 +302,55 @@ def plan_ingestion(
         estimated_seconds=total_seconds,
         output_cap_per_call=cap,
         deadline_per_call_s=round(deadline, 1),
+    )
+
+
+def bisect_range(
+    rng: PageRange,
+    page_candidates: list[int],
+    *,
+    latency: LatencyModel | None = None,
+) -> list[PageRange]:
+    """Split one batch in two at the page boundary nearest half its candidates.
+
+    The retry path for a batch whose reply came back truncated: the estimate
+    that sized it was wrong, so the only sound response is to send less of the
+    document per call. A single page cannot be split — it is returned
+    unchanged, and the caller falls back to the text path for that page.
+    """
+    if rng.pages < 2:
+        return [rng]
+    latency = latency or LatencyModel()
+    page_slice = page_candidates[rng.start - 1: rng.end]
+    half = sum(page_slice) / 2
+    cut = rng.start
+    run = 0
+    for offset, count in enumerate(page_slice[:-1]):
+        run += count
+        cut = rng.start + offset
+        if run >= half:
+            break
+    cut = min(max(cut, rng.start), rng.end - 1)
+    return [
+        range_from_pages(rng.start, cut, page_candidates, latency),
+        range_from_pages(cut + 1, rng.end, page_candidates, latency),
+    ]
+
+
+def range_from_pages(
+    start: int, end: int, page_candidates: list[int],
+    latency: LatencyModel | None = None,
+) -> PageRange:
+    """A PageRange over ``start..end`` costed from per-page candidate counts."""
+    latency = latency or LatencyModel()
+    candidates = sum(page_candidates[start - 1: end])
+    pages = end - start + 1
+    return PageRange(
+        start=start,
+        end=end,
+        candidates=candidates,
+        estimated_output_tokens=estimate_output_tokens(candidates),
+        estimated_seconds=round(latency.estimate(pages, candidates), 1),
     )
 
 

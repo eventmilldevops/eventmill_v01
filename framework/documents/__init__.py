@@ -16,8 +16,10 @@ from .profile import (
     IngestionPlan,
     LatencyModel,
     PageRange,
+    bisect_range,
     plan_ingestion,
     profile_document,
+    range_from_pages,
 )
 
 __all__ = [
@@ -26,7 +28,9 @@ __all__ = [
     "LatencyModel",
     "PageRange",
     "PdfSplitError",
+    "bisect_range",
     "plan_ingestion",
     "profile_document",
+    "range_from_pages",
     "split_pdf",
 ]

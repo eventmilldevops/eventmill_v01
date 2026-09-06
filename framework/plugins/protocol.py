@@ -77,6 +77,10 @@ class LLMResponse:
     model_used: str | None = None          # which model actually ran
     transport_path: str | None = None      # "gs_uri", "inline_bytes", "text_fallback"
     fallback_reason: str | None = None     # why preferred path wasn't used
+    finish_reason: str | None = None       # provider stop reason, e.g. "STOP"
+    # The reply stopped at the output-token cap, so text is a partial answer:
+    # ok is still True and the content is usable, but it is not complete.
+    truncated: bool = False
 
 
 # ---------------------------------------------------------------------------
