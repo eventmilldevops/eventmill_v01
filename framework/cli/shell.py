@@ -24,7 +24,7 @@ from typing import Any
 
 from ..logging.structured import get_logger, setup_logging, log_user_activity, log_llm_interaction, set_user_context
 from ..session.manager import SessionManager
-from ..session.models import Pillar, ToolExecutionStatus
+from ..session.models import Pillar, ToolExecution, ToolExecutionStatus
 from ..plugins.loader import PluginLoader, LoadedPlugin
 from ..routing.router import Router, RouterConfig
 from ..artifacts.registry import ArtifactRegistry, create_artifact_registration_callback
@@ -69,6 +69,7 @@ _DURATION_UNITS = {
 _FILE_REF_RE = re.compile(r"^#(\d+)$")
 
 FILES_DEFAULT_LIMIT = 50
+HISTORY_DEFAULT_LIMIT = 40
 
 
 def _parse_duration(text: str) -> timedelta | None:
@@ -469,6 +470,7 @@ class EventMillShell(cmd.Cmd):
         """
         description = arg.strip() if arg else ""
         session = self.session_manager.new_session(description=description)
+        self._conversation_history.clear()
         
         # Initialize artifact registry for session
         self.artifact_registry = ArtifactRegistry(
@@ -502,6 +504,7 @@ class EventMillShell(cmd.Cmd):
         
         session = self.session_manager.load_session(session_id)
         if session:
+            self._conversation_history.clear()
             # Initialize artifact registry
             self.artifact_registry = ArtifactRegistry(
                 artifacts_path=self.workspace_path / "artifacts",
@@ -2707,26 +2710,237 @@ class EventMillShell(cmd.Cmd):
         except Exception as exc:
             logger.warning("Auto-persist failed for %s: %s", tool_name, exc)
 
-    def do_history(self, arg: str) -> None:
+    def do_tool_history(self, arg: str) -> None:
         """Show tool execution history for the current session.
-        
-        Usage: history
+
+        Usage: tool_history [--tool <name>] [--status <state>] [--limit <n>] [--detail]
+               tool_history <execution_id>
+
+        Statuses: running, completed, failed, timed_out.
+        A bare execution id prints that one execution in full.
         """
         if not self.session_manager.get_current_session():
             print("  No active session.")
             return
-        
+
+        stripped = arg.strip()
+        exec_id = ""
+        detail = False
+        tool_filter = ""
+        status_filter = ""
+        limit = 0
+
+        if stripped and not stripped.startswith("--"):
+            parts = stripped.split()
+            if len(parts) > 1:
+                print("  Usage: tool_history [--tool <name>] [--status <state>] [--limit <n>] [--detail]")
+                print("     or: tool_history <execution_id>")
+                return
+            exec_id = parts[0]
+        elif stripped:
+            try:
+                tokens = shlex.split(stripped)
+            except ValueError as e:
+                print(f"  Could not parse arguments: {e}")
+                return
+
+            pairs, error = _split_flags(tokens)
+            if error:
+                print(f"  {error}")
+                return
+
+            valid_states = [s.value for s in ToolExecutionStatus]
+            for key, value in pairs:
+                if key == "detail":
+                    detail = True
+                    continue
+                if value is True:
+                    print(f"  --{key} needs a value.")
+                    return
+                if key == "tool":
+                    tool_filter = str(value)
+                elif key == "status":
+                    status_filter = str(value).lower()
+                    if status_filter not in valid_states:
+                        print(f"  Unknown --status {value!r}. Use {', '.join(valid_states)}.")
+                        return
+                elif key == "limit":
+                    try:
+                        limit = int(str(value))
+                    except ValueError:
+                        print(f"  --limit needs a whole number, got {value!r}.")
+                        return
+                    if limit < 0:
+                        print("  --limit cannot be negative. Use 0 to show all.")
+                        return
+                else:
+                    print(f"  Unknown flag --{key}.")
+                    print("  Use --tool, --status, --limit, --detail.")
+                    return
+
         executions = self.session_manager.list_executions()
-        if not executions:
-            print("  No tool executions yet.")
+
+        if exec_id:
+            match = next((e for e in executions if e.execution_id == exec_id), None)
+            if match is None:
+                print(f"  Execution not found: {exec_id}. Use 'tool_history' to list them.")
+                return
+            self._print_execution_detail(match)
             return
-        
-        print(f"  {'ID':14s} {'Tool':24s} {'Status':12s} {'Time':20s}")
-        print(f"  {'─' * 14} {'─' * 24} {'─' * 12} {'─' * 20}")
-        
+
+        if tool_filter:
+            executions = [e for e in executions if e.tool_name == tool_filter]
+        if status_filter:
+            executions = [e for e in executions if e.status.value == status_filter]
+
+        if not executions:
+            if tool_filter or status_filter:
+                print("  No tool executions match that filter.")
+            else:
+                print("  No tool executions yet.")
+            return
+
+        shown = executions[-limit:] if limit else executions
+
+        if detail:
+            for e in shown:
+                self._print_execution_detail(e)
+        else:
+            print(f"  {'ID':14s} {'Tool':24s} {'Status':12s} {'Duration':10s} {'Time':20s}")
+            print(f"  {'─' * 14} {'─' * 24} {'─' * 12} {'─' * 10} {'─' * 20}")
+            for e in shown:
+                time_str = e.started_at.strftime("%Y-%m-%d %H:%M:%S")
+                duration = self._execution_duration(e)
+                print(
+                    f"  {e.execution_id:14s} {e.tool_name:24s} "
+                    f"{e.status.value:12s} {duration:10s} {time_str}"
+                )
+
+        if limit and len(executions) > len(shown):
+            print(f"  {len(shown)} of {len(executions)} executions shown - raise --limit for more.")
+
+    def _print_execution_detail(self, execution: ToolExecution) -> None:
+        """Print one tool execution with its artifacts and stored summary."""
+        print(f"  [{execution.execution_id}] {execution.tool_name}")
+        print(f"    Status:    {execution.status.value} ({self._execution_duration(execution)})")
+        print(f"    Started:   {execution.started_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        if execution.completed_at:
+            print(f"    Finished:  {execution.completed_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        if execution.input_artifact_id or execution.output_artifact_id:
+            src = execution.input_artifact_id or "-"
+            dst = execution.output_artifact_id or "-"
+            print(f"    Artifacts: {src} -> {dst}")
+        if execution.summary:
+            print("    Summary:")
+            for line in execution.summary.splitlines():
+                print(f"      {line}")
+        print()
+
+    @staticmethod
+    def _execution_duration(execution: ToolExecution) -> str:
+        """Wall-clock time an execution took, or '-' while it is still running."""
+        if execution.completed_at is None:
+            return "-"
+        seconds = (execution.completed_at - execution.started_at).total_seconds()
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        minutes, secs = divmod(int(seconds), 60)
+        return f"{minutes}m{secs:02d}s"
+
+    @staticmethod
+    def _turn_time(turn: dict[str, str]) -> datetime | None:
+        """Timestamp of an LLM turn, or None for turns recorded without one."""
+        raw = turn.get("timestamp")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+
+    def do_history(self, arg: str) -> None:
+        """Show a merged timeline of tool executions and LLM turns.
+
+        Usage: history [--limit <n>]
+
+        One row per event, oldest first. Use 'tool_history' or 'llm_history'
+        for the detail behind a row. Tool executions are session state in
+        SQLite; LLM turns live in memory for this shell session only.
+        """
+        stripped = arg.strip()
+        if stripped == "clear":
+            print("  Only LLM turns can be cleared; tool history is session state.")
+            self.do_llm_history("clear")
+            return
+
+        limit = HISTORY_DEFAULT_LIMIT
+        if stripped:
+            try:
+                tokens = shlex.split(stripped)
+            except ValueError as e:
+                print(f"  Could not parse arguments: {e}")
+                return
+
+            pairs, error = _split_flags(tokens)
+            if error:
+                print(f"  {error}")
+                return
+
+            for key, value in pairs:
+                if key != "limit":
+                    print(f"  Unknown flag --{key}. Use --limit.")
+                    return
+                try:
+                    limit = int(str(value))
+                except (TypeError, ValueError):
+                    print(f"  --limit needs a whole number, got {value!r}.")
+                    return
+                if limit < 0:
+                    print("  --limit cannot be negative. Use 0 to show all.")
+                    return
+
+        events: list[tuple[datetime, str, str]] = []
+
+        try:
+            executions = self.session_manager.list_executions()
+        except ValueError:
+            executions = []
+
         for e in executions:
-            time_str = e.started_at.strftime("%Y-%m-%d %H:%M:%S")
-            print(f"  {e.execution_id:14s} {e.tool_name:24s} {e.status.value:12s} {time_str}")
+            events.append((
+                e.started_at,
+                "tool",
+                f"[{e.execution_id}] {e.tool_name} - {e.status.value} "
+                f"({self._execution_duration(e)})",
+            ))
+
+        for i, turn in enumerate(self._conversation_history, 1):
+            question = " ".join(turn["question"].split())
+            if len(question) > 62:
+                question = question[:59] + "..."
+            events.append((self._turn_time(turn) or datetime.max, "llm", f"[{i}] {question}"))
+
+        if not events:
+            print("  No history yet. Run a tool, or use 'ask: <question>'.")
+            return
+
+        events.sort(key=lambda ev: ev[0])
+        shown = events[-limit:] if limit else events
+
+        print(f"  {'Time':20s} {'Kind':6s} Event")
+        print(f"  {'─' * 20} {'─' * 6} {'─' * 50}")
+        for ts, kind, detail in shown:
+            time_str = "-" if ts == datetime.max else ts.strftime("%Y-%m-%d %H:%M:%S")
+            print(f"  {time_str:20s} {kind:6s} {detail}")
+
+        tool_count = sum(1 for ev in events if ev[1] == "tool")
+        print()
+        if limit and len(events) > len(shown):
+            print(f"  {len(shown)} of {len(events)} events shown - raise --limit for more.")
+        print(
+            f"  {tool_count} tool, {len(events) - tool_count} llm. "
+            "Detail: 'tool_history', 'llm_history'."
+        )
     
     # -------------------------------------------------------------------
     # Route Command
@@ -3045,6 +3259,7 @@ class EventMillShell(cmd.Cmd):
                 self._conversation_history.append({
                     "question": question,
                     "answer": response.text,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
                 })
                 
                 # Print the response with indentation
@@ -3124,26 +3339,75 @@ class EventMillShell(cmd.Cmd):
         
         return "\n".join(parts)
     
-    def do_history(self, arg: str) -> None:
+    def do_llm_history(self, arg: str) -> None:
         """Show conversation history with the LLM.
-        
-        Usage: history [clear]
+
+        Usage: llm_history [--last <n>] [--full]
+               llm_history clear
+
+        Turns are held in memory for this shell session only; the durable
+        record is the structured log.
         """
-        if arg.strip() == "clear":
+        stripped = arg.strip()
+        if stripped == "clear":
             self._conversation_history.clear()
             print("  Conversation history cleared.")
             return
-        
+
+        last = 0
+        full = False
+        if stripped:
+            try:
+                tokens = shlex.split(stripped)
+            except ValueError as e:
+                print(f"  Could not parse arguments: {e}")
+                return
+
+            pairs, error = _split_flags(tokens)
+            if error:
+                print(f"  {error}")
+                return
+
+            for key, value in pairs:
+                if key == "full":
+                    full = True
+                elif key == "last":
+                    try:
+                        last = int(str(value))
+                    except (TypeError, ValueError):
+                        print(f"  --last needs a whole number, got {value!r}.")
+                        return
+                    if last < 0:
+                        print("  --last cannot be negative. Use 0 to show all.")
+                        return
+                else:
+                    print(f"  Unknown flag --{key}. Use --last or --full.")
+                    return
+
         if not self._conversation_history:
-            print("  No conversation history. Use 'ask <question>' to start.")
+            print("  No conversation history. Use 'ask: <question>' to start.")
             return
-        
-        for i, turn in enumerate(self._conversation_history, 1):
-            q = turn["question"]
-            a_preview = turn["answer"][:120] + "..." if len(turn["answer"]) > 120 else turn["answer"]
-            print(f"  [{i}] Q: {q}")
-            print(f"      A: {a_preview}")
+
+        turns = list(enumerate(self._conversation_history, 1))
+        shown = turns[-last:] if last else turns
+
+        for i, turn in shown:
+            ts = self._turn_time(turn)
+            stamp = f" {ts.strftime('%H:%M:%S')}" if ts else ""
+            print(f"  [{i}]{stamp} Q: {turn['question']}")
+            answer = turn["answer"]
+            if full:
+                print("      A:")
+                for line in answer.splitlines():
+                    print(f"        {line}")
+            else:
+                flat = " ".join(answer.split())
+                preview = flat[:120] + "..." if len(flat) > 120 else flat
+                print(f"      A: {preview}")
             print()
+
+        if last and len(turns) > len(shown):
+            print(f"  {len(shown)} of {len(turns)} turns shown - raise --last for more.")
     
     def do_exit(self, arg: str) -> bool:
         """Exit Event Mill.

@@ -333,9 +333,14 @@ eventmill (log_analysis:linuxdroplettest) > ask: based on the patterns found, wh
 View or clear conversation history:
 
 ```
-eventmill (log_analysis:linuxdroplettest) > history
-eventmill (log_analysis:linuxdroplettest) > history clear
+eventmill (log_analysis:linuxdroplettest) > llm_history
+eventmill (log_analysis:linuxdroplettest) > llm_history --full
+eventmill (log_analysis:linuxdroplettest) > llm_history clear
 ```
+
+Turns are held in memory for the current shell session only — they are
+cleared when you start or load a session. The durable record is the
+structured log.
 
 ---
 
@@ -344,11 +349,35 @@ eventmill (log_analysis:linuxdroplettest) > history clear
 After running several tools, review what has been done:
 
 ```
+eventmill (log_analysis:linuxdroplettest) > tool_history
+  ID             Tool                     Status       Duration   Time
+  ────────────── ──────────────────────── ──────────── ────────── ────────────────────
+  exec_a1b2c3d4  log_pattern_analyzer     completed    4.2s       2026-03-29 22:57:01
+  exec_e5f6a7b8  log_searcher             completed    1.1s       2026-03-29 22:58:15
+```
+
+Narrow it, or open one execution in full — `--detail` and a bare execution
+id both print the stored summary and the artifacts the run consumed and
+produced:
+
+```
+eventmill (log_analysis:linuxdroplettest) > tool_history --tool log_searcher
+eventmill (log_analysis:linuxdroplettest) > tool_history --status failed
+eventmill (log_analysis:linuxdroplettest) > tool_history exec_a1b2c3d4
+```
+
+`history` merges tool executions and LLM turns into one timeline, oldest
+first, so you can see what was asked between which runs:
+
+```
 eventmill (log_analysis:linuxdroplettest) > history
-  ID             Tool                     Status       Time
-  ────────────── ──────────────────────── ──────────── ────────────────────
-  exec_a1b2c3d4  log_pattern_analyzer     completed    2026-03-29 22:57:01
-  exec_e5f6a7b8  log_searcher             completed    2026-03-29 22:58:15
+  Time                 Kind   Event
+  ──────────────────── ────── ──────────────────────────────────────────────
+  2026-03-29 22:57:01  tool   [exec_a1b2c3d4] log_pattern_analyzer - completed (4.2s)
+  2026-03-29 22:58:15  tool   [exec_e5f6a7b8] log_searcher - completed (1.1s)
+  2026-03-29 23:01:44  llm    [1] what were the usernames targeted in this log file?
+
+  2 tool, 1 llm. Detail: 'tool_history', 'llm_history'.
 ```
 
 ---
@@ -388,7 +417,9 @@ pillar.
 | `tools` | List available tools |
 | `run <tool> <json>` | Execute a tool with a JSON payload |
 | `status` | Show current session state |
-| `history` | Show tool execution history |
+| `history` | Merged timeline of tool executions and LLM turns |
+| `tool_history [filters]` | Tool execution history; `--tool`, `--status`, `--limit`, `--detail` |
+| `llm_history [--last <n>] [--full]` | LLM conversation turns; `clear` empties them |
 | `buckets` | Show bucket configuration |
 | `connect [model]` | Connect to an LLM for AI-powered analysis |
 

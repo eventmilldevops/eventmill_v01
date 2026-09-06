@@ -528,7 +528,9 @@ The CLI follows Metasploit conventions. Core commands for MVP:
 | `options` | Show current option values for the selected tool |
 | `results` | Show results from the last tool execution |
 | `chain` | Show recommended next tools based on current results |
-| `history` | Show tool execution history for the current session |
+| `history` | Merged timeline of tool executions and LLM turns, oldest first |
+| `tool_history [filters]` | Tool execution history; `--tool`, `--status`, `--limit`, `--detail`, or an execution id |
+| `llm_history [--last <n>] [--full]` | LLM conversation turns; `llm_history clear` empties them |
 | `ask <question>` | Send a natural language question to the LLM with current context |
 | `session [new|list|resume|close]` | Session management |
 | `set loglevel [info|debug]` | Change log verbosity |
