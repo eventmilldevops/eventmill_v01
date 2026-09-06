@@ -1055,19 +1055,17 @@ class EventMillShell(cmd.Cmd):
         truncated: bool,
     ) -> None:
         """Print a numbered file listing."""
-        print(f"  {'#':>3s}  {'Path':40s} {'Source':7s} {'Size':>9s}  Modified")
-        print(f"  {'─' * 3}  {'─' * 40} {'─' * 7} {'─' * 9}  {'─' * 12}")
+        print(f"  {'#':>3s}  Path")
 
         for entry in entries:
             f = entry.file
-            path = f.object_path
-            if len(path) > 40:
-                path = "..." + path[-37:]
             size = _format_bytes(f.size_bytes)
+            print(f"  {entry.index:>3d}  {f.object_path}")
             print(
-                f"  {entry.index:>3d}  {path:40s} {f.source:7s} "
-                f"{size:>9s}  {_format_age(f.modified)}"
+                f"       Source: {f.source}  Size: {size}  "
+                f"Modified: {_format_age(f.modified)}"
             )
+            print()
 
         hidden = total - len(entries)
         if hidden > 0:

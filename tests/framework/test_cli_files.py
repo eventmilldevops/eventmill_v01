@@ -146,6 +146,26 @@ class TestFilesFiltering:
         assert shell._last_file_listing is not None
         assert [e.index for e in shell._last_file_listing.entries] == [1, 2]
 
+    def test_long_threat_report_paths_remain_distinct(self, shell, storage_base, capsys):
+        shell.session_manager.set_pillar(Pillar.THREAT_MODELING)
+        filename = "annual_threat_assessment_with_detailed_findings.txt"
+        paths = [f"reports/{folder}/{filename}" for folder in ("current", "previous")]
+        for path in paths:
+            _seed(storage_base, COMMON_BUCKET, path, content=path)
+
+        shell.onecmd("files --path reports/ --ext .txt --sort name")
+        out = capsys.readouterr().out
+        for index, path in enumerate(paths, start=1):
+            assert f"{index}  {path}" in out
+        assert "Source: common" in out
+        assert "Size:" in out
+        assert "Modified:" in out
+
+        shell.onecmd("load #2")
+        out = capsys.readouterr().out
+        assert f"gs://{COMMON_BUCKET}/{paths[1]}" in out
+        assert "Loaded artifact" in out
+
     def test_ext_filter(self, shell, storage_base, capsys):
         _seed(storage_base, PILLAR_BUCKET, "a.log")
         _seed(storage_base, PILLAR_BUCKET, "b.json")
