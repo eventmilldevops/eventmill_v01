@@ -203,13 +203,20 @@ class Router:
         )
         
         # Phase 2: Get candidate tools from pillar
-        pillar_tools = self.plugin_loader.get_by_pillar(selected_pillar)
+        pillar_tools = self.plugin_loader.get_for_pillar(selected_pillar)
         
         # Expand to adjacent pillars if configured
         if self.config.expansion_mode == "adjacent":
             adjacent_pillars = self.config.adjacency_map.get(selected_pillar, [])
             for adj_pillar in adjacent_pillars:
                 pillar_tools.extend(self.plugin_loader.get_by_pillar(adj_pillar))
+            seen: set[str] = set()
+            deduped: list[LoadedPlugin] = []
+            for tool in pillar_tools:
+                if tool.tool_name not in seen:
+                    seen.add(tool.tool_name)
+                    deduped.append(tool)
+            pillar_tools = deduped
         
         # Phase 3: Score and rank tools
         scores = self._score_tools(
@@ -303,6 +310,8 @@ class Router:
             # Pillar match
             if tool.pillar == selected_pillar:
                 score.pillar_match = 1.0
+            elif selected_pillar in tool.manifest.also_useful_in:
+                score.pillar_match = 0.75
             elif tool.pillar in self.config.adjacency_map.get(selected_pillar, []):
                 score.pillar_match = 0.5
             
@@ -411,6 +420,6 @@ class Router:
         ]
     
     def get_tools_for_pillar(self, pillar: str) -> list[str]:
-        """Get all tools registered for a pillar."""
-        plugins = self.plugin_loader.get_by_pillar(pillar)
+        """Get all tools offered in a pillar, including those that declare it."""
+        plugins = self.plugin_loader.get_for_pillar(pillar)
         return [p.tool_name for p in plugins]

@@ -68,7 +68,8 @@ Capability derivation MUST begin with deterministic rules. Semantic enrichment i
 
 The plugin registry is filtered to tools where:
 
-- plugin pillar matches the selected pillar (or an adjacent pillar in `adjacent` mode)
+- plugin pillar matches the selected pillar, or the plugin names it in `also_useful_in`
+  (or an adjacent pillar in `adjacent` mode)
 - plugin `artifacts_consumed` includes the active artifact type (if one exists)
 - plugin capabilities intersect the derived capability set
 - plugin stability is allowed by current policy
@@ -150,6 +151,11 @@ If the current session already selected a pillar and the new request is ambiguou
 
 MVP ships with `strict` and `adjacent` modes only.
 
+A plugin's `also_useful_in` is **not** governed by the expansion mode. Adjacency is a
+blanket pillar-to-pillar relation an operator may switch off; `also_useful_in` is one
+plugin author naming one pillar deliberately, and applies in every mode. It widens where
+a tool is *offered*, never which pillar Phase 1 selects.
+
 ### Adjacency Map
 
 | Source Pillar | Adjacent Pillars |
@@ -184,7 +190,7 @@ Weights:
 
 | Factor | Weight | Notes |
 |--------|--------|-------|
-| `pillar_match` | 50 | 1 if pillar matches, 0.5 if adjacent, 0 otherwise |
+| `pillar_match` | 50 | 1 if pillar matches, 0.75 if the tool declares the pillar in `also_useful_in`, 0.5 if adjacent, 0 otherwise |
 | `artifact_consumed_match` | 30 | 1 if tool consumes the active artifact type |
 | `capability_overlap_count` | 10 per match | Number of derived capabilities matching tool capabilities |
 | `stability_weight` | core=10, verified=5, experimental=0, deprecated=-10 | |
