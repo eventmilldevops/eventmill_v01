@@ -153,7 +153,7 @@ class TestFilesFiltering:
         for path in paths:
             _seed(storage_base, COMMON_BUCKET, path, content=path)
 
-        shell.onecmd("files --path reports/ --ext .txt --sort name")
+        shell.onecmd("files --path reports/ --ext .txt --sort name --source all")
         out = capsys.readouterr().out
         for index, path in enumerate(paths, start=1):
             assert f"{index}  {path}" in out
@@ -341,3 +341,186 @@ class TestFileReferences:
         pairs, ok = shell._expand_file_refs([("query", "error #3 occurred")])
         assert ok is True
         assert pairs == [("query", "error #3 occurred")]
+
+
+# ---------------------------------------------------------------------------
+# Scope and discovery
+# ---------------------------------------------------------------------------
+
+
+class TestFilesScope:
+    """The default scope, --source, and the footer naming what was hidden."""
+
+    def test_default_lists_the_pillar_only(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+        _seed(storage_base, COMMON_BUCKET, "vendor_advisories/ref.log")
+
+        shell.onecmd("files")
+        out = capsys.readouterr().out
+        assert "inc-1/a.log" in out
+        assert "vendor_advisories/ref.log" not in out
+
+    def test_footer_names_what_the_default_hid(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+        _seed(storage_base, COMMON_BUCKET, "vendor_advisories/ref.log")
+        _seed(storage_base, COMMON_BUCKET, "exports/tool/out.log")
+
+        shell.onecmd("files")
+        out = capsys.readouterr().out
+        assert "2 more files in the common bucket" in out
+        assert "vendor_advisories/" in out
+        assert "exports/" in out
+        assert "--source all" in out
+
+    def test_footer_counts_only_what_the_filters_kept(
+        self, shell, storage_base, capsys
+    ):
+        _seed(storage_base, PILLAR_BUCKET, "a.log")
+        _seed(storage_base, COMMON_BUCKET, "ref.log")
+        _seed(storage_base, COMMON_BUCKET, "ref.json")
+
+        shell.onecmd("files --ext .log")
+        out = capsys.readouterr().out
+        assert "1 more file in the common bucket" in out
+
+    def test_source_all_lists_both(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+        _seed(storage_base, COMMON_BUCKET, "vendor_advisories/ref.log")
+
+        shell.onecmd("files --source all")
+        out = capsys.readouterr().out
+        assert "inc-1/a.log" in out
+        assert "vendor_advisories/ref.log" in out
+        assert "more file" not in out
+
+    def test_source_common_excludes_the_pillar(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+        _seed(storage_base, COMMON_BUCKET, "vendor_advisories/ref.log")
+
+        shell.onecmd("files --source common")
+        out = capsys.readouterr().out
+        assert "vendor_advisories/ref.log" in out
+        assert "inc-1/a.log" not in out
+        assert "1 more file in the pillar bucket" in out
+
+    def test_unknown_source_reports_without_listing(
+        self, shell, storage_base, capsys
+    ):
+        _seed(storage_base, PILLAR_BUCKET, "a.log")
+
+        shell.onecmd("files --source everything")
+        out = capsys.readouterr().out
+        assert "Unknown --source" in out
+        assert "a.log" not in out
+
+
+class TestFilesFolderMap:
+    """--folders, the only view of how storage is laid out."""
+
+    def test_maps_folders_per_bucket(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/b.log")
+        _seed(storage_base, COMMON_BUCKET, "vendor_advisories/x.pdf")
+
+        shell.onecmd("files --folders --source all")
+        out = capsys.readouterr().out
+        assert PILLAR_BUCKET in out
+        assert COMMON_BUCKET in out
+        assert "inc-1/" in out
+        assert "2 files" in out
+        assert "vendor_advisories/" in out
+        assert "1 file" in out
+
+    def test_map_follows_the_default_scope(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+        _seed(storage_base, COMMON_BUCKET, "vendor_advisories/x.pdf")
+
+        shell.onecmd("files --folders")
+        out = capsys.readouterr().out
+        assert "inc-1/" in out
+        assert "vendor_advisories/" not in out
+
+    def test_path_drills_one_level_down(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "reports/current/a.pdf")
+        _seed(storage_base, PILLAR_BUCKET, "reports/previous/b.pdf")
+        _seed(storage_base, PILLAR_BUCKET, "reports/index.md")
+
+        shell.onecmd("files --folders --path reports")
+        out = capsys.readouterr().out
+        assert "current/" in out
+        assert "previous/" in out
+        assert "(files here)" in out
+
+    def test_folders_takes_no_value(self, shell, capsys):
+        shell.onecmd("files --folders yes")
+        out = capsys.readouterr().out
+        assert "--folders takes no value" in out
+
+
+class TestFilesEmptyListing:
+    """What an empty result says, given that buckets are not common knowledge."""
+
+    def test_own_pillar_as_path_is_explained(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+
+        shell.onecmd("files --path log_analysis")
+        out = capsys.readouterr().out
+        assert "is the bucket you are already in" in out
+        assert "files --folders" in out
+
+    @pytest.mark.parametrize("probe", ["log-analysis", PILLAR_BUCKET])
+    def test_slug_and_bucket_name_too(self, shell, storage_base, capsys, probe):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+
+        shell.onecmd(f"files --path {probe}")
+        assert "is the bucket you are already in" in capsys.readouterr().out
+
+    def test_another_pillar_points_at_the_switch(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+
+        shell.onecmd("files --path threat_modeling")
+        out = capsys.readouterr().out
+        assert "different pillar's bucket" in out
+        assert "pillar threat_modeling" in out
+
+    def test_common_as_path_points_at_the_flag(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+
+        shell.onecmd("files --path common")
+        out = capsys.readouterr().out
+        assert "files --source common" in out
+
+    def test_missing_folder_lists_the_real_ones(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+        _seed(storage_base, PILLAR_BUCKET, "archive/b.log")
+
+        shell.onecmd("files --path nowhere")
+        out = capsys.readouterr().out
+        assert "Folders here:" in out
+        assert "inc-1/" in out
+        assert "archive/" in out
+
+    def test_near_miss_is_suggested(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "vendor_advisories/a.pdf")
+
+        shell.onecmd("files --path vendor_advisory")
+        out = capsys.readouterr().out
+        assert "Did you mean" in out
+        assert "vendor_advisories/" in out
+
+    def test_folder_only_in_common_points_at_source_all(
+        self, shell, storage_base, capsys
+    ):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+        _seed(storage_base, COMMON_BUCKET, "reports/r.pdf")
+
+        shell.onecmd("files --path reports")
+        out = capsys.readouterr().out
+        assert "1 file matches in the common bucket" in out
+        assert "files --path reports --source all" in out
+
+    def test_empty_storage_questions_the_bucket_prefix(self, shell, capsys):
+        shell.onecmd("files")
+        out = capsys.readouterr().out
+        assert "No files in the log_analysis pillar bucket." in out
+        assert "bucket prefix" in out

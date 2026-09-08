@@ -8,6 +8,7 @@ This is the primary user interface for Event Mill.
 from __future__ import annotations
 
 import cmd
+import difflib
 import fnmatch
 import json
 import os
@@ -44,6 +45,7 @@ from ..plugins.protocol import (
 )
 from ..reference_data.mitre_attack import get_mitre_db, get_mitre_relationships
 from ..cloud.resolver import (
+    PILLAR_SLUGS,
     StorageResolver,
     StorageResolverConfig,
     WorkspaceFile,
@@ -69,6 +71,37 @@ _DURATION_UNITS = {
 _FILE_REF_RE = re.compile(r"^#(\d+)$")
 
 FILES_DEFAULT_LIMIT = 50
+FILES_SOURCES = ("pillar", "common", "all")
+
+
+def _folder_breakdown(
+    files: list[WorkspaceFile],
+    prefix: str = "",
+) -> list[tuple[str, int, int | None]]:
+    """Group *files* by the path segment one level below *prefix*.
+
+    Returns ``(label, count, total_bytes)`` per folder, alphabetically, with
+    files sitting directly at this level collected last under a marker rather
+    than dropped, so a bucket whose objects are all at the root still maps to
+    something.
+    """
+    base = prefix.rstrip("/")
+    groups: dict[str, list[WorkspaceFile]] = {}
+    for f in files:
+        rest = f.object_path
+        if base and rest.startswith(base):
+            rest = rest[len(base):]
+        rest = rest.lstrip("/")
+        head, sep, _ = rest.partition("/")
+        label = f"{head}/" if sep else "(files here)"
+        groups.setdefault(label, []).append(f)
+
+    out: list[tuple[str, int, int | None]] = []
+    for label in sorted(groups, key=lambda s: (s == "(files here)", s)):
+        group = groups[label]
+        sizes = [g.size_bytes for g in group if g.size_bytes is not None]
+        out.append((label, len(group), sum(sizes) if sizes else None))
+    return out
 HISTORY_DEFAULT_LIMIT = 40
 
 
@@ -159,6 +192,8 @@ class FilesQuery:
     match: str = ""
     sort: str = "time"
     limit: int = FILES_DEFAULT_LIMIT
+    source: str = "pillar"
+    folders: bool = False
 
 
 @dataclass
@@ -854,16 +889,24 @@ class EventMillShell(cmd.Cmd):
             self._export_artifact(a, None, indent="    ")
 
     def do_files(self, arg: str) -> None:
-        """List files available in the current pillar's storage.
+        """List files the current pillar can see.
 
-        Shows files from both the pillar bucket and the common bucket.
-        If a workspace folder is set, lists files within that folder.
+        Lists the pillar's own bucket by default. The common bucket holds
+        shared reference data plus tool output under exports/ and generated/;
+        it is one flag away, and the footer says how much is over there.
 
-        Usage: files [--path <prefix>] [--ext .log,.json] [--newer 24h]
+        Usage: files [--source pillar|common|all] [--folders]
+                     [--path <folder>] [--ext .log,.json] [--newer 24h]
                      [--match <pattern>] [--sort time|size|name] [--limit N]
 
+        Scope:
+          --source  pillar (default), common, or all
+          --folders show the folder layout instead of the files
+          --path    a folder inside the bucket, e.g. reports or
+                    vendor_advisories. Not a pillar or bucket name — the
+                    pillar you are in already picks the bucket.
+
         Filters:
-          --path    only paths starting with this prefix, below the workspace
           --ext     comma-separated extensions; matches any suffix, so
                     --ext .log also matches auth.log.1
           --newer   files modified within a duration: 90m, 24h, 7d, 2w
@@ -875,6 +918,7 @@ class EventMillShell(cmd.Cmd):
 
         Rows are numbered. Use #N in place of a path:
 
+          files --folders
           files --ext .log --newer 24h
           load #2
           run log_navigator --action read --path #2
@@ -906,16 +950,22 @@ class EventMillShell(cmd.Cmd):
         if session.workspace_folder:
             location += f"/{session.workspace_folder}"
 
-        if not listing.files:
-            print(f"  No files found in {location} or common bucket.")
-            if query.prefix:
-                print(f"  Prefix filter: {query.prefix}")
+        if query.folders:
+            self._render_folder_map(listing.files, query, session.active_pillar)
             return
 
-        matched = self._apply_files_filters(listing.files, query)
+        in_scope = [
+            f for f in listing.files if query.source in ("all", f.source)
+        ]
+        if not in_scope:
+            self._explain_empty_listing(listing.files, query, session)
+            return
+
+        matched = self._apply_files_filters(in_scope, query)
         if not matched:
             print(f"  No files in {location} match those filters.")
-            print(f"  {len(listing.files)} file(s) before filtering.")
+            print(f"  {len(in_scope)} file(s) before filtering.")
+            self._render_source_footer(listing.files, query)
             return
 
         shown = matched if query.limit == 0 else matched[: query.limit]
@@ -931,6 +981,7 @@ class EventMillShell(cmd.Cmd):
         )
 
         self._render_file_table(entries, len(matched), listing.truncated)
+        self._render_source_footer(listing.files, query)
 
     def _parse_files_flags(self, arg: str) -> FilesQuery | None:
         """Parse flags for 'files'. Returns None after printing on error."""
@@ -950,12 +1001,25 @@ class EventMillShell(cmd.Cmd):
             return None
 
         for key, value in pairs:
+            if key == "folders":
+                if value is not True:
+                    print("  --folders takes no value.")
+                    return None
+                query.folders = True
+                continue
+
             if value is True and key not in ("help",):
                 print(f"  --{key} needs a value.")
                 return None
 
             if key == "path":
                 query.prefix = str(value).replace("\\", "/").lstrip("/")
+            elif key == "source":
+                if str(value) not in FILES_SOURCES:
+                    print(f"  Unknown --source {value!r}.")
+                    print("  Use pillar (default), common, or all.")
+                    return None
+                query.source = str(value)
             elif key == "ext":
                 query.extensions = [
                     "." + part.strip().lstrip(".").lower()
@@ -991,7 +1055,8 @@ class EventMillShell(cmd.Cmd):
                 query.limit = limit
             else:
                 print(f"  Unknown flag --{key}.")
-                print("  Use --path, --ext, --newer, --match, --sort, --limit.")
+                print("  Use --source, --folders, --path, --ext, --newer,")
+                print("  --match, --sort, --limit.")
                 return None
 
         return query
@@ -1051,6 +1116,191 @@ class EventMillShell(cmd.Cmd):
 
         return matched
 
+    def _render_folder_map(
+        self,
+        files: list[WorkspaceFile],
+        query: FilesQuery,
+        pillar: str,
+    ) -> None:
+        """Print the folder layout instead of the files themselves.
+
+        Nothing else in the shell shows how storage is laid out, so an
+        analyst who has never seen the buckets has no way to guess what to
+        pass to --path. This is that map, one level at a time.
+        """
+        config = self.storage_resolver.config
+        buckets = [
+            ("pillar", config.bucket_for_pillar(pillar)),
+            ("common", config.common_bucket()),
+        ]
+        here = query.prefix.rstrip("/")
+        where = f"under {here}/" if here else "at the top level"
+        print(f"  Folders {where}, as seen from the {pillar} pillar:")
+        print()
+
+        found = False
+        for source, bucket in buckets:
+            if query.source not in ("all", source):
+                continue
+            group = [f for f in files if f.source == source]
+            if not group:
+                continue
+            found = True
+            print(f"  {source} bucket — {bucket}")
+            for label, count, size in _folder_breakdown(group, here):
+                noun = "file" if count == 1 else "files"
+                counted = f"{count} {noun}"
+                print(f"    {label:<36s} {counted:>9s}  {_format_bytes(size)}")
+            print()
+
+        if not found:
+            scope = "" if query.source == "all" else f" with --source {query.source}"
+            print(f"  Nothing visible {where}{scope}.")
+            return
+
+        print("  Drill in with:   files --path <folder> --folders")
+        print("  List the files:  files --path <folder>")
+
+    def _render_source_footer(
+        self,
+        all_files: list[WorkspaceFile],
+        query: FilesQuery,
+    ) -> None:
+        """Name what --source is holding back, and how to see it.
+
+        Listing the pillar alone is the useful default, but only if it never
+        looks like the whole picture — so a listing that hid files says how
+        many and where.
+        """
+        if query.source == "all":
+            return
+
+        other = "common" if query.source == "pillar" else "pillar"
+        hidden = self._apply_files_filters(
+            [f for f in all_files if f.source == other], query
+        )
+        if not hidden:
+            return
+
+        folders = [label for label, _, _ in _folder_breakdown(hidden, query.prefix)]
+        where = ", ".join(folders[:3])
+        if len(folders) > 3:
+            where += ", ..."
+        noun = "file" if len(hidden) == 1 else "files"
+        print(f"  {len(hidden)} more {noun} in the {other} bucket: {where}")
+        print("  Add --source all to include them.")
+
+    def _explain_empty_listing(
+        self,
+        listed: list[WorkspaceFile],
+        query: FilesQuery,
+        session: Any,
+    ) -> None:
+        """Say why a listing came back empty and point at what does exist.
+
+        Bucket names and folder layout are not something an analyst is
+        expected to know, so an empty result names where it looked rather
+        than only reporting that it found nothing.
+        """
+        pillar = session.active_pillar
+        scope = {
+            "pillar": f"the {pillar} pillar bucket",
+            "common": "the common bucket",
+            "all": f"{pillar} or the common bucket",
+        }[query.source]
+
+        if query.prefix:
+            print(f"  No files under '{query.prefix}' in {scope}.")
+            hint = self._explain_prefix(query.prefix, pillar)
+            if hint:
+                for line in hint:
+                    print(f"  {line}")
+                return
+        else:
+            print(f"  No files in {scope}.")
+
+        # A prefix is applied by the backend, so the listing we were handed
+        # cannot say what else is there. Re-list without it.
+        if query.prefix:
+            probe = self.storage_resolver.list_workspace(
+                pillar=pillar,
+                workspace_folder=session.workspace_folder,
+            ).files
+        else:
+            probe = listed
+
+        if not probe:
+            print("  Nothing at all is visible from this pillar. If files are")
+            print("  expected, check that the deployment's bucket prefix")
+            print("  matches this project: use 'status' to see the buckets.")
+            return
+
+        if query.source != "all":
+            elsewhere = self._apply_files_filters(
+                [
+                    f for f in probe
+                    if f.source != query.source
+                    and f.object_path.startswith(query.prefix)
+                ],
+                query,
+            )
+            if elsewhere:
+                other = "common" if query.source == "pillar" else "pillar"
+                noun = "file" if len(elsewhere) == 1 else "files"
+                verb = "matches" if len(elsewhere) == 1 else "match"
+                scoped = f" --path {query.prefix}" if query.prefix else ""
+                print(f"  {len(elsewhere)} {noun} {verb} in the {other} bucket:")
+                print(f"  files{scoped} --source all")
+                return
+
+        folders = [label for label, _, _ in _folder_breakdown(probe)]
+        if query.prefix:
+            close = difflib.get_close_matches(
+                query.prefix.rstrip("/") + "/", folders, n=3, cutoff=0.5
+            )
+            if close:
+                print(f"  Did you mean: {', '.join(close)}")
+        print(f"  Folders here: {', '.join(folders[:8])}")
+        print("  See the full layout with: files --folders --source all")
+
+    def _explain_prefix(self, prefix: str, pillar: str) -> list[str] | None:
+        """Return an explanation when --path was handed a bucket, not a folder.
+
+        Pillar names never appear in object keys — the pillar selects the
+        bucket — so this is the mistake worth naming outright rather than
+        answering with an empty listing.
+        """
+        needle = prefix.strip("/").lower()
+        config = self.storage_resolver.config
+
+        own = {pillar.lower(), config.bucket_for_pillar(pillar).lower()}
+        own.add(PILLAR_SLUGS.get(pillar, pillar.replace("_", "-")).lower())
+        if needle in own:
+            return [
+                f"'{prefix}' is the bucket you are already in, not a folder",
+                "inside it. The pillar picks the bucket; --path picks a folder",
+                "below it. Run 'files' on its own, or 'files --folders'.",
+            ]
+
+        if needle in ("common", config.common_bucket().lower()):
+            return [
+                f"'{prefix}' is a bucket, not a folder inside one.",
+                "List it with: files --source common",
+            ]
+
+        for other in Pillar.ALL:
+            if other == pillar:
+                continue
+            names = {other.lower(), config.bucket_for_pillar(other).lower()}
+            names.add(PILLAR_SLUGS.get(other, other.replace("_", "-")).lower())
+            if needle in names:
+                return [
+                    f"'{prefix}' is a different pillar's bucket, not a folder.",
+                    f"Switch to it with: pillar {other}",
+                ]
+
+        return None
+
     def _render_file_table(
         self,
         entries: list[FileListingEntry],
@@ -1085,7 +1335,10 @@ class EventMillShell(cmd.Cmd):
         endidx: int,
     ) -> list[str]:
         """Complete flag names for 'files'."""
-        flags = ["--path", "--ext", "--newer", "--match", "--sort", "--limit"]
+        flags = [
+            "--source", "--folders", "--path", "--ext",
+            "--newer", "--match", "--sort", "--limit",
+        ]
         return [f for f in flags if f.startswith(text)]
 
     def _resolve_file_ref(self, ref: str) -> FileListingEntry | None:
