@@ -1945,9 +1945,9 @@ class EventMillShell(cmd.Cmd):
     ) -> list[LoadedPlugin]:
         """Tools outside the active pillar that consume a loaded artifact type.
 
-        Adjacency alone does not narrow anything — every pillar is adjacent to
-        most others — so relevance comes from the session: a PCAP tool earns a
-        place in a threat_modeling listing once a PCAP is loaded.
+        This is the session-driven half of cross-pillar relevance: a PCAP tool
+        earns a place in a threat_modeling listing once a PCAP is loaded. The
+        declared half is the manifest's also_useful_in, applied by the caller.
         """
         try:
             loaded_types = {a.artifact_type for a in self.session_manager.list_artifacts()}

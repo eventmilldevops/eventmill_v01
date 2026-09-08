@@ -17,8 +17,6 @@ from ..plugins.loader import LoadedPlugin, PluginLoader
 
 logger = logging.getLogger("eventmill.framework.routing")
 
-EXPANSION_MODES = ("strict", "adjacent")
-
 
 # ---------------------------------------------------------------------------
 # Routing Result Types
@@ -90,7 +88,6 @@ class RouterConfig:
     """Router configuration loaded from config files."""
     
     pillars: dict[str, dict[str, Any]]
-    adjacency_map: dict[str, list[str]]
     keyword_rules: dict[str, list[str]]
     artifact_rules: dict[str, dict[str, Any]]
     
@@ -105,7 +102,6 @@ class RouterConfig:
     
     # Limits
     max_candidate_tools: int = 5
-    expansion_mode: str = "strict"  # strict or adjacent
     
     @classmethod
     def load_from_directory(cls, config_dir: Path) -> RouterConfig:
@@ -115,11 +111,6 @@ class RouterConfig:
         pillars_path = config_dir / "pillars.json"
         with open(pillars_path) as f:
             pillars_data = json.load(f)
-        
-        # Load adjacency
-        adjacency_path = config_dir / "adjacency.json"
-        with open(adjacency_path) as f:
-            adjacency_data = json.load(f)
         
         # Load keywords
         keywords_path = config_dir / "keywords.json"
@@ -131,22 +122,10 @@ class RouterConfig:
         with open(artifact_path) as f:
             artifact_data = json.load(f)
         
-        expansion_mode = adjacency_data.get("expansion_mode", "strict")
-        if expansion_mode not in EXPANSION_MODES:
-            logger.warning(
-                "Unknown expansion_mode %r in %s - using 'strict'. Valid modes: %s",
-                expansion_mode,
-                adjacency_path,
-                ", ".join(EXPANSION_MODES),
-            )
-            expansion_mode = "strict"
-        
         return cls(
             pillars=pillars_data.get("pillars", {}),
-            adjacency_map=adjacency_data.get("adjacency_map", {}),
             keyword_rules=keywords_data.get("keyword_rules", {}),
             artifact_rules=artifact_data.get("artifact_pillar_mapping", {}),
-            expansion_mode=expansion_mode,
         )
 
 
@@ -217,19 +196,6 @@ class Router:
         
         # Phase 2: Get candidate tools from pillar
         pillar_tools = self.plugin_loader.get_for_pillar(selected_pillar)
-        
-        # Expand to adjacent pillars if configured
-        if self.config.expansion_mode == "adjacent":
-            adjacent_pillars = self.config.adjacency_map.get(selected_pillar, [])
-            for adj_pillar in adjacent_pillars:
-                pillar_tools.extend(self.plugin_loader.get_by_pillar(adj_pillar))
-            seen: set[str] = set()
-            deduped: list[LoadedPlugin] = []
-            for tool in pillar_tools:
-                if tool.tool_name not in seen:
-                    seen.add(tool.tool_name)
-                    deduped.append(tool)
-            pillar_tools = deduped
         
         # Phase 3: Score and rank tools
         scores = self._score_tools(
@@ -325,8 +291,6 @@ class Router:
                 score.pillar_match = 1.0
             elif selected_pillar in tool.manifest.also_useful_in:
                 score.pillar_match = 0.75
-            elif tool.pillar in self.config.adjacency_map.get(selected_pillar, []):
-                score.pillar_match = 0.5
             
             # Artifact match
             consumed = tool.manifest.artifacts_consumed

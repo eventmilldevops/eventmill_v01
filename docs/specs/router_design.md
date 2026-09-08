@@ -69,7 +69,6 @@ Capability derivation MUST begin with deterministic rules. Semantic enrichment i
 The plugin registry is filtered to tools where:
 
 - plugin pillar matches the selected pillar, or the plugin names it in `also_useful_in`
-  (or an adjacent pillar in `adjacent` mode)
 - plugin `artifacts_consumed` includes the active artifact type (if one exists)
 - plugin capabilities intersect the derived capability set
 - plugin stability is allowed by current policy
@@ -83,7 +82,6 @@ After primary tool selection, the router evaluates potential downstream tools by
 
 - primary tool's `artifacts_produced` against other tools' `artifacts_consumed`
 - primary tool's `chains_to` advisory field
-- adjacency map for cross-pillar chains
 
 Chain recommendations are informational. They appear in the routing output but do not automatically invoke. The analyst or LLM decides whether to follow a chain.
 
@@ -141,36 +139,18 @@ If the current session already selected a pillar and the new request is ambiguou
 
 ## Cross-Pillar Behavior
 
-### Expansion Modes
+Candidates are the selected pillar's tools, plus any tool whose manifest names that
+pillar in `also_useful_in`. There is no expansion mode: one pillar at a time is the
+routing model, and a tool reaches another pillar only by declaring it.
 
-| Mode | Behavior |
-|------|----------|
-| `strict` | Only selected pillar tools. Default. |
-| `adjacent` | Selected pillar plus approved adjacent pillars. |
-| `broad` | All matched tools regardless of pillar. Future mode. |
+Pillar-level adjacency was specified (`strict` / `adjacent` / `broad` modes over an
+adjacency map) and removed on 2026-09-07. It never narrowed anything useful - every
+pillar was adjacent to most others, so `adjacent` mode admitted nearly the whole
+catalogue and defeated the 3-5 tool target. `also_useful_in` covers the same need one
+declaration at a time, which is auditable in the manifest and reviewable per plugin.
+`broad` was never implemented.
 
-MVP ships with `strict` and `adjacent` modes only.
-
-The mode is read from `expansion_mode` in `framework/routing/config/adjacency.json`,
-alongside the map it governs. It defaults to `strict` when the key is absent, and an
-unrecognised value logs a warning and falls back to `strict` rather than failing to load.
-
-A plugin's `also_useful_in` is **not** governed by the expansion mode. Adjacency is a
-blanket pillar-to-pillar relation an operator may switch off; `also_useful_in` is one
-plugin author naming one pillar deliberately, and applies in every mode. It widens where
-a tool is *offered*, never which pillar Phase 1 selects.
-
-### Adjacency Map
-
-| Source Pillar | Adjacent Pillars |
-|--------------|-----------------|
-| `network_forensics` | `threat_modeling`, `log_analysis` |
-| `cloud_investigation` | `log_analysis`, `threat_modeling` |
-| `log_analysis` | `cloud_investigation`, `threat_modeling`, `network_forensics` |
-| `risk_assessment` | `threat_modeling` |
-| `threat_modeling` | `risk_assessment`, `log_analysis`, `network_forensics` |
-
-Note: `log_analysis` has the broadest adjacency because threat intel ingestion and context enrichment are relevant to nearly all investigation types.
+A declaration widens where a tool is *offered*, never which pillar Phase 1 selects.
 
 ---
 
@@ -194,7 +174,7 @@ Weights:
 
 | Factor | Weight | Notes |
 |--------|--------|-------|
-| `pillar_match` | 50 | 1 if pillar matches, 0.75 if the tool declares the pillar in `also_useful_in`, 0.5 if adjacent, 0 otherwise |
+| `pillar_match` | 50 | 1 if pillar matches, 0.75 if the tool declares the pillar in `also_useful_in`, 0 otherwise |
 | `artifact_consumed_match` | 30 | 1 if tool consumes the active artifact type |
 | `capability_overlap_count` | 10 per match | Number of derived capabilities matching tool capabilities |
 | `stability_weight` | core=10, verified=5, experimental=0, deprecated=-10 | |
@@ -214,7 +194,6 @@ The router returns a structured decision object:
 ```json
 {
   "selected_pillar": "log_analysis",
-  "expansion_mode": "strict",
   "requested_capabilities": [
     "artifact:pdf_report",
     "operation:parse",
@@ -301,8 +280,6 @@ The router SHOULD be config-driven. Suggested config areas:
 - available pillars and their enabled state
 - keyword-to-pillar maps (JSON, hot-reloadable)
 - artifact-to-pillar strength maps
-- adjacency map
-- default expansion mode
 - maximum candidate tools to expose (default: 5)
 - stability policy (e.g., exclude experimental in production)
 - cost and timeout thresholds for auto-invoke filtering
@@ -317,7 +294,7 @@ The router SHOULD be config-driven. Suggested config areas:
 4. Capability filtering against plugin manifests
 5. Simple ranking (score formula above)
 6. Structured routing result with explanation
-7. Adjacency expansion (adjacent mode)
+7. Cross-pillar offering via a plugin's `also_useful_in`
 8. Chain recommendation based on artifacts_produced/consumed
 
-Semantic recommendation, learning mode, and broad expansion are post-MVP.
+Semantic recommendation and learning mode are post-MVP.

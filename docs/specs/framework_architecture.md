@@ -55,8 +55,7 @@ eventmill_v01/
 │   │   └── config/
 │   │       ├── pillars.json            # Pillar definitions and enabled state
 │   │       ├── keywords.json           # Keyword-to-pillar scoring maps
-│   │       ├── artifact_rules.json     # Artifact type to pillar strength
-│   │       └── adjacency.json          # Cross-pillar adjacency map
+│   │       └── artifact_rules.json     # Artifact type to pillar strength
 │   │
 │   ├── llm/                            # LLM Orchestration
 │   │   ├── __init__.py
