@@ -17,6 +17,8 @@ from ..plugins.loader import LoadedPlugin, PluginLoader
 
 logger = logging.getLogger("eventmill.framework.routing")
 
+EXPANSION_MODES = ("strict", "adjacent")
+
 
 # ---------------------------------------------------------------------------
 # Routing Result Types
@@ -129,11 +131,22 @@ class RouterConfig:
         with open(artifact_path) as f:
             artifact_data = json.load(f)
         
+        expansion_mode = adjacency_data.get("expansion_mode", "strict")
+        if expansion_mode not in EXPANSION_MODES:
+            logger.warning(
+                "Unknown expansion_mode %r in %s - using 'strict'. Valid modes: %s",
+                expansion_mode,
+                adjacency_path,
+                ", ".join(EXPANSION_MODES),
+            )
+            expansion_mode = "strict"
+        
         return cls(
             pillars=pillars_data.get("pillars", {}),
             adjacency_map=adjacency_data.get("adjacency_map", {}),
             keyword_rules=keywords_data.get("keyword_rules", {}),
             artifact_rules=artifact_data.get("artifact_pillar_mapping", {}),
+            expansion_mode=expansion_mode,
         )
 
 

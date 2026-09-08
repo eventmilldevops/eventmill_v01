@@ -1,10 +1,27 @@
 {
+  "expansion_mode": "strict",
   "adjacency_map": {
-    "network_forensics": ["threat_modeling", "log_analysis"],
-    "cloud_investigation": ["log_analysis", "threat_modeling"],
-    "log_analysis": ["cloud_investigation", "threat_modeling", "network_forensics"],
-    "risk_assessment": ["threat_modeling"],
-    "threat_modeling": ["risk_assessment", "log_analysis", "network_forensics"]
+    "network_forensics": [
+      "threat_modeling",
+      "log_analysis"
+    ],
+    "cloud_investigation": [
+      "log_analysis",
+      "threat_modeling"
+    ],
+    "log_analysis": [
+      "cloud_investigation",
+      "threat_modeling",
+      "network_forensics"
+    ],
+    "risk_assessment": [
+      "threat_modeling"
+    ],
+    "threat_modeling": [
+      "risk_assessment",
+      "log_analysis",
+      "network_forensics"
+    ]
   },
-  "notes": "log_analysis has the broadest adjacency because threat intel ingestion and context enrichment are relevant to nearly all investigation types."
+  "notes": "log_analysis has the broadest adjacency because threat intel ingestion and context enrichment are relevant to nearly all investigation types. expansion_mode selects whether adjacency_map is used at all: 'strict' offers only the selected pillar's tools, 'adjacent' adds the pillars listed here. A tool's own also_useful_in applies in either mode."
 }

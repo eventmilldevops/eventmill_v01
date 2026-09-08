@@ -151,6 +151,10 @@ If the current session already selected a pillar and the new request is ambiguou
 
 MVP ships with `strict` and `adjacent` modes only.
 
+The mode is read from `expansion_mode` in `framework/routing/config/adjacency.json`,
+alongside the map it governs. It defaults to `strict` when the key is absent, and an
+unrecognised value logs a warning and falls back to `strict` rather than failing to load.
+
 A plugin's `also_useful_in` is **not** governed by the expansion mode. Adjacency is a
 blanket pillar-to-pillar relation an operator may switch off; `also_useful_in` is one
 plugin author naming one pillar deliberately, and applies in every mode. It widens where

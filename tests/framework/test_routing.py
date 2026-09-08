@@ -2,6 +2,8 @@
 Tests for routing engine.
 """
 
+import json
+
 import pytest
 from pathlib import Path
 
@@ -19,6 +21,90 @@ class TestRouterConfig:
         assert "log_analysis" in config.pillars
         assert "log_analysis" in config.adjacency_map
         assert "log_analysis" in config.keyword_rules
+
+
+class TestExpansionMode:
+    """expansion_mode comes from adjacency.json, not only from the default."""
+
+    def _config_dir(self, tmp_path: Path, routing_config_dir: Path, mode) -> Path:
+        """Copy the fixture config, rewriting adjacency.json's expansion_mode."""
+        target = tmp_path / "config"
+        target.mkdir()
+        for src in routing_config_dir.iterdir():
+            data = json.loads(src.read_text())
+            if src.name == "adjacency.json" and mode is not None:
+                data["expansion_mode"] = mode
+            (target / src.name).write_text(json.dumps(data))
+        return target
+
+    def test_reads_mode_from_config(self, tmp_path: Path, routing_config_dir: Path):
+        config = RouterConfig.load_from_directory(
+            self._config_dir(tmp_path, routing_config_dir, "adjacent")
+        )
+        assert config.expansion_mode == "adjacent"
+
+    def test_defaults_to_strict_when_absent(self, routing_config_dir: Path):
+        config = RouterConfig.load_from_directory(routing_config_dir)
+        assert config.expansion_mode == "strict"
+
+    def test_unknown_mode_falls_back_to_strict(
+        self, tmp_path: Path, routing_config_dir: Path
+    ):
+        config = RouterConfig.load_from_directory(
+            self._config_dir(tmp_path, routing_config_dir, "broad")
+        )
+        assert config.expansion_mode == "strict"
+
+    def test_shipped_config_declares_a_valid_mode(self):
+        config = RouterConfig.load_from_directory(
+            Path(__file__).parents[2] / "framework" / "routing" / "config"
+        )
+        assert config.expansion_mode in ("strict", "adjacent")
+
+    def test_adjacent_mode_reaches_adjacent_pillars(self, tmp_path: Path):
+        """The adjacency map only has an effect once the mode selects it."""
+        repo = Path(__file__).parents[2]
+        loader = PluginLoader(repo / "plugins")
+        loader.discover_all()
+
+        shipped = repo / "framework" / "routing" / "config"
+        target = tmp_path / "config"
+        target.mkdir()
+        for src in shipped.iterdir():
+            data = json.loads(src.read_text())
+            if src.name == "adjacency.json":
+                data["expansion_mode"] = "adjacent"
+            (target / src.name).write_text(json.dumps(data))
+
+        strict = Router(loader, RouterConfig.load_from_directory(shipped))
+        adjacent = Router(loader, RouterConfig.load_from_directory(target))
+        query = dict(user_input="look at the network traffic", active_pillar="threat_modeling")
+
+        assert not [t for t in strict.route(**query).scores if t.startswith("pcap_")]
+        assert [t for t in adjacent.route(**query).scores if t.startswith("pcap_")]
+
+    def test_declaration_outranks_adjacency_in_adjacent_mode(self, tmp_path: Path):
+        """A declared tool keeps its 0.75, and is scored once, not twice."""
+        repo = Path(__file__).parents[2]
+        loader = PluginLoader(repo / "plugins")
+        loader.discover_all()
+
+        target = tmp_path / "config"
+        target.mkdir()
+        for src in (repo / "framework" / "routing" / "config").iterdir():
+            data = json.loads(src.read_text())
+            if src.name == "adjacency.json":
+                data["expansion_mode"] = "adjacent"
+            (target / src.name).write_text(json.dumps(data))
+
+        router = Router(loader, RouterConfig.load_from_directory(target))
+        result = router.route(
+            user_input="ingest this threat intelligence report",
+            active_pillar="threat_modeling",
+        )
+
+        assert result.scores["threat_intel_ingester"].pillar_match == 0.75
+        assert result.candidate_tools.count("threat_intel_ingester") == 1
 
 
 class TestAlsoUsefulIn:
