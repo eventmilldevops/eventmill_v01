@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["profile_actor", "validate_flow_map"],
+      "description": "Action to perform. 'normalize_flow_map' and 'project_paths' are planned but not yet implemented."
+    },
+    "threat_actor": {
+      "type": "string",
+      "description": "Threat actor name, alias or ATT&CK id (profile_actor). Resolved against groups, then campaigns, then software — e.g. 'Cozy Bear', 'G0016', 'APT29'."
+    },
+    "software_scope": {
+      "type": "string",
+      "enum": ["none", "delivery", "all"],
+      "default": "delivery",
+      "description": "How much of the actor's associated-software technique mapping to return, as a block separate from the actor's own techniques (profile_actor). 'delivery' keeps only techniques whose tactics include resource development, initial access, execution, persistence or command and control — the stages where the actor's own tooling determines the technique. 'all' includes post-compromise techniques too, which are dominated by behaviour any actor would perform with whatever is already on the host. 'none' returns the actor's directly attributed techniques only."
+    },
+    "intel_artifact_id": {
+      "type": "string",
+      "description": "Optional threat_intel_ingester json_events artifact whose mitre_mappings are unioned into the technique set. Covers actors ATT&CK does not document (profile_actor)."
+    },
+    "max_procedures": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 50,
+      "default": 5,
+      "description": "How many procedure examples to return per covered tactic (profile_actor)."
+    },
+    "flow_map": {
+      "type": "object",
+      "description": "Inline flow map conforming to schemas/flow_map.schema.json (validate_flow_map). Supply this or 'flow_map_artifact_id'."
+    },
+    "flow_map_artifact_id": {
+      "type": "string",
+      "description": "Id of a json_events artifact holding a flow map (validate_flow_map). Supply this or 'flow_map'."
+    },
+    "file_path": {
+      "type": "string",
+      "description": "Path to a JSON flow map file (validate_flow_map). Injected by the shell when 'flow_map_artifact_id' is given."
+    }
+  },
+  "required": ["action"],
+  "allOf": [
+    {
+      "if": { "properties": { "action": { "const": "profile_actor" } }, "required": ["action"] },
+      "then": { "required": ["threat_actor"] }
+    },
+    {
+      "if": { "properties": { "action": { "const": "validate_flow_map" } }, "required": ["action"] },
+      "then": {
+        "anyOf": [
+          { "required": ["flow_map"] },
+          { "required": ["flow_map_artifact_id"] },
+          { "required": ["file_path"] }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": { "type": "string" },
+
+    "actor": {
+      "type": "object",
+      "description": "Resolved actor identity (profile_actor).",
+      "properties": {
+        "query": { "type": "string", "description": "What the analyst typed." },
+        "resolved": { "type": "boolean" },
+        "attck_id": { "type": "string" },
+        "name": { "type": "string" },
+        "entity_type": { "type": "string", "enum": ["group", "campaign", "software"] },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" },
+        "software": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "type": { "type": "string" }
+            }
+          }
+        },
+        "attack_version": { "type": "string" }
+      }
+    },
+    "technique_count": { "type": "integer" },
+    "software_scope": {
+      "type": "string",
+      "enum": ["none", "delivery", "all"],
+      "description": "Which software-derived techniques were included."
+    },
+    "software_source": {
+      "type": "string",
+      "description": "Where the software block came from. 'attck_lookup' is the local ATT&CK software-to-technique mapping; the block is kept separate from the actor's own techniques so another source can supply it."
+    },
+    "software_technique_count": { "type": "integer" },
+    "software_techniques": {
+      "type": "array",
+      "description": "Techniques reached only through the actor's associated software — a weaker claim than direct attribution, and disjoint from 'techniques'.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "technique_id": { "type": "string" },
+          "name": { "type": "string" },
+          "tactics": { "type": "array", "items": { "type": "string" } },
+          "band": {
+            "type": "string",
+            "enum": ["delivery", "operational"],
+            "description": "'delivery' where the actor's tooling determines the technique (the dropper, loader, implant and its channel); 'operational' where an actor typically uses what is already on the host."
+          },
+          "source": { "type": "string" },
+          "software": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "name": { "type": "string" }
+              }
+            }
+          },
+          "in_lookup": { "type": "boolean" }
+        }
+      }
+    },
+    "allowed_technique_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Union of 'techniques' and 'software_techniques' ids. Path projection may not use anything outside this set."
+    },
+    "techniques": {
+      "type": "array",
+      "description": "Techniques ATT&CK attributes to the actor directly, or that the supplied intel report maps to it.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "technique_id": { "type": "string" },
+          "name": { "type": "string" },
+          "tactics": { "type": "array", "items": { "type": "string" } },
+          "provenance": {
+            "type": "array",
+            "items": { "type": "string", "enum": ["attck_group", "attck_campaign", "attck_software", "intel_report"] },
+            "description": "Where the claim that this actor uses this technique came from."
+          },
+          "sources": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Specific ATT&CK ids or artifact ids backing the provenance."
+          },
+          "in_lookup": {
+            "type": "boolean",
+            "description": "False when the id is not present in the local ATT&CK technique database."
+          }
+        }
+      }
+    },
+    "tactic_coverage": {
+      "type": "array",
+      "description": "Kill-chain tactics covered, in ATT&CK order. Computed over 'techniques' (direct attribution) only — the software block is deliberately excluded so the stronger claim stays visible. Take the union with 'software_techniques' if you need coverage across the whole allowed set.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "tactic": { "type": "string" },
+          "ordinal": { "type": "integer" },
+          "technique_count": { "type": "integer" },
+          "technique_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "uncovered_tactics": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Tactics with nothing attributed to the actor directly. Software-derived techniques are not counted, so a tactic listed here may still be represented in 'allowed_technique_ids' when software_scope is 'all'."
+    },
+    "procedures": {
+      "type": "array",
+      "description": "Procedure examples describing how this actor has used a technique.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "technique_id": { "type": "string" },
+          "source": { "type": "string" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "unknown_techniques": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Technique ids in the set that the local lookup does not recognise."
+    },
+
+    "application": { "type": "string" },
+    "valid": { "type": "boolean", "description": "False when the flow map has blocking errors (validate_flow_map)." },
+    "errors": {
+      "type": "array",
+      "description": "Problems that make the flow map unusable for projection.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "location": { "type": "string" }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Problems that degrade projection quality but do not block it.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "location": { "type": "string" }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "properties": {
+        "components": { "type": "integer" },
+        "zones": { "type": "integer" },
+        "flows": { "type": "integer" },
+        "crown_jewels": { "type": "integer" },
+        "controls": { "type": "integer" }
+      }
+    },
+    "entry_surface": {
+      "type": "array",
+      "description": "Components ranked as entry candidates, highest score first.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "component_id": { "type": "string" },
+          "name": { "type": "string" },
+          "score": { "type": "integer" },
+          "exposure": { "type": "string" },
+          "zone": { "type": "string" },
+          "reasons": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "crown_jewel_routes": {
+      "type": "array",
+      "description": "Shortest reachable component routes from an entry candidate to a crown jewel, computed over the declared flows.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "entry": { "type": "string" },
+          "target": { "type": "string" },
+          "hops": { "type": "integer" },
+          "route": { "type": "array", "items": { "type": "string" } },
+          "boundary_crossings": { "type": "integer" },
+          "unauthenticated_hops": { "type": "integer" }
+        }
+      }
+    },
+    "unreachable_crown_jewels": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Crown jewels no entry candidate can reach over the declared flows. Usually means the flow map is incomplete."
+    },
+    "isolated_components": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Components with no inbound or outbound flow."
+    }
+  }
+}

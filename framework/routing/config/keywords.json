@@ -17,7 +17,9 @@
     ],
     "threat_modeling": [
       "mitre", "attack path", "technique", "lateral movement", "exfiltration",
-      "threat model", "four questions", "shostack", "what can go wrong"
+      "threat model", "four questions", "shostack", "what can go wrong",
+      "threat actor", "adversary", "apt", "flow map", "trust boundary",
+      "crown jewel", "attack surface", "what would they do"
     ]
   }
 }
