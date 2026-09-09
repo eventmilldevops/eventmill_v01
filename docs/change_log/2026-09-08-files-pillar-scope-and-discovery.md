@@ -54,7 +54,28 @@ files, one level below `--path`, per bucket:
 
 Files sitting directly at the listed level are grouped under `(files here)`
 rather than dropped, so a bucket with everything at the root still maps to
-something.
+something. When that is all a level holds there is nothing to drill into, so the
+footer offers a listing instead:
+
+```
+eventmill (threat_modeling) > files --path vendor_advisories --source all --folders
+  common bucket — evtm-common
+    (files here)                           4 files   60.2 MB
+
+  No folders below this one.
+  List what is here: files --path vendor_advisories --source all
+```
+
+An empty map goes through the same explanation the file listing does, with
+`--folders` carried into every command it suggests — otherwise `--folders`
+dead-ends on exactly the case it exists to rescue:
+
+```
+eventmill (threat_modeling) > files --path vendor_advisories --folders
+  Nothing under 'vendor_advisories' in the threat_modeling pillar bucket.
+  4 files match in the common bucket:
+  files --path vendor_advisories --source all --folders
+```
 
 ## Empty results teach
 

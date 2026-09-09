@@ -73,6 +73,10 @@ _FILE_REF_RE = re.compile(r"^#(\d+)$")
 FILES_DEFAULT_LIMIT = 50
 FILES_SOURCES = ("pillar", "common", "all")
 
+# Stands in for the files sitting directly at the level a folder map lists,
+# so a bucket whose objects are all at one depth still maps to something.
+FOLDER_LEAF = "(files here)"
+
 
 def _folder_breakdown(
     files: list[WorkspaceFile],
@@ -93,11 +97,11 @@ def _folder_breakdown(
             rest = rest[len(base):]
         rest = rest.lstrip("/")
         head, sep, _ = rest.partition("/")
-        label = f"{head}/" if sep else "(files here)"
+        label = f"{head}/" if sep else FOLDER_LEAF
         groups.setdefault(label, []).append(f)
 
     out: list[tuple[str, int, int | None]] = []
-    for label in sorted(groups, key=lambda s: (s == "(files here)", s)):
+    for label in sorted(groups, key=lambda s: (s == FOLDER_LEAF, s)):
         group = groups[label]
         sizes = [g.size_bytes for g in group if g.size_bytes is not None]
         out.append((label, len(group), sum(sizes) if sizes else None))
@@ -950,15 +954,15 @@ class EventMillShell(cmd.Cmd):
         if session.workspace_folder:
             location += f"/{session.workspace_folder}"
 
-        if query.folders:
-            self._render_folder_map(listing.files, query, session.active_pillar)
-            return
-
         in_scope = [
             f for f in listing.files if query.source in ("all", f.source)
         ]
         if not in_scope:
             self._explain_empty_listing(listing.files, query, session)
+            return
+
+        if query.folders:
+            self._render_folder_map(in_scope, query, session.active_pillar)
             return
 
         matched = self._apply_files_filters(in_scope, query)
@@ -1138,28 +1142,29 @@ class EventMillShell(cmd.Cmd):
         print(f"  Folders {where}, as seen from the {pillar} pillar:")
         print()
 
-        found = False
+        drillable = False
         for source, bucket in buckets:
             if query.source not in ("all", source):
                 continue
             group = [f for f in files if f.source == source]
             if not group:
                 continue
-            found = True
             print(f"  {source} bucket — {bucket}")
             for label, count, size in _folder_breakdown(group, here):
+                drillable = drillable or label != FOLDER_LEAF
                 noun = "file" if count == 1 else "files"
                 counted = f"{count} {noun}"
                 print(f"    {label:<36s} {counted:>9s}  {_format_bytes(size)}")
             print()
 
-        if not found:
-            scope = "" if query.source == "all" else f" with --source {query.source}"
-            print(f"  Nothing visible {where}{scope}.")
-            return
-
-        print("  Drill in with:   files --path <folder> --folders")
-        print("  List the files:  files --path <folder>")
+        scoped = f" --path {here}" if here else ""
+        scope = "" if query.source == "pillar" else f" --source {query.source}"
+        if drillable:
+            print(f"  Drill in with:   files --path <folder>{scope} --folders")
+            print(f"  List the files:  files --path <folder>{scope}")
+        else:
+            print("  No folders below this one.")
+            print(f"  List what is here: files{scoped}{scope}")
 
     def _render_source_footer(
         self,
@@ -1203,21 +1208,23 @@ class EventMillShell(cmd.Cmd):
         than only reporting that it found nothing.
         """
         pillar = session.active_pillar
+        tail = " --folders" if query.folders else ""
         scope = {
             "pillar": f"the {pillar} pillar bucket",
             "common": "the common bucket",
             "all": f"{pillar} or the common bucket",
         }[query.source]
 
+        nothing = "Nothing" if query.folders else "No files"
         if query.prefix:
-            print(f"  No files under '{query.prefix}' in {scope}.")
-            hint = self._explain_prefix(query.prefix, pillar)
+            print(f"  {nothing} under '{query.prefix}' in {scope}.")
+            hint = self._explain_prefix(query.prefix, pillar, tail)
             if hint:
                 for line in hint:
                     print(f"  {line}")
                 return
         else:
-            print(f"  No files in {scope}.")
+            print(f"  {nothing} in {scope}.")
 
         # A prefix is applied by the backend, so the listing we were handed
         # cannot say what else is there. Re-list without it.
@@ -1250,7 +1257,7 @@ class EventMillShell(cmd.Cmd):
                 verb = "matches" if len(elsewhere) == 1 else "match"
                 scoped = f" --path {query.prefix}" if query.prefix else ""
                 print(f"  {len(elsewhere)} {noun} {verb} in the {other} bucket:")
-                print(f"  files{scoped} --source all")
+                print(f"  files{scoped} --source all{tail}")
                 return
 
         folders = [label for label, _, _ in _folder_breakdown(probe)]
@@ -1263,7 +1270,12 @@ class EventMillShell(cmd.Cmd):
         print(f"  Folders here: {', '.join(folders[:8])}")
         print("  See the full layout with: files --folders --source all")
 
-    def _explain_prefix(self, prefix: str, pillar: str) -> list[str] | None:
+    def _explain_prefix(
+        self,
+        prefix: str,
+        pillar: str,
+        tail: str = "",
+    ) -> list[str] | None:
         """Return an explanation when --path was handed a bucket, not a folder.
 
         Pillar names never appear in object keys — the pillar selects the
@@ -1279,13 +1291,13 @@ class EventMillShell(cmd.Cmd):
             return [
                 f"'{prefix}' is the bucket you are already in, not a folder",
                 "inside it. The pillar picks the bucket; --path picks a folder",
-                "below it. Run 'files' on its own, or 'files --folders'.",
+                "below it. Run 'files --folders' to map the folders that exist.",
             ]
 
         if needle in ("common", config.common_bucket().lower()):
             return [
                 f"'{prefix}' is a bucket, not a folder inside one.",
-                "List it with: files --source common",
+                f"List it with: files --source common{tail}",
             ]
 
         for other in Pillar.ALL:

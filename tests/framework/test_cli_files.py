@@ -451,6 +451,55 @@ class TestFilesFolderMap:
         assert "previous/" in out
         assert "(files here)" in out
 
+    def test_leaf_map_offers_a_listing_not_a_drill(
+        self, shell, storage_base, capsys
+    ):
+        _seed(storage_base, PILLAR_BUCKET, "reports/a.pdf")
+        _seed(storage_base, PILLAR_BUCKET, "reports/b.pdf")
+
+        shell.onecmd("files --path reports --folders")
+        out = capsys.readouterr().out
+        assert "(files here)" in out
+        assert "No folders below this one." in out
+        assert "files --path reports" in out
+        assert "Drill in with" not in out
+
+    def test_drill_hint_carries_the_source(self, shell, storage_base, capsys):
+        _seed(storage_base, COMMON_BUCKET, "vendor_advisories/x.pdf")
+
+        shell.onecmd("files --folders --source all")
+        out = capsys.readouterr().out
+        assert "files --path <folder> --source all --folders" in out
+
+    def test_empty_map_points_at_the_other_bucket(
+        self, shell, storage_base, capsys
+    ):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+        _seed(storage_base, COMMON_BUCKET, "vendor_advisories/x.pdf")
+
+        shell.onecmd("files --path vendor_advisories --folders")
+        out = capsys.readouterr().out
+        assert "1 file matches in the common bucket" in out
+        assert "files --path vendor_advisories --source all --folders" in out
+
+    def test_empty_map_keeps_the_bucket_explanation(
+        self, shell, storage_base, capsys
+    ):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+        _seed(storage_base, COMMON_BUCKET, "vendor_advisories/x.pdf")
+
+        shell.onecmd("files --path common --folders")
+        out = capsys.readouterr().out
+        assert "files --source common --folders" in out
+
+    def test_empty_map_suggests_real_folders(self, shell, storage_base, capsys):
+        _seed(storage_base, PILLAR_BUCKET, "inc-1/a.log")
+
+        shell.onecmd("files --path nowhere --folders")
+        out = capsys.readouterr().out
+        assert "Nothing under 'nowhere'" in out
+        assert "inc-1/" in out
+
     def test_folders_takes_no_value(self, shell, capsys):
         shell.onecmd("files --folders yes")
         out = capsys.readouterr().out
