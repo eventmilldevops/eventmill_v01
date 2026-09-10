@@ -1303,3 +1303,32 @@ class TestProjectionSummary:
         result, _ = _project(plugin_instance, sample_flow_map, reply)
         summary = plugin_instance.summarize_for_llm(result)
         assert "TECHNIQUE_NOT_IN_SET" in summary
+
+
+class TestAccessLevels:
+    def test_every_tactic_has_an_access_mapping(self):
+        """A missing tactic reports 'none' access mid-chain, which reads as an
+        unauthenticated step. Stealth and Defense Impairment were both missing."""
+        from framework.reference_data.mitre_attack import TACTIC_ORDER
+        missing = [t for t in TACTIC_ORDER if t not in _tool_mod._ACCESS_BY_TACTIC]
+        assert not missing, f"no access mapping for: {missing}"
+
+    def test_fallback_is_not_none_access(self):
+        """An unrecognised tactic is more likely mid-chain than at entry."""
+        assert _tool_mod._ACCESS_FALLBACK != ("none", "none")
+
+    def test_stealth_step_does_not_claim_no_access(self, plugin_instance,
+                                                   sample_flow_map):
+        reply = _good_projection()
+        reply["paths"][0]["steps"][1]["tactic"] = "Stealth"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok
+        event = result.result["scenario_seeds"][0]["attack_sequence"][1]
+        assert event["required_access"] != "none"
+
+    def test_only_entry_tactics_require_no_access(self, plugin_instance,
+                                                  sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        events = result.result["scenario_seeds"][0]["attack_sequence"]
+        for event in events[1:]:
+            assert event["required_access"] != "none", event["name"]

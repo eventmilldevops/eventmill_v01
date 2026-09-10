@@ -1325,6 +1325,12 @@ def _validate_projection(
 
 # Access level a tactic typically requires and confers. Used to fill
 # AttackEvent.required_access / resulting_access deterministically.
+#
+# Must cover every entry in TACTIC_ORDER — a missing tactic falls through to
+# the default and reports "none" access mid-chain, which reads as an
+# unauthenticated step and is wrong. A contract test asserts the coverage,
+# because the gap that motivated it was Stealth and Defense Impairment: the two
+# tactics ATT&CK v19 introduced, and so the two most likely to appear.
 _ACCESS_BY_TACTIC: dict[str, tuple[str, str]] = {
     "Reconnaissance": ("none", "none"),
     "Resource Development": ("none", "none"),
@@ -1332,14 +1338,24 @@ _ACCESS_BY_TACTIC: dict[str, tuple[str, str]] = {
     "Execution": ("user", "user"),
     "Persistence": ("user", "user"),
     "Privilege Escalation": ("user", "admin"),
+    "Stealth": ("user", "user"),
+    "Defense Impairment": ("admin", "admin"),
+    "Evasion": ("user", "user"),  # ICS
     "Credential Access": ("user", "credentials"),
     "Discovery": ("user", "user"),
     "Lateral Movement": ("user", "user"),
     "Collection": ("user", "data"),
     "Command and Control": ("user", "user"),
+    "Inhibit Response Function": ("admin", "admin"),  # ICS
+    "Impair Process Control": ("admin", "admin"),  # ICS
     "Exfiltration": ("data", "data"),
     "Impact": ("admin", "admin"),
 }
+
+# For a tactic string that is not canonical at all. Never ("none", "none"):
+# an unrecognised tactic is far more likely mid-chain than at the entry point,
+# and claiming no access required there understates the step.
+_ACCESS_FALLBACK = ("user", "user")
 
 
 def _build_scenario_seeds(
@@ -1390,7 +1406,7 @@ def _build_scenario_seeds(
                     detecting.append(name)
 
             required, resulting = _ACCESS_BY_TACTIC.get(
-                step["tactic"], ("none", "none")
+                step["tactic"], _ACCESS_FALLBACK
             )
             events.append({
                 "event_id": f"AE-{order:04d}",

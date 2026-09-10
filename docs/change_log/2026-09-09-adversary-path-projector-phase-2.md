@@ -134,3 +134,47 @@ pre-existing `stability` errors.
 - Teaching `attack_path_visualizer` to render `component_id` and
   `uncovered_mitigations`, which its `DAGNode` already has empty fields for.
   Still deferred; the diagram is technique-level until then.
+
+---
+
+## Follow-up: `_ACCESS_BY_TACTIC` was missing five tactics
+
+Found while auditing a live run's scenario seed for provenance. A step the
+model tagged `Stealth` came back with `required_access: "none"` and
+`resulting_access: "none"` — reading as an unauthenticated step, four events
+after credentials had already been taken.
+
+`_ACCESS_BY_TACTIC` covered only 13 of the 18 tactics in `TACTIC_ORDER`.
+Missing: `Stealth`, `Defense Impairment`, and the three ICS-only tactics. The
+first two are the v19 replacements for Defense Evasion — the two tactics most
+likely to appear in current output were the two with no mapping, and the
+`("none", "none")` default made the gap silent rather than obvious.
+
+Fixed by completing the table and changing the fallback to `("user", "user")`:
+an unrecognised tactic is far more likely mid-chain than at an entry point, so
+claiming no access understates the step. Four tests added, including one
+asserting every `TACTIC_ORDER` entry has a mapping so the gap cannot reopen.
+
+Plugin tests 127, full suite 771.
+
+## Provenance of the emitted JSON
+
+Recorded because it was asked and is not obvious from the file:
+
+| Field | Source |
+|---|---|
+| path `description`, `attack_objective`, `path_id` | LLM |
+| `attack_sequence[].description` | LLM — the step's `rationale` verbatim |
+| `technique_id` | LLM selected, Phase C rejected anything outside the closed set |
+| `attack_technique` | MITRE — `get_mitre_db()[tid]["name"]`, never the model's wording |
+| `security_controls[]` | The analyst's flow map file. Not LLM, not MITRE |
+| `target_asset`, `entry_vectors`, `target_assets` | Flow map component names |
+| `blocking_controls`, `detecting_controls` | Computed from flow map controls |
+| `required_access` / `resulting_access` | `_ACCESS_BY_TACTIC` |
+| `event_id`, `sequence_order`, `source_type` | Generated / literal |
+
+The prose is the model's; identifiers, technique names, controls and access
+levels are not. **Rationale prose is not validated** — a live run cited "China
+Chopper", "SystemBC" and "ngrok", all three genuinely in G0117's documented
+software, but nothing enforced that. Technique ids are checked against the
+closed set; tool names inside a sentence are not.
