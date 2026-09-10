@@ -264,6 +264,7 @@ class MCPLLMClient:
             return LLMResponse(
                 ok=True,
                 text=response_text,
+                model_used=self.model_id,
                 token_usage=usage,
                 finish_reason=reason,
                 truncated=reason == "MAX_TOKENS",
@@ -327,6 +328,7 @@ class MCPLLMClient:
             return LLMResponse(
                 ok=True,
                 text=response_text,
+                model_used=self.model_id,
                 token_usage={"prompt_tokens": 0, "completion_tokens": 0},
             )
         except Exception as e:
