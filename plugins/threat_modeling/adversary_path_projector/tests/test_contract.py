@@ -1332,3 +1332,167 @@ class TestAccessLevels:
         events = result.result["scenario_seeds"][0]["attack_sequence"]
         for event in events[1:]:
             assert event["required_access"] != "none", event["name"]
+
+
+# ---------------------------------------------------------------------------
+# Tactic correction and kill-chain sequence checks
+# ---------------------------------------------------------------------------
+
+class TestTacticCorrection:
+    def test_single_tactic_technique_is_corrected_not_kept(self, plugin_instance,
+                                                           sample_flow_map):
+        """T1190 carries only Initial Access, so 'Impact' has one right answer."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"][0]["tactic"] = "Impact"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok
+        step = result.result["attack_graph"]["paths"][0]["steps"][0]
+        assert step["tactic"] == "Initial Access"
+        assert any("corrected" in n for n in step["notes"])
+
+    def test_correction_is_not_a_rejection(self, plugin_instance, sample_flow_map):
+        """A mislabelled tactic must not cost the step or split the graph."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"][0]["tactic"] = "Impact"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.result["step_count"] == 3
+        assert not result.result["rejections"]
+
+    def test_multi_tactic_technique_picks_one_it_carries(self, plugin_instance,
+                                                        sample_flow_map):
+        """T1078 carries four tactics; a bogus label resolves to one of them."""
+        from framework.reference_data.mitre_attack import get_mitre_db
+        reply = _good_projection()
+        reply["paths"][0]["steps"][1]["tactic"] = "Exfiltration"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        step = result.result["attack_graph"]["paths"][0]["steps"][1]
+        assert step["tactic"] in get_mitre_db()["T1078"]["tactics"]
+
+    def test_correction_does_not_introduce_a_second_entry(self, plugin_instance,
+                                                          sample_flow_map):
+        """T1078 carries Initial Access, but step 2 must not become an entry."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"][1]["tactic"] = "Exfiltration"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        step = result.result["attack_graph"]["paths"][0]["steps"][1]
+        assert step["tactic"] != "Initial Access"
+
+    def test_correction_feeds_the_access_table(self, plugin_instance,
+                                               sample_flow_map):
+        """The corrected tactic, not the model's label, drives access levels."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"][0]["tactic"] = "Impact"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        event = result.result["scenario_seeds"][0]["attack_sequence"][0]
+        # Initial Access -> none->user, not Impact's admin->admin
+        assert (event["required_access"], event["resulting_access"]) == ("none", "user")
+
+    def test_correct_label_produces_no_note(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        first = result.result["attack_graph"]["paths"][0]["steps"][0]
+        assert first["tactic"] == "Initial Access"
+        assert not first["notes"]
+
+    def test_closest_tactic_prefers_forward_progress(self):
+        pick = _tool_mod._closest_tactic
+        # Persistence(5), Privilege Escalation(6), Stealth(7), Initial Access(3)
+        candidates = ["Stealth", "Persistence", "Privilege Escalation",
+                      "Initial Access"]
+        assert pick(candidates, 0) == "Initial Access"       # first step
+        assert pick(candidates, 3) == "Persistence"          # forward, no re-entry
+        assert pick(candidates, 7) == "Stealth"              # same position ok
+
+    def test_closest_tactic_falls_back_when_nothing_is_forward(self):
+        pick = _tool_mod._closest_tactic
+        assert pick(["Discovery"], 18) == "Discovery"
+
+
+class TestKillChainSequence:
+    def test_large_regression_is_flagged(self, plugin_instance, sample_flow_map):
+        """Collection(13) then Reconnaissance-era work is out of sequence."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"] = [
+            {"technique_id": "T1005", "tactic": "Collection",
+             "component_id": "web", "rationale": "collect first",
+             "leads_to": ["T1190"]},
+            {"technique_id": "T1190", "tactic": "Initial Access",
+             "component_id": "web", "rationale": "then break in", "leads_to": []},
+        ]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok
+        codes = {w["code"] for w in result.result["warnings"]}
+        assert "KILL_CHAIN_REGRESSION" in codes
+
+    def test_regression_is_flagged_not_rejected(self, plugin_instance,
+                                                sample_flow_map):
+        """A step in the wrong position still keeps its edges."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"] = [
+            {"technique_id": "T1005", "tactic": "Collection",
+             "component_id": "web", "rationale": "collect first",
+             "leads_to": ["T1190"]},
+            {"technique_id": "T1190", "tactic": "Initial Access",
+             "component_id": "web", "rationale": "then break in", "leads_to": []},
+        ]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.result["step_count"] == 2
+        assert not result.result["rejections"]
+
+    def test_normal_loop_is_not_flagged(self, plugin_instance, sample_flow_map):
+        """Lateral Movement back to Discovery is ordinary tradecraft."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"] = [
+            {"technique_id": "T1190", "tactic": "Initial Access",
+             "component_id": "web", "rationale": "entry", "leads_to": ["T1550.003"]},
+            {"technique_id": "T1550.003", "tactic": "Lateral Movement",
+             "component_id": "api", "rationale": "pivot",
+             "leads_to": ["T1003.004"]},
+            {"technique_id": "T1003.004", "tactic": "Credential Access",
+             "component_id": "api", "rationale": "harvest secrets",
+             "leads_to": []},
+        ]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        codes = {w["code"] for w in result.result["warnings"]}
+        assert "KILL_CHAIN_REGRESSION" not in codes
+
+    def test_clean_path_has_no_sequence_warnings(self, plugin_instance,
+                                                 sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        codes = {w["code"] for w in result.result["warnings"]}
+        assert "KILL_CHAIN_REGRESSION" not in codes
+        assert "LATE_INITIAL_ACCESS" not in codes
+
+    def test_late_initial_access_is_flagged(self, plugin_instance, sample_flow_map):
+        reply = _good_projection()
+        reply["paths"][0]["steps"] = [
+            {"technique_id": "T1190", "tactic": "Initial Access",
+             "component_id": "web", "rationale": "entry", "leads_to": ["T1133"]},
+            {"technique_id": "T1133", "tactic": "Initial Access",
+             "component_id": "api", "rationale": "second entry", "leads_to": []},
+        ]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        codes = {w["code"] for w in result.result["warnings"]}
+        assert "LATE_INITIAL_ACCESS" in codes
+
+    def test_sequence_problems_reach_the_summary(self, plugin_instance,
+                                                 sample_flow_map):
+        """A warning nobody reads is not a warning."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"] = [
+            {"technique_id": "T1005", "tactic": "Collection",
+             "component_id": "web", "rationale": "collect first",
+             "leads_to": ["T1190"]},
+            {"technique_id": "T1190", "tactic": "Initial Access",
+             "component_id": "web", "rationale": "then break in", "leads_to": []},
+        ]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        summary = plugin_instance.summarize_for_llm(result)
+        assert "out of kill-chain sequence" in summary
+        assert len(summary) <= 2000
+
+    def test_corrections_reach_the_summary(self, plugin_instance, sample_flow_map):
+        reply = _good_projection()
+        reply["paths"][0]["steps"][0]["tactic"] = "Impact"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        summary = plugin_instance.summarize_for_llm(result)
+        assert "tactic label(s) corrected" in summary

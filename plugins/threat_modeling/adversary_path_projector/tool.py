@@ -1112,28 +1112,78 @@ def _build_projection_prompt(
 # Phase C — validate the model's placement against the closed set
 # ---------------------------------------------------------------------------
 
-def _resolve_step_tactic(
-    raw_tactic: str, technique_tactics: list[str]
-) -> tuple[str, str]:
-    """Normalise a step's tactic. Returns ``(tactic, note)``; note is '' if clean.
+# A step whose tactic regresses more than this many kill-chain positions from
+# the previous step is flagged. Real chains loop — Lateral Movement back to
+# Discovery, C2 back to Credential Access — so small regressions are normal. A
+# large one means a late-stage action landed before the work that enables it.
+TACTIC_REGRESSION_THRESHOLD = 6
 
-    A retired name is mapped onto the successor the technique actually carries.
-    A tactic the technique does not carry is kept but flagged, not discarded —
-    the placement may still be sound and the analyst can judge it.
+
+def _closest_tactic(candidates: list[str], previous_ordinal: int) -> str:
+    """Pick the candidate tactic that best continues the kill chain.
+
+    Prefers the earliest candidate at or after the previous step's position so
+    a corrected step carries the chain forward; otherwise the candidate nearest
+    to it.
     """
-    canonical = canonical_tactic(raw_tactic)
-    if canonical is None:
-        resolved = resolve_legacy_tactic(raw_tactic, technique_tactics)
-        if resolved:
-            return resolved, f"retired tactic {raw_tactic!r} mapped to {resolved!r}"
-        return (raw_tactic or "").strip(), f"unrecognised tactic {raw_tactic!r}"
+    ranked = sorted(candidates, key=tactic_ordinal)
+    if previous_ordinal:
+        # Initial Access is the entry point by definition. Past the first step
+        # it is never the right correction while anything else is available —
+        # otherwise correcting a mid-chain step would introduce a second entry.
+        narrowed = [t for t in ranked if t != "Initial Access"]
+        if narrowed:
+            ranked = narrowed
+    forward = [t for t in ranked if tactic_ordinal(t) >= previous_ordinal]
+    if forward:
+        return forward[0]
+    return min(ranked, key=lambda t: abs(tactic_ordinal(t) - previous_ordinal))
 
-    if technique_tactics and canonical not in technique_tactics:
-        return canonical, (
-            f"technique is not documented under {canonical!r} "
-            f"(carries: {', '.join(technique_tactics)})"
+
+def _resolve_step_tactic(
+    raw_tactic: str,
+    technique_tactics: list[str],
+    previous_ordinal: int = 0,
+) -> tuple[str, str]:
+    """Normalise a step's tactic, correcting it where ATT&CK is unambiguous.
+
+    Returns ``(tactic, note)``; note is '' when the model's label was right.
+
+    A technique's documented tactics are ground truth: every technique in the
+    lookup carries at least one and 79% carry exactly one, so a mismatch is
+    usually correctable rather than merely detectable. Correcting beats
+    rejecting — the placement is typically sound even when the label is not
+    ("T1190 / Impact" on an internet-facing app is the right technique with the
+    wrong word), and dropping the step would split the graph at that point and
+    strand the edges either side of it.
+    """
+    claimed = (raw_tactic or "").strip()
+    canonical = canonical_tactic(claimed)
+
+    # A retired name (pre-v19 "Defense Evasion") the technique can resolve.
+    if canonical is None:
+        resolved = resolve_legacy_tactic(claimed, technique_tactics)
+        if resolved:
+            return resolved, f"retired tactic {claimed!r} mapped to {resolved!r}"
+
+    if canonical is not None and canonical in technique_tactics:
+        return canonical, ""
+
+    if not technique_tactics:
+        return canonical or claimed, f"unrecognised tactic {claimed!r}"
+
+    if len(technique_tactics) == 1:
+        only = technique_tactics[0]
+        return only, (
+            f"tactic {claimed!r} corrected to {only!r}, the only tactic ATT&CK "
+            f"documents for this technique"
         )
-    return canonical, ""
+
+    chosen = _closest_tactic(technique_tactics, previous_ordinal)
+    return chosen, (
+        f"tactic {claimed!r} is not one this technique carries "
+        f"({', '.join(technique_tactics)}); using {chosen!r}"
+    )
 
 
 def _validate_projection(
@@ -1172,6 +1222,7 @@ def _validate_projection(
         path_id = str(raw_path.get("path_id", "") or f"path-{path_index + 1}")
         steps: list[dict[str, Any]] = []
         previous_component = ""
+        previous_ordinal = 0
 
         for step_index, raw_step in enumerate(raw_path.get("steps") or []):
             location = f"{path_id}.steps[{step_index}]"
@@ -1204,7 +1255,9 @@ def _validate_projection(
             entry = database.get(technique_id, {})
             technique_tactics = list(entry.get("tactics", []))
             tactic, tactic_note = _resolve_step_tactic(
-                str(raw_step.get("tactic", "") or ""), technique_tactics
+                str(raw_step.get("tactic", "") or ""),
+                technique_tactics,
+                previous_ordinal,
             )
 
             notes: list[str] = []
@@ -1212,7 +1265,30 @@ def _validate_projection(
                 notes.append(tactic_note)
                 warnings.append(_issue("TACTIC_CORRECTED", tactic_note, location))
 
-            if step_index == 0 and component_id not in entry_ids:
+            # Sequence checks. Unlike a technique outside the closed set, a step
+            # in the wrong position is not repairable by overwriting a field —
+            # but rejecting it would strand the edges either side, so it is
+            # flagged loudly and left for the analyst to judge.
+            ordinal = tactic_ordinal(tactic)
+            regression = previous_ordinal - ordinal
+            if previous_ordinal and regression > TACTIC_REGRESSION_THRESHOLD:
+                note = (
+                    f"{tactic} regresses {regression} kill-chain positions from "
+                    f"the previous step — a late-stage action placed before the "
+                    f"work that enables it"
+                )
+                notes.append(note)
+                warnings.append(_issue("KILL_CHAIN_REGRESSION", note, location))
+
+            if steps and tactic == "Initial Access":
+                note = (
+                    "Initial Access after the first step, but access was already "
+                    "gained upstream"
+                )
+                notes.append(note)
+                warnings.append(_issue("LATE_INITIAL_ACCESS", note, location))
+
+            if not steps and component_id not in entry_ids:
                 note = (
                     f"path starts on '{component_id}', which is not "
                     f"externally exposed"
@@ -1262,6 +1338,7 @@ def _validate_projection(
                 "notes": notes,
             })
             previous_component = component_id
+            previous_ordinal = ordinal
 
             key = (technique_id, tactic)
             if key not in mappings:
@@ -2169,6 +2246,24 @@ class AdversaryPathProjector:
                 codes[rejection["code"]] = codes.get(rejection["code"], 0) + 1
             detail = ", ".join(f"{code} x{n}" for code, n in sorted(codes.items()))
             lines.append(f"Rejected {len(rejections)} placement(s): {detail}.")
+
+        # Sequence problems are kept steps, so they never show up as rejections.
+        # Surface them or the loud warning is not loud.
+        sequence = [
+            w for w in data.get("warnings", [])
+            if w["code"] in ("KILL_CHAIN_REGRESSION", "LATE_INITIAL_ACCESS")
+        ]
+        if sequence:
+            lines.append(
+                f"{len(sequence)} step(s) out of kill-chain sequence — review: "
+                + "; ".join(w["location"] for w in sequence[:4])
+            )
+
+        corrected = [
+            w for w in data.get("warnings", []) if w["code"] == "TACTIC_CORRECTED"
+        ]
+        if corrected:
+            lines.append(f"{len(corrected)} tactic label(s) corrected against ATT&CK.")
 
         gaps = {
             m
