@@ -1616,3 +1616,531 @@ class TestThinkingLevelEnvOverride:
             "flow_map": sample_flow_map,
         })
         assert result.ok
+
+
+# ---------------------------------------------------------------------------
+# Run records
+# ---------------------------------------------------------------------------
+
+RUN_SCHEMA = json.loads(
+    (PLUGIN_DIR / "schemas" / "projection_run.schema.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+class _SequencedLLM:
+    """Answers each call from a list, so a loop can be scripted run by run."""
+
+    def __init__(self, replies: list):
+        self.prompts: list[str] = []
+        self.hints: list[Any] = []
+        self._replies = list(replies)
+        self._index = 0
+
+    def query_text(self, prompt, system_context=None, max_tokens=4096,
+                   grounding_data=None, hints=None):
+        self.prompts.append(prompt)
+        self.hints.append(hints)
+        reply = self._replies[min(self._index, len(self._replies) - 1)]
+        self._index += 1
+        if isinstance(reply, _Resp):
+            return reply
+        text = reply if isinstance(reply, str) else json.dumps(reply)
+        return _Resp(text=text)
+
+    def supports_native_document(self, mime_type):
+        return False
+
+
+def _records_in(workspace) -> list[dict]:
+    art_dir = Path(workspace) / "artifacts"
+    if not art_dir.exists():
+        return []
+    return [
+        json.loads(p.read_text(encoding="utf-8"))
+        for p in sorted(art_dir.glob("adversary_projection_run_*.json"))
+    ]
+
+
+def _project_exporting(plugin, flow_map, replies, workspace, monkeypatch,
+                       **payload):
+    monkeypatch.setenv("EVENTMILL_WORKSPACE", str(workspace))
+    llm = _SequencedLLM(replies if isinstance(replies, list) else [replies])
+    context = FakeContext()
+    context.llm_query = llm
+    result = plugin.execute({
+        "action": "project_paths", "threat_actor": "APT29",
+        "flow_map": flow_map, **payload,
+    }, context)
+    return result, llm
+
+
+class TestCanonicalFlowMapHash:
+    def test_reformatting_does_not_change_the_hash(self):
+        a = {"application": "X", "components": [{"id": "w", "zone": "z"}]}
+        b = {"components": [{"zone": "z", "id": "w"}], "application": "X"}
+        assert (
+            _tool_mod._canonical_flow_map_hash(a)
+            == _tool_mod._canonical_flow_map_hash(b)
+        )
+
+    def test_any_value_change_changes_the_hash(self):
+        a = {"application": "X", "components": [{"id": "w", "exposure": "internal"}]}
+        b = {"application": "X", "components": [{"id": "w", "exposure": "internet"}]}
+        assert (
+            _tool_mod._canonical_flow_map_hash(a)
+            != _tool_mod._canonical_flow_map_hash(b)
+        )
+
+    def test_hashing_the_normalized_map_would_be_wrong(self, sample_flow_map):
+        """Normalization fills defaults, so it collapses genuine differences.
+
+        Two maps that differ only in an omitted-vs-explicit default normalize
+        to the same thing. Hashing post-normalization would call them the same
+        estate; hashing as supplied does not.
+        """
+        bare = json.loads(json.dumps(sample_flow_map))
+        explicit = json.loads(json.dumps(sample_flow_map))
+        for component in explicit["components"]:
+            component.setdefault("technologies", [])
+            component.setdefault("controls", [])
+
+        raw_differs = (
+            _tool_mod._canonical_flow_map_hash(bare)
+            != _tool_mod._canonical_flow_map_hash(explicit)
+        )
+        norm_a, _, _ = _tool_mod._normalize_flow_map(bare)
+        norm_b, _, _ = _tool_mod._normalize_flow_map(explicit)
+        normalized_same = (
+            _tool_mod._canonical_flow_map_hash(norm_a)
+            == _tool_mod._canonical_flow_map_hash(norm_b)
+        )
+        assert raw_differs and normalized_same
+
+    def test_hash_is_a_sha256_hex_digest(self, sample_flow_map):
+        digest = _tool_mod._canonical_flow_map_hash(sample_flow_map)
+        assert len(digest) == 64 and set(digest) <= set("0123456789abcdef")
+
+
+class TestExportOptIn:
+    def test_absent_export_writes_no_record(self, plugin_instance,
+                                            sample_flow_map, tmp_path,
+                                            monkeypatch):
+        result, _ = _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch,
+        )
+        assert result.ok
+        assert _records_in(tmp_path) == []
+
+    def test_absent_export_leaves_the_result_unchanged(self, plugin_instance,
+                                                      sample_flow_map, tmp_path,
+                                                      monkeypatch):
+        """The one-run result keeps the shape it had before export existed."""
+        result, _ = _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch,
+        )
+        assert result.result["path_count"] == 1
+        assert result.result["step_count"] == 3
+        assert "attack_graph" in result.result
+        assert "run_record" not in result.result
+        assert "runs" not in result.result
+
+    def test_export_writes_exactly_one_record(self, plugin_instance,
+                                              sample_flow_map, tmp_path,
+                                              monkeypatch):
+        result, _ = _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        assert result.ok
+        assert len(_records_in(tmp_path)) == 1
+        assert result.result["run_record"].startswith("adversary_projection_run_")
+
+
+class TestRunRecordSchema:
+    def test_successful_record_validates(self, plugin_instance, sample_flow_map,
+                                         tmp_path, monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True, run_group="apt29-portal",
+        )
+        record = _records_in(tmp_path)[0]
+        jsonschema = pytest.importorskip("jsonschema")
+        jsonschema.validate(record, RUN_SCHEMA)
+
+    def test_record_carries_both_version_identifiers(self, plugin_instance,
+                                                     sample_flow_map, tmp_path,
+                                                     monkeypatch):
+        """The manifest version alone cannot separate two builds of the code."""
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        version = _records_in(tmp_path)[0]["run"]["tool_version"]
+        assert set(version) == {"manifest_version", "git_sha"}
+
+    def test_run_group_is_slugged(self, plugin_instance, sample_flow_map,
+                                  tmp_path, monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True, run_group="APT29 / telemetry 2026-09!",
+        )
+        assert _records_in(tmp_path)[0]["run"]["run_group"] == (
+            "APT29-telemetry-2026-09"
+        )
+
+    def test_run_group_defaults(self, plugin_instance, sample_flow_map,
+                                tmp_path, monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        assert _records_in(tmp_path)[0]["run"]["run_group"] == "ungrouped"
+
+    def test_model_block_records_resolved_thinking_level(self, plugin_instance,
+                                                         sample_flow_map,
+                                                         tmp_path, monkeypatch):
+        """The level that ran, not the one requested."""
+        monkeypatch.setenv("EVENTMILL_PROJECTION_THINKING", "high")
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        assert _records_in(tmp_path)[0]["model"]["thinking_level"] == "high"
+
+    def test_outcome_carries_provider_stop_signal_and_usage(self,
+                                                            plugin_instance,
+                                                            sample_flow_map,
+                                                            tmp_path,
+                                                            monkeypatch):
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        reply = _Resp(
+            text=json.dumps(_good_projection()),
+            finish_reason="STOP",
+            token_usage={"prompt_tokens": 11, "completion_tokens": 22,
+                         "thinking_tokens": 33, "total_tokens": 66},
+        )
+        context = FakeContext()
+        context.llm_query = _SequencedLLM([reply])
+        plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        outcome = _records_in(tmp_path)[0]["outcome"]
+        assert outcome["finish_reason"] == "STOP"
+        assert outcome["usage"]["thinking_tokens"] == 33
+        assert outcome["wall_time_ms"] >= 0
+
+    def test_sampled_keeps_technique_id_first_class(self, plugin_instance,
+                                                    sample_flow_map, tmp_path,
+                                                    monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        steps = _records_in(tmp_path)[0]["sampled"]["paths"][0]["steps"]
+        assert [s["technique_id"] for s in steps] == ["T1190", "T1078", "T1005"]
+        assert all(s["technique_name"] for s in steps)
+
+    def test_raw_reply_is_retained_beside_the_record(self, plugin_instance,
+                                                     sample_flow_map, tmp_path,
+                                                     monkeypatch):
+        """When two runs disagree, only the raw reply shows why."""
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        record = _records_in(tmp_path)[0]
+        raw = tmp_path / "artifacts" / record["run"]["raw_response_file"]
+        assert raw.exists()
+        assert json.loads(raw.read_text(encoding="utf-8"))["paths"]
+
+
+class TestFailedRunsExport:
+    def test_parse_failure_records_an_error(self, plugin_instance,
+                                            sample_flow_map, tmp_path,
+                                            monkeypatch):
+        result, _ = _project_exporting(
+            plugin_instance, sample_flow_map, "not json at all", tmp_path,
+            monkeypatch, export=True,
+        )
+        assert not result.ok
+        record = _records_in(tmp_path)[0]
+        assert record["outcome"]["status"] == "error"
+        assert record["outcome"]["error_code"] == "LLM_QUERY_FAILED"
+        assert "sampled" not in record
+
+    def test_truncation_records_an_error(self, plugin_instance, sample_flow_map,
+                                         tmp_path, monkeypatch):
+        """A reply cut off at the token cap is a finding about the map."""
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        reply = _Resp(text=json.dumps(_good_projection()),
+                      finish_reason="MAX_TOKENS", truncated=True)
+        context = FakeContext()
+        context.llm_query = _SequencedLLM([reply])
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        assert not result.ok
+        record = _records_in(tmp_path)[0]
+        assert record["outcome"]["truncated"] is True
+        assert record["outcome"]["finish_reason"] == "MAX_TOKENS"
+        assert "sampled" not in record
+
+    def test_query_failure_records_an_error(self, plugin_instance,
+                                            sample_flow_map, tmp_path,
+                                            monkeypatch):
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        context = FakeContext()
+        context.llm_query = _SequencedLLM([_Resp(ok=False, error="504 boom")])
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        assert not result.ok
+        record = _records_in(tmp_path)[0]
+        assert record["outcome"]["status"] == "error"
+        assert "504" in record["outcome"]["message"]
+
+    def test_failed_record_still_validates(self, plugin_instance,
+                                           sample_flow_map, tmp_path,
+                                           monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, "not json at all", tmp_path,
+            monkeypatch, export=True,
+        )
+        jsonschema = pytest.importorskip("jsonschema")
+        jsonschema.validate(_records_in(tmp_path)[0], RUN_SCHEMA)
+
+    def test_failed_record_keeps_the_deterministic_block(self, plugin_instance,
+                                                         sample_flow_map,
+                                                         tmp_path, monkeypatch):
+        """A map that reliably fails is still a statement about the map."""
+        _project_exporting(
+            plugin_instance, sample_flow_map, "not json at all", tmp_path,
+            monkeypatch, export=True,
+        )
+        record = _records_in(tmp_path)[0]
+        assert record["deterministic"]["entry_ranking"]
+        assert record["deterministic"]["routes"]
+
+
+class TestDeterministicBlockIsStable:
+    def test_identical_across_separate_invocations(self, plugin_instance,
+                                                   sample_flow_map):
+        """The cheapest correctness check the corpus has.
+
+        Built without an LLM: validate_flow_map is the deterministic layer on
+        its own, so the comparison needs no model and no mocking around one.
+        """
+        payload = {"action": "validate_flow_map", "flow_map": sample_flow_map}
+        first = plugin_instance.execute(payload, FakeContext()).result
+        second = plugin_instance.execute(payload, FakeContext()).result
+
+        def _block(data):
+            return json.dumps({
+                "entry_ranking": data["entry_surface"],
+                "routes": data["crown_jewel_routes"],
+                "unreachable_crown_jewels": data["unreachable_crown_jewels"],
+                "validation": data["warnings"],
+            }, sort_keys=True)
+
+        assert _block(first) == _block(second)
+
+    def test_matches_what_the_record_stores(self, plugin_instance,
+                                            sample_flow_map, tmp_path,
+                                            monkeypatch):
+        """The record's deterministic block is that same layer, not a copy."""
+        linted = plugin_instance.execute(
+            {"action": "validate_flow_map", "flow_map": sample_flow_map},
+            FakeContext(),
+        ).result
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        block = _records_in(tmp_path)[0]["deterministic"]
+        assert json.dumps(block["entry_ranking"], sort_keys=True) == json.dumps(
+            linted["entry_surface"], sort_keys=True
+        )
+        assert json.dumps(block["routes"], sort_keys=True) == json.dumps(
+            linted["crown_jewel_routes"], sort_keys=True
+        )
+
+    def test_identical_across_runs_in_one_loop(self, plugin_instance,
+                                               sample_flow_map, tmp_path,
+                                               monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, [_good_projection()], tmp_path,
+            monkeypatch, runs=3,
+        )
+        blocks = {
+            json.dumps(r["deterministic"], sort_keys=True)
+            for r in _records_in(tmp_path)
+        }
+        assert len(blocks) == 1
+
+
+class TestMultipleRuns:
+    def test_runs_writes_one_record_each(self, plugin_instance, sample_flow_map,
+                                         tmp_path, monkeypatch):
+        result, llm = _project_exporting(
+            plugin_instance, sample_flow_map, [_good_projection()], tmp_path,
+            monkeypatch, runs=3, run_group="stability",
+        )
+        assert result.ok
+        assert len(llm.prompts) == 3
+        records = _records_in(tmp_path)
+        assert len(records) == 3
+        assert {r["run"]["run_index"] for r in records} == {1, 2, 3}
+        assert {r["run"]["run_group"] for r in records} == {"stability"}
+        assert len({r["run"]["run_id"] for r in records}) == 3
+        assert {r["run"]["run_count"] for r in records} == {3}
+
+    def test_runs_implies_export(self, plugin_instance, sample_flow_map,
+                                 tmp_path, monkeypatch):
+        """A loop that leaves no record cannot be compared, so it is not one."""
+        _project_exporting(
+            plugin_instance, sample_flow_map, [_good_projection()], tmp_path,
+            monkeypatch, runs=2,
+        )
+        assert len(_records_in(tmp_path)) == 2
+
+    def test_no_record_is_modified_by_a_later_run(self, plugin_instance,
+                                                  sample_flow_map, tmp_path,
+                                                  monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, [_good_projection()], tmp_path,
+            monkeypatch, runs=2, run_group="first",
+        )
+        art_dir = tmp_path / "artifacts"
+        before = {
+            p.name: p.read_bytes()
+            for p in art_dir.glob("adversary_projection_run_*.json")
+        }
+        _project_exporting(
+            plugin_instance, sample_flow_map, [_good_projection()], tmp_path,
+            monkeypatch, runs=2, run_group="first",
+        )
+        after = {
+            p.name: p.read_bytes()
+            for p in art_dir.glob("adversary_projection_run_*.json")
+        }
+        assert len(after) == 4
+        for name, value in before.items():
+            assert after[name] == value
+
+    def test_a_failing_run_does_not_stop_the_rest(self, plugin_instance,
+                                                  sample_flow_map, tmp_path,
+                                                  monkeypatch):
+        """At 'high' a run can hit the gateway deadline; the loop must survive."""
+        replies = [
+            _good_projection(),
+            _Resp(ok=False, error="504 DEADLINE_EXCEEDED"),
+            _good_projection(),
+        ]
+        result, llm = _project_exporting(
+            plugin_instance, sample_flow_map, replies, tmp_path, monkeypatch,
+            runs=3,
+        )
+        assert len(llm.prompts) == 3
+        assert result.ok
+        assert result.result["succeeded"] == 2
+        assert result.result["failed"] == 1
+
+        records = _records_in(tmp_path)
+        assert len(records) == 3
+        statuses = {r["run"]["run_index"]: r["outcome"]["status"] for r in records}
+        assert statuses == {1: "ok", 2: "error", 3: "ok"}
+
+    def test_all_runs_failing_is_a_failed_result(self, plugin_instance,
+                                                 sample_flow_map, tmp_path,
+                                                 monkeypatch):
+        result, _ = _project_exporting(
+            plugin_instance, sample_flow_map, ["nonsense"], tmp_path,
+            monkeypatch, runs=2,
+        )
+        assert not result.ok
+        assert len(_records_in(tmp_path)) == 2
+
+    def test_graph_artifact_written_once_per_loop(self, plugin_instance,
+                                                  sample_flow_map, tmp_path,
+                                                  monkeypatch):
+        """A twenty-run experiment must not bury the listing in graphs."""
+        _project_exporting(
+            plugin_instance, sample_flow_map, [_good_projection()], tmp_path,
+            monkeypatch, runs=3,
+        )
+        art_dir = tmp_path / "artifacts"
+        assert len(list(art_dir.glob("adversary_path_graph_*.json"))) == 1
+        assert len(list(art_dir.glob("adversary_scenario_seed_*.json"))) == 1
+
+    def test_multi_run_result_has_no_graph(self, plugin_instance,
+                                           sample_flow_map, tmp_path,
+                                           monkeypatch):
+        result, _ = _project_exporting(
+            plugin_instance, sample_flow_map, [_good_projection()], tmp_path,
+            monkeypatch, runs=2,
+        )
+        assert "attack_graph" not in result.result
+        assert len(result.result["runs"]) == 2
+
+    def test_runs_bounds(self, plugin_instance, sample_flow_map):
+        base = {"action": "project_paths", "threat_actor": "APT29",
+                "flow_map": sample_flow_map}
+        assert not plugin_instance.validate_inputs({**base, "runs": 0}).ok
+        assert not plugin_instance.validate_inputs(
+            {**base, "runs": _tool_mod.MAX_RUNS + 1}).ok
+        assert plugin_instance.validate_inputs({**base, "runs": 1}).ok
+        assert plugin_instance.validate_inputs(
+            {**base, "runs": _tool_mod.MAX_RUNS}).ok
+
+    def test_runs_must_be_an_integer(self, plugin_instance, sample_flow_map):
+        base = {"action": "project_paths", "threat_actor": "APT29",
+                "flow_map": sample_flow_map}
+        assert not plugin_instance.validate_inputs({**base, "runs": "3"}).ok
+        assert not plugin_instance.validate_inputs({**base, "runs": True}).ok
+
+
+class TestRunSummary:
+    def test_multi_run_summary_stays_under_the_cap(self, plugin_instance,
+                                                   sample_flow_map, tmp_path,
+                                                   monkeypatch):
+        result, _ = _project_exporting(
+            plugin_instance, sample_flow_map, [_good_projection()], tmp_path,
+            monkeypatch, runs=_tool_mod.MAX_RUNS,
+        )
+        summary = plugin_instance.summarize_for_llm(result)
+        assert len(summary) < 2000
+
+    def test_summary_reports_failures_by_code(self, plugin_instance,
+                                              sample_flow_map, tmp_path,
+                                              monkeypatch):
+        replies = [_good_projection(), "nonsense", "nonsense"]
+        result, _ = _project_exporting(
+            plugin_instance, sample_flow_map, replies, tmp_path, monkeypatch,
+            runs=3,
+        )
+        summary = plugin_instance.summarize_for_llm(result)
+        assert "3 run(s)" in summary and "1 ok" in summary
+        assert "LLM_QUERY_FAILED x2" in summary
+
+
+class TestExportFailureIsNotFatal:
+    def test_unwritable_workspace_keeps_the_projection(self, plugin_instance,
+                                                       sample_flow_map,
+                                                       tmp_path, monkeypatch):
+        """Losing the record must not also lose the projection."""
+        blocker = tmp_path / "blocked"
+        blocker.write_text("not a directory", encoding="utf-8")
+        result, _ = _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), blocker,
+            monkeypatch, export=True,
+        )
+        assert result.ok
+        assert result.result["path_count"] == 1
+        assert result.result["export_errors"]

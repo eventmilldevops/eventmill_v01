@@ -17,12 +17,15 @@ See docs/specs/adversary_path_projector.md.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
+import time
+import uuid
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +71,17 @@ DEFAULT_THINKING_LEVEL = "medium"
 # "high", a laptop at "medium". Named after the existing tier overrides in
 # framework/llm/providers/__init__.py.
 THINKING_LEVEL_ENV_OVERRIDE = "EVENTMILL_PROJECTION_THINKING"
+
+# Run records. The corpus these build is compared by eye, one record against
+# another, so the schema version is what tells a later reader whether two
+# records are the same shape.
+RUN_RECORD_SCHEMA_VERSION = 1
+
+# A run at "medium" on a ten-component map is roughly 27s, so 25 is already a
+# ten-minute invocation. The cap is about keeping that a deliberate choice.
+MAX_RUNS = 25
+
+DEFAULT_RUN_GROUP = "ungrouped"
 
 
 def _default_thinking_level() -> str:
@@ -400,6 +414,100 @@ def _procedures_for_sources(
             if len(found) >= limit:
                 break
     return found
+
+
+# ---------------------------------------------------------------------------
+# Run provenance
+# ---------------------------------------------------------------------------
+
+def _canonical_flow_map_hash(raw: Any) -> str:
+    """SHA-256 over a canonical serialisation of the flow map as supplied.
+
+    Sorted keys and no insignificant whitespace, so reformatting or reordering
+    a map does not change the hash but a content change does.  Hashed *before*
+    _normalize_flow_map runs: normalization fills defaults, so two genuinely
+    different files can normalize to the same thing.  This is the join key a
+    later comparison uses to know two records describe the same estate.
+    """
+    canonical = json.dumps(
+        raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_GIT_SHA: str | None = None
+
+
+def _git_short_sha() -> str:
+    """Short SHA of the working tree, read from .git without shelling out.
+
+    Recorded alongside the manifest version because the manifest version does
+    not move on its own: it has read 0.2.0 since the projection action landed,
+    while tactic correction, the kill-chain checks and the thinking-level
+    default all shipped after it.  The SHA is the field that can actually tell
+    two runs of different code apart.
+    """
+    global _GIT_SHA
+    if _GIT_SHA is not None:
+        return _GIT_SHA
+
+    _GIT_SHA = ""
+    for parent in Path(__file__).resolve().parents:
+        git_dir = parent / ".git"
+        if not git_dir.exists():
+            continue
+        try:
+            if git_dir.is_file():  # worktree or submodule
+                git_dir = parent / git_dir.read_text(encoding="utf-8").split(
+                    "gitdir:", 1
+                )[1].strip()
+            head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+            if head.startswith("ref:"):
+                ref = head.split(":", 1)[1].strip()
+                ref_file = git_dir / ref
+                if ref_file.exists():
+                    head = ref_file.read_text(encoding="utf-8").strip()
+                else:  # packed-refs
+                    packed = (git_dir / "packed-refs").read_text(encoding="utf-8")
+                    head = next(
+                        (
+                            line.split()[0]
+                            for line in packed.splitlines()
+                            if line.endswith(f" {ref}")
+                        ),
+                        "",
+                    )
+            _GIT_SHA = head[:7]
+        except Exception as exc:
+            logger.debug("Could not read git SHA: %s", exc)
+        break
+    return _GIT_SHA
+
+
+_MANIFEST_VERSION: str | None = None
+
+
+def _manifest_version() -> str:
+    global _MANIFEST_VERSION
+    if _MANIFEST_VERSION is None:
+        _MANIFEST_VERSION = ""
+        try:
+            manifest = json.loads(
+                (Path(__file__).resolve().parent / "manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            _MANIFEST_VERSION = str(manifest.get("version", "") or "")
+        except Exception as exc:
+            logger.debug("Could not read manifest version: %s", exc)
+    return _MANIFEST_VERSION
+
+
+def _slug(value: str, fallback: str) -> str:
+    """Filesystem- and metadata-safe form of an operator-supplied label."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip("-.")
+    return cleaned[:64] or fallback
 
 
 # ---------------------------------------------------------------------------
@@ -1643,6 +1751,12 @@ class AdversaryPathProjector:
                     f"{', '.join(THINKING_LEVELS)}."
                 )
 
+            runs = payload.get("runs", 1)
+            if not isinstance(runs, int) or isinstance(runs, bool):
+                errors.append("'runs' must be an integer")
+            elif not 1 <= runs <= MAX_RUNS:
+                errors.append(f"'runs' must be between 1 and {MAX_RUNS}")
+
         if errors:
             return ValidationResult(ok=False, errors=errors)
         return ValidationResult(ok=True)
@@ -1950,6 +2064,13 @@ class AdversaryPathProjector:
         thinking_level = str(
             payload.get("thinking_level") or _default_thinking_level()
         )
+        runs = int(payload.get("runs", 1))
+        run_group = _slug(
+            str(payload.get("run_group", "") or ""), DEFAULT_RUN_GROUP
+        )
+        # A loop that leaves no record is a loop whose output cannot be
+        # compared, which is the only reason to run one.
+        export = bool(payload.get("export", False)) or runs > 1
 
         # --- Phase A: the closed set and the topology, both deterministic ---
         profile, error = self._load_actor_profile(payload, context)
@@ -2017,6 +2138,105 @@ class AdversaryPathProjector:
             max_paths,
         )
 
+        # Computed once and copied into every record of a --runs loop: it cannot
+        # vary between iterations, so recomputing it would only cost time.  The
+        # check that matters is across separate invocations of the same map.
+        deterministic = {
+            "entry_ranking": entry_surface,
+            "routes": routes,
+            "unreachable_crown_jewels": unreachable,
+            "validation": map_warnings,
+        }
+        run_context = {
+            "run_group": run_group,
+            "runs": runs,
+            "flow_map_path": str(payload.get("file_path", "") or ""),
+            "flow_map_sha256": _canonical_flow_map_hash(raw),
+            "application": flow_map["application"],
+            "actor_input": str(payload.get("threat_actor", "") or ""),
+            "unreachable": unreachable,
+            "profile": profile,
+            "thinking_level": thinking_level,
+            "max_paths": max_paths,
+            "software_scope": profile["software_scope"],
+            "allowed_technique_count": len(core_ids | software_ids),
+        }
+
+        outcomes: list[dict[str, Any]] = []
+        artifacts: list[dict[str, Any]] = []
+        export_errors: list[str] = []
+        graph_written = False
+
+        for index in range(1, runs + 1):
+            attempt = self._run_one_projection(
+                context, prompt, thinking_level, core_ids, software_ids,
+                flow_map, entry_ids, profile["label"],
+            )
+
+            # The graph and the seed are the product of a projection and chain
+            # onwards; in a loop only the first success needs to, or a 20-run
+            # experiment buries the artifact listing under 40 files nobody asked
+            # for.  Every run still leaves its own record.
+            if attempt["ok"] and not graph_written:
+                attempt["artifacts"] = self._write_projection_artifacts(
+                    profile, flow_map, attempt["attack_graph"],
+                    attempt["validated"]["mitre_mappings"], attempt["seeds"],
+                    context,
+                )
+                artifacts.extend(attempt["artifacts"])
+                graph_written = True
+
+            if export:
+                record = self._build_run_record(
+                    run_context, deterministic, attempt, index
+                )
+                written, write_error = self._write_run_record(
+                    record, attempt.get("raw_text"), context
+                )
+                artifacts.extend(written)
+                attempt["record_file"] = record["run"]["record_file"]
+                if write_error:
+                    export_errors.append(f"run {index}: {write_error}")
+
+            outcomes.append(attempt)
+
+        if runs == 1:
+            return self._single_run_result(
+                run_context, outcomes[0], listed, map_warnings, artifacts,
+                export_errors,
+            )
+        return self._multi_run_result(
+            run_context, outcomes, listed, artifacts, export_errors
+        )
+
+    def _run_one_projection(
+        self,
+        context: Any,
+        prompt: str,
+        thinking_level: str,
+        core_ids: set[str],
+        software_ids: set[str],
+        flow_map: dict[str, Any],
+        entry_ids: set[str],
+        actor_label: str,
+    ) -> dict[str, Any]:
+        """One Phase B + Phase C cycle.
+
+        Returns the attempt as data rather than a ToolResult so that a failure
+        can still be recorded before it is returned.  A run that dies is a
+        finding about the map — most usefully so inside a loop, where it must
+        not stop the runs after it.
+        """
+        started = time.perf_counter()
+        attempt: dict[str, Any] = {
+            "ok": False,
+            "error_code": None,
+            "message": None,
+            "details": None,
+            "raw_text": None,
+            "response": None,
+        }
+
         response = context.llm_query.query_text(
             prompt=prompt,
             system_context=PROJECTION_SYSTEM_CONTEXT,
@@ -2028,15 +2248,21 @@ class AdversaryPathProjector:
                 thinking_level=thinking_level,
             ),
         )
+        attempt["response"] = response
+        attempt["raw_text"] = getattr(response, "text", None)
+
+        def _finish(**fields: Any) -> dict[str, Any]:
+            attempt.update(fields)
+            attempt["wall_time_ms"] = int((time.perf_counter() - started) * 1000)
+            return attempt
+
         if not response.ok:
-            return ToolResult(
-                ok=False,
+            return _finish(
                 error_code="LLM_QUERY_FAILED",
                 message=f"Projection query failed: {response.error}",
             )
         if getattr(response, "truncated", False):
-            return ToolResult(
-                ok=False,
+            return _finish(
                 error_code="LLM_QUERY_FAILED",
                 message=(
                     "Projection reply hit the output-token cap and is incomplete. "
@@ -2047,8 +2273,7 @@ class AdversaryPathProjector:
 
         parsed, parse_error = _parse_llm_json(response.text or "")
         if parsed is None:
-            return ToolResult(
-                ok=False,
+            return _finish(
                 error_code="LLM_QUERY_FAILED",
                 message=f"Could not parse the projection reply: {parse_error}",
             )
@@ -2060,8 +2285,7 @@ class AdversaryPathProjector:
         attack_graph = validated["attack_graph"]
 
         if not attack_graph["paths"]:
-            return ToolResult(
-                ok=False,
+            return _finish(
                 error_code="PROJECTION_REJECTED",
                 message=(
                     f"No projected path survived validation "
@@ -2070,43 +2294,307 @@ class AdversaryPathProjector:
                     f"set or components outside the flow map."
                 ),
                 details={"rejections": validated["rejections"]},
+                validated=validated,
+                attack_graph=attack_graph,
             )
 
-        seeds = _build_scenario_seeds(profile["label"], flow_map, attack_graph)
-        artifacts = self._write_projection_artifacts(
-            profile, flow_map, attack_graph, validated["mitre_mappings"], seeds,
-            context,
+        return _finish(
+            ok=True,
+            validated=validated,
+            attack_graph=attack_graph,
+            seeds=_build_scenario_seeds(actor_label, flow_map, attack_graph),
         )
 
-        steps = [s for p in attack_graph["paths"] for s in p["steps"]]
-        return ToolResult(
-            ok=True,
-            result={
-                "action": "project_paths",
-                "actor": profile["label"],
-                "application": flow_map["application"],
-                "software_scope": profile["software_scope"],
-                "thinking_level": thinking_level,
-                "allowed_technique_count": len(core_ids | software_ids),
-                "techniques_offered_to_model": listed,
-                "path_count": len(attack_graph["paths"]),
-                "step_count": len(steps),
-                "evidence_counts": {
-                    "documented": sum(
-                        1 for s in steps if s["evidence"] == "documented"
-                    ),
-                    "via_software": sum(
-                        1 for s in steps if s["evidence"] == "via_software"
-                    ),
+    # -------------------------------------------------------------------
+    # Run records
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    def _build_run_record(
+        run_context: dict[str, Any],
+        deterministic: dict[str, Any],
+        attempt: dict[str, Any],
+        index: int,
+    ) -> dict[str, Any]:
+        """Assemble one run record.
+
+        The split between 'deterministic' and 'sampled' is the point of the
+        record: everything under 'deterministic' is fixed by the flow map hash
+        and must not vary between runs, so a reader comparing two records knows
+        any difference below it came from the model.
+        """
+        run_id = str(uuid.uuid4())
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        profile = run_context["profile"]
+        response = attempt.get("response")
+
+        record: dict[str, Any] = {
+            "run": {
+                "schema_version": RUN_RECORD_SCHEMA_VERSION,
+                "run_id": run_id,
+                "run_group": run_context["run_group"],
+                "run_index": index,
+                "run_count": run_context["runs"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "tool_version": {
+                    "manifest_version": _manifest_version(),
+                    "git_sha": _git_short_sha(),
                 },
-                "attack_graph": attack_graph,
-                "mitre_mappings": validated["mitre_mappings"],
-                "scenario_seeds": seeds,
-                "rejections": validated["rejections"],
-                "warnings": validated["warnings"] + map_warnings,
-                "unreachable_crown_jewels": unreachable,
-                "model_used": getattr(response, "model_used", None),
+                "flow_map_path": run_context["flow_map_path"],
+                "flow_map_sha256": run_context["flow_map_sha256"],
+                "application": run_context["application"],
+                "actor_input": run_context["actor_input"],
+                "actor_resolved": {
+                    "name": profile["label"],
+                    "resolved": profile["resolved"],
+                    "attack_id": (profile.get("actor") or {}).get("attck_id", ""),
+                    "entity_type": (profile.get("actor") or {}).get(
+                        "entity_type", ""
+                    ),
+                    "aliases": (profile.get("record") or {}).get("aliases", []),
+                    "technique_count": run_context["allowed_technique_count"],
+                },
+                "record_file": (
+                    f"adversary_projection_run_{stamp}_{run_id[:8]}.json"
+                ),
             },
+            "model": {
+                "provider": "gcp_gemini",
+                "model_configured": getattr(response, "model_used", None),
+                "tier": "heavy",
+                "thinking_level": run_context["thinking_level"],
+                "max_tokens": 16384,
+                "max_paths": run_context["max_paths"],
+                "software_scope": run_context["software_scope"],
+            },
+            "deterministic": deterministic,
+            "outcome": {
+                "status": "ok" if attempt["ok"] else "error",
+                "finish_reason": getattr(response, "finish_reason", None),
+                "truncated": bool(getattr(response, "truncated", False)),
+                "error_code": attempt["error_code"],
+                "message": attempt["message"],
+                "usage": getattr(response, "token_usage", None),
+                "wall_time_ms": attempt.get("wall_time_ms"),
+            },
+        }
+
+        if attempt.get("raw_text"):
+            record["run"]["raw_response_file"] = (
+                f"adversary_projection_raw_{stamp}_{run_id[:8]}.txt"
+            )
+
+        # 'sampled' is absent on a failure rather than empty: an empty block
+        # reads as "the model returned nothing", which is a different event
+        # from never having gotten a usable reply at all.
+        if attempt["ok"]:
+            record["sampled"] = {
+                "paths": [
+                    {
+                        "path_id": path["path_id"],
+                        "description": path.get("description", ""),
+                        "steps": [
+                            {
+                                "technique_id": step["technique_id"],
+                                "technique_name": step.get("technique_name", ""),
+                                "tactic": step.get("tactic", ""),
+                                "component_id": step.get("component_id", ""),
+                                "evidence": step.get("evidence", ""),
+                                "rationale": step.get("rationale", ""),
+                                "uncovered_mitigations": step.get(
+                                    "uncovered_mitigations", []
+                                ),
+                            }
+                            for step in path["steps"]
+                        ],
+                    }
+                    for path in attempt["attack_graph"]["paths"]
+                ],
+                "rejections": attempt["validated"]["rejections"],
+                "warnings": attempt["validated"]["warnings"],
+                "raw_response_path": record["run"].get("raw_response_file"),
+            }
+        return record
+
+    @staticmethod
+    def _write_run_record(
+        record: dict[str, Any], raw_text: str | None, context: Any
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Write and register the record, and the raw reply beside it.
+
+        Returns ``(artifacts, error)``.  A write failure never raises — losing
+        the record must not also lose the projection it describes.
+        """
+        workspace = Path(os.environ.get("EVENTMILL_WORKSPACE", "./workspace"))
+        art_dir = workspace / "artifacts"
+        try:
+            art_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            return [], f"could not create artifact directory: {exc}"
+
+        register = getattr(context, "register_artifact", None)
+        written: list[dict[str, Any]] = []
+        errors: list[str] = []
+
+        payloads: list[tuple[str, str, str]] = [
+            (
+                record["run"]["record_file"],
+                json.dumps(record, indent=2, default=str),
+                "json_events",
+            )
+        ]
+        raw_name = record["run"].get("raw_response_file")
+        if raw_name and raw_text:
+            payloads.append((raw_name, raw_text, "text"))
+
+        for filename, body, artifact_type in payloads:
+            path = art_dir / filename
+            try:
+                path.write_text(body, encoding="utf-8")
+            except Exception as exc:
+                errors.append(f"could not write {filename}: {exc}")
+                continue
+
+            metadata = {
+                "kind": "projection_run",
+                "run_id": record["run"]["run_id"],
+                "run_group": record["run"]["run_group"],
+                "run_index": record["run"]["run_index"],
+                "flow_map_sha256": record["run"]["flow_map_sha256"],
+                "status": record["outcome"]["status"],
+            }
+            if callable(register):
+                try:
+                    register(
+                        artifact_type, str(path), "adversary_path_projector",
+                        metadata,
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning("register_artifact failed for %s: %s", path, exc)
+            written.append({
+                "artifact_id": f"art_{path.stem}",
+                "artifact_type": artifact_type,
+                "file_path": str(path),
+            })
+
+        return written, "; ".join(errors) or None
+
+    # -------------------------------------------------------------------
+    # Result assembly
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    def _single_run_result(
+        run_context: dict[str, Any],
+        attempt: dict[str, Any],
+        listed: int,
+        map_warnings: list[dict[str, Any]],
+        artifacts: list[dict[str, Any]],
+        export_errors: list[str],
+    ) -> ToolResult:
+        """The one-run result, unchanged in shape from before export existed."""
+        profile = run_context["profile"]
+        if not attempt["ok"]:
+            return ToolResult(
+                ok=False,
+                error_code=attempt["error_code"],
+                message=attempt["message"],
+                details=attempt["details"],
+                output_artifacts=artifacts or None,
+            )
+
+        attack_graph = attempt["attack_graph"]
+        validated = attempt["validated"]
+        steps = [s for p in attack_graph["paths"] for s in p["steps"]]
+        result = {
+            "action": "project_paths",
+            "actor": profile["label"],
+            "application": run_context["application"],
+            "software_scope": profile["software_scope"],
+            "thinking_level": run_context["thinking_level"],
+            "allowed_technique_count": run_context["allowed_technique_count"],
+            "techniques_offered_to_model": listed,
+            "path_count": len(attack_graph["paths"]),
+            "step_count": len(steps),
+            "evidence_counts": {
+                "documented": sum(1 for s in steps if s["evidence"] == "documented"),
+                "via_software": sum(
+                    1 for s in steps if s["evidence"] == "via_software"
+                ),
+            },
+            "attack_graph": attack_graph,
+            "mitre_mappings": validated["mitre_mappings"],
+            "scenario_seeds": attempt["seeds"],
+            "rejections": validated["rejections"],
+            "warnings": validated["warnings"] + map_warnings,
+            "unreachable_crown_jewels": run_context["unreachable"],
+            "model_used": getattr(attempt.get("response"), "model_used", None),
+        }
+        if attempt.get("record_file"):
+            result["run_record"] = attempt["record_file"]
+            result["run_group"] = run_context["run_group"]
+        if export_errors:
+            result["export_errors"] = export_errors
+        return ToolResult(
+            ok=True, result=result, output_artifacts=artifacts or None
+        )
+
+    @staticmethod
+    def _multi_run_result(
+        run_context: dict[str, Any],
+        outcomes: list[dict[str, Any]],
+        listed: int,
+        artifacts: list[dict[str, Any]],
+        export_errors: list[str],
+    ) -> ToolResult:
+        """The --runs result: one line per run, no graph.
+
+        The point of a loop is the corpus it leaves behind, so the terminal gets
+        a manifest of what was written rather than the last run's paths.
+        """
+        runs = []
+        for index, attempt in enumerate(outcomes, start=1):
+            graph = attempt.get("attack_graph") or {"paths": []}
+            steps = [s for p in graph["paths"] for s in p["steps"]]
+            runs.append({
+                "run_index": index,
+                "status": "ok" if attempt["ok"] else "error",
+                "error_code": attempt["error_code"],
+                "path_count": len(graph["paths"]),
+                "step_count": len(steps),
+                "wall_time_ms": attempt.get("wall_time_ms"),
+                "record": attempt.get("record_file"),
+            })
+
+        succeeded = sum(1 for r in runs if r["status"] == "ok")
+        result = {
+            "action": "project_paths",
+            "actor": run_context["profile"]["label"],
+            "application": run_context["application"],
+            "run_group": run_context["run_group"],
+            "flow_map_sha256": run_context["flow_map_sha256"],
+            "thinking_level": run_context["thinking_level"],
+            "software_scope": run_context["software_scope"],
+            "allowed_technique_count": run_context["allowed_technique_count"],
+            "techniques_offered_to_model": listed,
+            "run_count": len(runs),
+            "succeeded": succeeded,
+            "failed": len(runs) - succeeded,
+            "runs": runs,
+        }
+        if export_errors:
+            result["export_errors"] = export_errors
+        # A loop where every run died is a failed experiment, not a successful
+        # one that happens to contain nothing.
+        return ToolResult(
+            ok=succeeded > 0,
+            error_code=None if succeeded else "PROJECTION_REJECTED",
+            message=(
+                None if succeeded
+                else f"All {len(runs)} run(s) failed; see the run records."
+            ),
+            result=result,
             output_artifacts=artifacts or None,
         )
 
@@ -2269,6 +2757,9 @@ class AdversaryPathProjector:
 
     @staticmethod
     def _summarize_projection(data: dict[str, Any]) -> str:
+        if "runs" in data:
+            return AdversaryPathProjector._summarize_runs(data)
+
         graph = data.get("attack_graph", {})
         evidence = data.get("evidence_counts", {})
         rejections = data.get("rejections", [])
@@ -2327,6 +2818,48 @@ class AdversaryPathProjector:
             more = f", +{len(gaps) - 6} more" if len(gaps) > 6 else ""
             lines.append(f"ATT&CK mitigations not declared anywhere: {listed}{more}.")
 
+        return "\n".join(lines)
+
+    @staticmethod
+    def _summarize_runs(data: dict[str, Any]) -> str:
+        """Compress a --runs loop. Stays well inside the 2000-character cap.
+
+        Per-run detail is in the records; what belongs here is whether the
+        experiment produced a comparable corpus and where it is.
+        """
+        runs = data.get("runs", [])
+        paths = [r["path_count"] for r in runs if r["status"] == "ok"]
+        times = [r["wall_time_ms"] for r in runs if r.get("wall_time_ms")]
+        lines = [
+            f"{data.get('actor', '?')} vs {data.get('application', '?')}: "
+            f"{data.get('run_count', 0)} run(s), {data.get('succeeded', 0)} ok, "
+            f"{data.get('failed', 0)} failed. "
+            f"Group '{data.get('run_group', '?')}', "
+            f"thinking_level {data.get('thinking_level', '?')}, "
+            f"map {str(data.get('flow_map_sha256', ''))[:12]}."
+        ]
+        if paths:
+            lines.append(
+                f"Paths per successful run: min {min(paths)}, max {max(paths)}."
+            )
+        if times:
+            lines.append(f"Wall time {min(times)}-{max(times)}ms.")
+
+        failures: dict[str, int] = {}
+        for run in runs:
+            if run["status"] != "ok":
+                code = run.get("error_code") or "UNKNOWN"
+                failures[code] = failures.get(code, 0) + 1
+        if failures:
+            lines.append(
+                "Failures: "
+                + ", ".join(f"{c} x{n}" for c, n in sorted(failures.items()))
+                + "."
+            )
+        lines.append(
+            "Records written per run; compare them directly. Placement is "
+            "modelled, not observed."
+        )
         return "\n".join(lines)
 
     @staticmethod

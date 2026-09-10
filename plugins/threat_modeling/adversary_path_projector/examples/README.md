@@ -304,11 +304,82 @@ print('valid')
 "
 ```
 
+---
+
+# Recording runs
+
+Projection is sampled, not deterministic — the same map and the same actor do
+not produce the same paths twice. `--export` leaves a provenance record per run
+so runs can be compared long after the terminal output is gone.
+
+```
+eventmill> run adversary_path_projector --action project_paths \
+             --threat_actor "APT29" \
+             --file_path plugins/threat_modeling/adversary_path_projector/examples/telemetry_saas_flow_map.json \
+             --max_paths 2 --export --run_group apt29-telemetry --runs 10
+```
+
+| Flag | Effect |
+|---|---|
+| `--export` | Write a run record as a registered artifact. Off by default. |
+| `--run_group` | Label tying a comparison set together. Free text; defaults to `ungrouped`. |
+| `--runs` | Repeat the projection 1–25 times. Each run is its own LLM call and its own record. Implies `--export`. |
+
+Records land in `$EVENTMILL_WORKSPACE/artifacts/` as
+`adversary_projection_run_<stamp>_<id>.json`, alongside
+`adversary_projection_raw_<stamp>_<id>.txt` holding the unparsed reply. Nothing
+is ever overwritten. In a `--runs` loop the attack graph and scenario seed are
+written once, for the first successful run; every run still gets its own record.
+
+A run that fails is recorded too, with no `sampled` block. That is deliberate —
+a map that reliably hits the gateway deadline at a given reasoning depth is a
+finding about the map, and it vanishes if only successes are kept. Inside a loop
+a dead run does not stop the ones after it.
+
+## What a record holds
+
+Five blocks. The split between `deterministic` and `sampled` is the whole point:
+
+- **`run`** — ids, timestamps, `flow_map_sha256`, and the resolved actor. The
+  hash is computed over the map **as supplied**, with sorted keys and no
+  insignificant whitespace, so reformatting does not change it but a content
+  change does. Two records sharing it were run against the same estate; nothing
+  else in the record can prove that.
+- **`model`** — provider, tier, and the **resolved** `thinking_level` — what
+  actually ran, which is not always what was asked for.
+- **`deterministic`** — entry ranking, routes, unreachable crown jewels,
+  validation warnings. Fixed by the flow map hash. If two records share a hash
+  and differ here, something is wrong with the tool, not the model.
+- **`sampled`** — the model's paths and nothing else. `technique_id` is a
+  first-class field, so a one-off is something you spot by scanning a column.
+- **`outcome`** — status, the provider's verbatim stop reason, token usage
+  including thinking tokens, and wall time.
+
+Comparison is by eye for now: open two records from the same `run_group` and
+read the `sampled` blocks against each other. When they disagree, the raw reply
+beside each record is what shows why.
+
+**One limitation worth knowing.** `model.model_configured` is the id the client
+was configured with, not the id the API response reports — the framework does
+not currently carry the latter. A silent provider-side model bump would not show
+up in these records. Read that field as "what we asked for", never as "what ran".
+
+## Sensitivity
+
+A run record contains your estate's topology, its trust boundaries, and the
+implementation status of every control — including the ones that are missing.
+The retained raw reply adds a model's reasoning about how to exploit them.
+
+Treat a corpus of records as you would the flow maps themselves. They are
+written with default filesystem permissions and no encryption; if that is not
+appropriate for your estate, keep `EVENTMILL_WORKSPACE` somewhere that is.
+
 ## Reference
 
 | What | Where |
 |---|---|
 | Full schema, every field and enum | `../schemas/flow_map.schema.json` |
+| Run record schema | `../schemas/projection_run.schema.json` |
 | Design and the three projection phases | `../../../../docs/specs/adversary_path_projector.md` |
 | Plugin contract | `../../../../docs/specs/tool_plugin_spec.md` |
 | Control vocabulary this borrows | `threat_model_analyzer`'s `SecurityControl` |
