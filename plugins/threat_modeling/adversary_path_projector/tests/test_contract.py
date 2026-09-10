@@ -1,4 +1,4 @@
-"""Contract compliance tests for adversary_path_projector (Phase 1)."""
+"""Contract compliance tests for adversary_path_projector."""
 
 import importlib.util
 import json
@@ -160,10 +160,16 @@ class TestManifest:
     def test_model_tier_is_known_to_the_framework(self, manifest):
         assert manifest["model_tier"] in ("light", "heavy", "none")
 
-    def test_phase_1_declares_no_llm(self, manifest):
-        """Phase 1 is deterministic; the manifest must not claim otherwise."""
-        assert manifest["requires_llm"] is False
-        assert manifest["model_tier"] == "none"
+    def test_manifest_matches_the_llm_it_actually_uses(self, manifest):
+        """project_paths is a heavy-tier call, and the manifest must say so.
+
+        The tier drives what TierScopedLLMClient hands the plugin, so a
+        mismatch here silently downgrades the projection to the light model.
+        """
+        assert manifest["requires_llm"] is True
+        assert manifest["model_tier"] == "heavy"
+        assert manifest["safe_for_auto_invoke"] is False
+        assert manifest["timeout_class"] == "long"
 
     def test_input_schema_actions_match_implementation(self, manifest):
         with open(PLUGIN_DIR / manifest["input_schema"]) as f:
@@ -215,7 +221,7 @@ class TestProtocol:
 
     def test_planned_action_says_so(self, plugin_instance):
         """A planned action must not read as a typo."""
-        result = plugin_instance.validate_inputs({"action": "project_paths"})
+        result = plugin_instance.validate_inputs({"action": "normalize_flow_map"})
         assert not result.ok
         assert "not implemented yet" in result.errors[0]
 
@@ -919,3 +925,381 @@ class TestSummarize:
         summary = plugin_instance.summarize_for_llm(result)
         assert "INVALID" in summary
         assert "DANGLING_FLOW_ENDPOINT" in summary
+
+
+# ---------------------------------------------------------------------------
+# project_paths — Phase B/C
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _Resp:
+    ok: bool = True
+    text: str | None = None
+    error: str | None = None
+    token_usage: dict | None = None
+    model_used: str | None = "mock-heavy"
+    transport_path: str | None = None
+    fallback_reason: str | None = None
+    finish_reason: str | None = "STOP"
+    truncated: bool = False
+
+
+class _ScriptedLLM:
+    """Answers query_text with a canned reply and records the prompt."""
+
+    def __init__(self, reply: Any = None, **resp_kwargs):
+        self.prompts: list[str] = []
+        self.hints: list[Any] = []
+        self._reply = reply
+        self._resp_kwargs = resp_kwargs
+
+    def query_text(self, prompt, system_context=None, max_tokens=4096,
+                   grounding_data=None, hints=None):
+        self.prompts.append(prompt)
+        self.hints.append(hints)
+        if self._resp_kwargs.get("ok") is False:
+            return _Resp(ok=False, error=self._resp_kwargs.get("error", "boom"))
+        text = (
+            self._reply if isinstance(self._reply, str)
+            else json.dumps(self._reply)
+        )
+        kwargs = {k: v for k, v in self._resp_kwargs.items() if k != "error"}
+        return _Resp(text=text, **kwargs)
+
+    def supports_native_document(self, mime_type):
+        return False
+
+
+def _good_projection() -> dict[str, Any]:
+    """A well-formed reply: real APT29 techniques on real sample components."""
+    return {
+        "paths": [{
+            "path_id": "portal-to-db",
+            "description": "Exploit the portal, pivot through the API to the database.",
+            "objective": "Read customer records.",
+            "steps": [
+                {"technique_id": "T1190", "tactic": "Initial Access",
+                 "component_id": "web",
+                 "rationale": "nginx frontend is internet-facing with a partial WAF.",
+                 "leads_to": ["T1078"]},
+                {"technique_id": "T1078", "tactic": "Persistence",
+                 "component_id": "api",
+                 "rationale": "OAuth2 tokens reused to hold access to the API.",
+                 "leads_to": ["T1005"]},
+                {"technique_id": "T1005", "tactic": "Collection",
+                 "component_id": "customer_db",
+                 "rationale": "PII sits in the claims database.",
+                 "leads_to": []},
+            ],
+        }],
+        "convergence_points": [],
+        "branch_points": [],
+    }
+
+
+def _project(plugin, flow_map, reply, **resp_kwargs):
+    llm = _ScriptedLLM(reply, **resp_kwargs)
+    context = FakeContext()
+    context.llm_query = llm
+    result = plugin.execute(
+        {"action": "project_paths", "threat_actor": "APT29", "flow_map": flow_map},
+        context,
+    )
+    return result, llm
+
+
+class TestProjectPathsValidation:
+    def test_project_paths_is_a_real_action_now(self, plugin_instance, sample_flow_map):
+        result = plugin_instance.validate_inputs({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map,
+        })
+        assert result.ok
+
+    def test_requires_actor_and_map(self, plugin_instance, sample_flow_map):
+        assert not plugin_instance.validate_inputs(
+            {"action": "project_paths", "flow_map": sample_flow_map}).ok
+        assert not plugin_instance.validate_inputs(
+            {"action": "project_paths", "threat_actor": "APT29"}).ok
+
+    def test_max_paths_bounds(self, plugin_instance, sample_flow_map):
+        base = {"action": "project_paths", "threat_actor": "APT29",
+                "flow_map": sample_flow_map}
+        assert not plugin_instance.validate_inputs({**base, "max_paths": 0}).ok
+        assert not plugin_instance.validate_inputs({**base, "max_paths": 11}).ok
+        assert plugin_instance.validate_inputs({**base, "max_paths": 1}).ok
+
+    def test_no_llm_is_a_structured_error(self, plugin_instance, sample_flow_map):
+        result = plugin_instance.execute(
+            {"action": "project_paths", "threat_actor": "APT29",
+             "flow_map": sample_flow_map},
+            FakeContext(),
+        )
+        assert not result.ok
+        assert result.error_code == "LLM_UNAVAILABLE"
+        assert "GEMINI_PRO_API_KEY" in result.message
+
+    def test_invalid_flow_map_blocks_before_the_llm(self, plugin_instance,
+                                                   sample_flow_map):
+        """A broken topology must not cost an LLM call."""
+        sample_flow_map["flows"].append({"from": "api", "to": "ghost"})
+        result, llm = _project(plugin_instance, sample_flow_map, _good_projection())
+        assert not result.ok
+        assert result.error_code == "INPUT_VALIDATION_FAILED"
+        assert llm.prompts == []
+
+
+class TestProjectPathsHappyPath:
+    def test_produces_paths(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        assert result.ok, result.message
+        assert result.result["path_count"] == 1
+        assert result.result["step_count"] == 3
+
+    def test_uses_heavy_tier_with_reasoning(self, plugin_instance, sample_flow_map):
+        _, llm = _project(plugin_instance, sample_flow_map, _good_projection())
+        hints = llm.hints[0]
+        assert hints.tier == "heavy"
+        assert hints.needs_reasoning is True
+
+    def test_prompt_carries_the_closed_set_and_the_map(self, plugin_instance,
+                                                       sample_flow_map):
+        _, llm = _project(plugin_instance, sample_flow_map, _good_projection())
+        prompt = llm.prompts[0]
+        assert "T1190" in prompt
+        assert "customer_db" in prompt
+        assert "web -> api -> customer_db" in prompt
+        assert "Defense Evasion" in prompt  # named only to forbid it
+        assert "Stealth" in prompt
+
+    def test_steps_bind_to_components(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        steps = result.result["attack_graph"]["paths"][0]["steps"]
+        assert [s["component_id"] for s in steps] == ["web", "api", "customer_db"]
+        assert steps[0]["asset"] == "Portal frontend"
+
+    def test_evidence_is_derived_not_taken_from_the_model(self, plugin_instance,
+                                                          sample_flow_map):
+        reply = _good_projection()
+        for step in reply["paths"][0]["steps"]:
+            step["evidence"] = "documented"  # model claims; must be ignored
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        for step in result.result["attack_graph"]["paths"][0]["steps"]:
+            assert step["evidence"] in ("documented", "via_software")
+        counts = result.result["evidence_counts"]
+        assert counts["documented"] + counts["via_software"] == 3
+
+    def test_mitigation_gaps_are_computed(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        steps = result.result["attack_graph"]["paths"][0]["steps"]
+        assert any(s["mitigations"] for s in steps)
+        assert any(s["uncovered_mitigations"] for s in steps)
+
+    def test_mitre_mappings_emitted_for_the_visualizer(self, plugin_instance,
+                                                      sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        mappings = result.result["mitre_mappings"]
+        assert {m["technique_id"] for m in mappings} == {"T1190", "T1078", "T1005"}
+        assert all(m["tactic"] and m["technique_name"] for m in mappings)
+
+    def test_graph_renders_in_attack_path_visualizer(self, plugin_instance,
+                                                    sample_flow_map, tmp_path):
+        """The whole point of the artifact shape: it chains with no translation."""
+        viz_dir = PLUGIN_DIR.parent / "attack_path_visualizer"
+        spec = importlib.util.spec_from_file_location(
+            "apv_tool", viz_dir / "tool.py")
+        viz = importlib.util.module_from_spec(spec)
+        sys.modules["apv_tool"] = viz
+        spec.loader.exec_module(viz)
+
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        graph_file = tmp_path / "graph.json"
+        graph_file.write_text(json.dumps({
+            "mitre_mappings": result.result["mitre_mappings"],
+            "attack_graph": result.result["attack_graph"],
+        }), encoding="utf-8")
+
+        ctx = FakeContext(
+            artifacts=[FakeArtifact("art_graph", "json_events", str(graph_file))])
+        rendered = viz.AttackPathVisualizer().execute(
+            {"artifact_id": "art_graph", "format": "mermaid"}, ctx)
+        assert rendered.ok, rendered.message
+        assert "T1190" in rendered.result["visualization"]
+
+
+class TestPhaseCRejection:
+    def test_technique_outside_the_closed_set_is_rejected(self, plugin_instance,
+                                                          sample_flow_map):
+        reply = _good_projection()
+        reply["paths"][0]["steps"][1]["technique_id"] = "T0800"  # ICS, not APT29
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok
+        codes = {r["code"] for r in result.result["rejections"]}
+        assert "TECHNIQUE_NOT_IN_SET" in codes
+        kept = {s["technique_id"]
+                for s in result.result["attack_graph"]["paths"][0]["steps"]}
+        assert "T0800" not in kept
+
+    def test_component_outside_the_map_is_rejected(self, plugin_instance,
+                                                   sample_flow_map):
+        reply = _good_projection()
+        reply["paths"][0]["steps"][1]["component_id"] = "mainframe"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        codes = {r["code"] for r in result.result["rejections"]}
+        assert "COMPONENT_NOT_IN_FLOW_MAP" in codes
+
+    def test_everything_rejected_is_an_error_not_an_empty_success(
+            self, plugin_instance, sample_flow_map):
+        reply = _good_projection()
+        for step in reply["paths"][0]["steps"]:
+            step["technique_id"] = "T0800"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert not result.ok
+        assert result.error_code == "PROJECTION_REJECTED"
+
+    def test_retired_tactic_is_repaired(self, plugin_instance, sample_flow_map):
+        """v19 killed Defense Evasion; a step using it must not carry it through."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"][1]["tactic"] = "Defense Evasion"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok
+        tactics = {s["tactic"]
+                   for s in result.result["attack_graph"]["paths"][0]["steps"]}
+        assert "Defense Evasion" not in tactics
+
+    def test_mismatched_tactic_is_flagged_not_dropped(self, plugin_instance,
+                                                     sample_flow_map):
+        reply = _good_projection()
+        reply["paths"][0]["steps"][0]["tactic"] = "Impact"  # T1190 is not Impact
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok
+        step = result.result["attack_graph"]["paths"][0]["steps"][0]
+        assert step["notes"]
+        assert "TACTIC_CORRECTED" in {
+            w["code"] for w in result.result["warnings"]}
+
+    def test_undeclared_hop_is_flagged(self, plugin_instance, sample_flow_map):
+        reply = _good_projection()
+        reply["paths"][0]["steps"][1]["component_id"] = "customer_db"
+        reply["paths"][0]["steps"][2]["component_id"] = "web"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok
+        assert "HOP_NOT_DECLARED" in {w["code"] for w in result.result["warnings"]}
+
+    def test_non_exposed_entry_is_flagged(self, plugin_instance, sample_flow_map):
+        reply = _good_projection()
+        reply["paths"][0]["steps"][0]["component_id"] = "customer_db"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert "ENTRY_NOT_EXPOSED" in {w["code"] for w in result.result["warnings"]}
+
+    def test_dangling_leads_to_is_dropped(self, plugin_instance, sample_flow_map):
+        reply = _good_projection()
+        reply["paths"][0]["steps"][0]["leads_to"] = ["T1078", "T9999"]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        step = result.result["attack_graph"]["paths"][0]["steps"][0]
+        assert step["leads_to"] == ["T1078"]
+
+    def test_convergence_points_are_filtered_to_kept_steps(self, plugin_instance,
+                                                          sample_flow_map):
+        reply = _good_projection()
+        reply["convergence_points"] = ["T1078", "T9999"]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.result["attack_graph"]["convergence_points"] == ["T1078"]
+
+
+class TestProjectPathsFailureModes:
+    def test_llm_failure(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, None,
+                             ok=False, error="429 RESOURCE_EXHAUSTED")
+        assert not result.ok
+        assert result.error_code == "LLM_QUERY_FAILED"
+        assert "429" in result.message
+
+    def test_truncated_reply_is_refused(self, plugin_instance, sample_flow_map):
+        """A cut-off projection is a path with steps missing; never accept it."""
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection(),
+                             truncated=True, finish_reason="MAX_TOKENS")
+        assert not result.ok
+        assert result.error_code == "LLM_QUERY_FAILED"
+        assert "max_paths" in result.message
+
+    def test_unparseable_reply(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, "not json at all")
+        assert not result.ok
+        assert result.error_code == "LLM_QUERY_FAILED"
+
+    def test_fenced_json_is_accepted(self, plugin_instance, sample_flow_map):
+        fenced = "```json\n" + json.dumps(_good_projection()) + "\n```"
+        result, _ = _project(plugin_instance, sample_flow_map, fenced)
+        assert result.ok
+
+    def test_unknown_actor_before_the_llm(self, plugin_instance, sample_flow_map):
+        llm = _ScriptedLLM(_good_projection())
+        context = FakeContext()
+        context.llm_query = llm
+        result = plugin_instance.execute(
+            {"action": "project_paths", "threat_actor": "Fluffy Kitten Collective",
+             "flow_map": sample_flow_map},
+            context,
+        )
+        assert not result.ok
+        assert result.error_code == "ACTOR_NOT_FOUND"
+        assert llm.prompts == []
+
+
+class TestScenarioSeed:
+    def test_one_scenario_per_path(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        seeds = result.result["scenario_seeds"]
+        assert len(seeds) == result.result["path_count"]
+        assert seeds[0]["source_type"] == "actor_projection"
+
+    def test_events_match_threat_model_analyzer_fields(self, plugin_instance,
+                                                      sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        event = result.result["scenario_seeds"][0]["attack_sequence"][0]
+        for key in ("event_id", "name", "description", "sequence_order",
+                    "target_asset", "attack_technique", "technique_id",
+                    "required_access", "resulting_access",
+                    "blocking_controls", "detecting_controls"):
+            assert key in event, key
+        assert event["sequence_order"] == 1
+
+    def test_controls_match_threat_model_analyzer_fields(self, plugin_instance,
+                                                        sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        control = result.result["scenario_seeds"][0]["security_controls"][0]
+        for key in ("control_id", "name", "control_type", "description",
+                    "implementation_status", "bypass_difficulty",
+                    "bypass_requirements", "detection_capability"):
+            assert key in control, key
+
+    def test_sequence_order_is_contiguous(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        orders = [e["sequence_order"]
+                  for e in result.result["scenario_seeds"][0]["attack_sequence"]]
+        assert orders == list(range(1, len(orders) + 1))
+
+    def test_only_implemented_controls_block(self, plugin_instance, sample_flow_map):
+        """A partial WAF must not appear as a blocking control."""
+        sample_flow_map["components"][0]["controls"][0][
+            "implementation_status"] = "partial"
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        first = result.result["scenario_seeds"][0]["attack_sequence"][0]
+        assert "WAF" not in first["blocking_controls"]
+
+
+class TestProjectionSummary:
+    def test_summary_under_cap_and_honest(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        summary = plugin_instance.summarize_for_llm(result)
+        assert 0 < len(summary) <= 2000
+        assert "modelled, not observed" in summary
+        assert "web:T1190" in summary
+
+    def test_summary_reports_rejections(self, plugin_instance, sample_flow_map):
+        reply = _good_projection()
+        reply["paths"][0]["steps"][1]["technique_id"] = "T0800"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        summary = plugin_instance.summarize_for_llm(result)
+        assert "TECHNIQUE_NOT_IN_SET" in summary

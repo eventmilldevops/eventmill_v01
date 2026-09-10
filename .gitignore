@@ -51,7 +51,11 @@ coverage.xml
 *.pot
 
 # Environments
+# .env holds real API keys for local development and must never be committed.
+# .env.example is the tracked template — keep the negation below it.
 .env
+.env.*
+!.env.example
 .venv
 env/
 venv/

@@ -2,76 +2,138 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "action": { "type": "string" },
-
+    "action": {
+      "type": "string"
+    },
     "actor": {
       "type": "object",
       "description": "Resolved actor identity (profile_actor).",
       "properties": {
-        "query": { "type": "string", "description": "What the analyst typed." },
-        "resolved": { "type": "boolean" },
-        "attck_id": { "type": "string" },
-        "name": { "type": "string" },
-        "entity_type": { "type": "string", "enum": ["group", "campaign", "software"] },
-        "aliases": { "type": "array", "items": { "type": "string" } },
-        "description": { "type": "string" },
+        "query": {
+          "type": "string",
+          "description": "What the analyst typed."
+        },
+        "resolved": {
+          "type": "boolean"
+        },
+        "attck_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "group",
+            "campaign",
+            "software"
+          ]
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
         "software": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "id": { "type": "string" },
-              "name": { "type": "string" },
-              "type": { "type": "string" }
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
             }
           }
         },
-        "attack_version": { "type": "string" }
+        "attack_version": {
+          "type": "string"
+        }
       }
     },
-    "technique_count": { "type": "integer" },
+    "technique_count": {
+      "type": "integer"
+    },
     "software_scope": {
       "type": "string",
-      "enum": ["none", "delivery", "all"],
+      "enum": [
+        "none",
+        "delivery",
+        "all"
+      ],
       "description": "Which software-derived techniques were included."
     },
     "software_source": {
       "type": "string",
       "description": "Where the software block came from. 'attck_lookup' is the local ATT&CK software-to-technique mapping; the block is kept separate from the actor's own techniques so another source can supply it."
     },
-    "software_technique_count": { "type": "integer" },
+    "software_technique_count": {
+      "type": "integer"
+    },
     "software_techniques": {
       "type": "array",
       "description": "Techniques reached only through the actor's associated software — a weaker claim than direct attribution, and disjoint from 'techniques'.",
       "items": {
         "type": "object",
         "properties": {
-          "technique_id": { "type": "string" },
-          "name": { "type": "string" },
-          "tactics": { "type": "array", "items": { "type": "string" } },
+          "technique_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tactics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "band": {
             "type": "string",
-            "enum": ["delivery", "operational"],
+            "enum": [
+              "delivery",
+              "operational"
+            ],
             "description": "'delivery' where the actor's tooling determines the technique (the dropper, loader, implant and its channel); 'operational' where an actor typically uses what is already on the host."
           },
-          "source": { "type": "string" },
+          "source": {
+            "type": "string"
+          },
           "software": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "id": { "type": "string" },
-                "name": { "type": "string" }
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
               }
             }
           },
-          "in_lookup": { "type": "boolean" }
+          "in_lookup": {
+            "type": "boolean"
+          }
         }
       }
     },
     "allowed_technique_ids": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Union of 'techniques' and 'software_techniques' ids. Path projection may not use anything outside this set."
     },
     "techniques": {
@@ -80,17 +142,36 @@
       "items": {
         "type": "object",
         "properties": {
-          "technique_id": { "type": "string" },
-          "name": { "type": "string" },
-          "tactics": { "type": "array", "items": { "type": "string" } },
+          "technique_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tactics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "provenance": {
             "type": "array",
-            "items": { "type": "string", "enum": ["attck_group", "attck_campaign", "attck_software", "intel_report"] },
+            "items": {
+              "type": "string",
+              "enum": [
+                "attck_group",
+                "attck_campaign",
+                "attck_software",
+                "intel_report"
+              ]
+            },
             "description": "Where the claim that this actor uses this technique came from."
           },
           "sources": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Specific ATT&CK ids or artifact ids backing the provenance."
           },
           "in_lookup": {
@@ -106,16 +187,29 @@
       "items": {
         "type": "object",
         "properties": {
-          "tactic": { "type": "string" },
-          "ordinal": { "type": "integer" },
-          "technique_count": { "type": "integer" },
-          "technique_ids": { "type": "array", "items": { "type": "string" } }
+          "tactic": {
+            "type": "string"
+          },
+          "ordinal": {
+            "type": "integer"
+          },
+          "technique_count": {
+            "type": "integer"
+          },
+          "technique_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
     "uncovered_tactics": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Tactics with nothing attributed to the actor directly. Software-derived techniques are not counted, so a tactic listed here may still be represented in 'allowed_technique_ids' when software_scope is 'all'."
     },
     "procedures": {
@@ -124,29 +218,47 @@
       "items": {
         "type": "object",
         "properties": {
-          "technique_id": { "type": "string" },
-          "source": { "type": "string" },
-          "text": { "type": "string" }
+          "technique_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
         }
       }
     },
     "unknown_techniques": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Technique ids in the set that the local lookup does not recognise."
     },
-
-    "application": { "type": "string" },
-    "valid": { "type": "boolean", "description": "False when the flow map has blocking errors (validate_flow_map)." },
+    "application": {
+      "type": "string"
+    },
+    "valid": {
+      "type": "boolean",
+      "description": "False when the flow map has blocking errors (validate_flow_map)."
+    },
     "errors": {
       "type": "array",
       "description": "Problems that make the flow map unusable for projection.",
       "items": {
         "type": "object",
         "properties": {
-          "code": { "type": "string" },
-          "message": { "type": "string" },
-          "location": { "type": "string" }
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          }
         }
       }
     },
@@ -156,20 +268,36 @@
       "items": {
         "type": "object",
         "properties": {
-          "code": { "type": "string" },
-          "message": { "type": "string" },
-          "location": { "type": "string" }
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          }
         }
       }
     },
     "counts": {
       "type": "object",
       "properties": {
-        "components": { "type": "integer" },
-        "zones": { "type": "integer" },
-        "flows": { "type": "integer" },
-        "crown_jewels": { "type": "integer" },
-        "controls": { "type": "integer" }
+        "components": {
+          "type": "integer"
+        },
+        "zones": {
+          "type": "integer"
+        },
+        "flows": {
+          "type": "integer"
+        },
+        "crown_jewels": {
+          "type": "integer"
+        },
+        "controls": {
+          "type": "integer"
+        }
       }
     },
     "entry_surface": {
@@ -178,12 +306,27 @@
       "items": {
         "type": "object",
         "properties": {
-          "component_id": { "type": "string" },
-          "name": { "type": "string" },
-          "score": { "type": "integer" },
-          "exposure": { "type": "string" },
-          "zone": { "type": "string" },
-          "reasons": { "type": "array", "items": { "type": "string" } }
+          "component_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "score": {
+            "type": "integer"
+          },
+          "exposure": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -193,24 +336,258 @@
       "items": {
         "type": "object",
         "properties": {
-          "entry": { "type": "string" },
-          "target": { "type": "string" },
-          "hops": { "type": "integer" },
-          "route": { "type": "array", "items": { "type": "string" } },
-          "boundary_crossings": { "type": "integer" },
-          "unauthenticated_hops": { "type": "integer" }
+          "entry": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "hops": {
+            "type": "integer"
+          },
+          "route": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "boundary_crossings": {
+            "type": "integer"
+          },
+          "unauthenticated_hops": {
+            "type": "integer"
+          }
         }
       }
     },
     "unreachable_crown_jewels": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Crown jewels no entry candidate can reach over the declared flows. Usually means the flow map is incomplete."
     },
     "isolated_components": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Components with no inbound or outbound flow."
+    },
+    "path_count": {
+      "type": "integer"
+    },
+    "step_count": {
+      "type": "integer"
+    },
+    "allowed_technique_count": {
+      "type": "integer",
+      "description": "Size of the closed set the model was constrained to."
+    },
+    "techniques_offered_to_model": {
+      "type": "integer",
+      "description": "How many of them fitted in the prompt (see MAX_TECHNIQUES_IN_PROMPT)."
+    },
+    "evidence_counts": {
+      "type": "object",
+      "properties": {
+        "documented": {
+          "type": "integer"
+        },
+        "via_software": {
+          "type": "integer"
+        }
+      },
+      "description": "Steps by strength of the actor-to-technique claim. Derived from the closed set, never from the model."
+    },
+    "model_used": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attack_graph": {
+      "type": "object",
+      "description": "Attack graph in the shape attack_path_visualizer consumes. Steps carry extra keys (component_id, asset, evidence, rationale, mitigations, uncovered_mitigations, notes) that the renderer ignores.",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path_id": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "objective": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "technique_id": {
+                      "type": "string"
+                    },
+                    "technique_name": {
+                      "type": "string"
+                    },
+                    "tactic": {
+                      "type": "string"
+                    },
+                    "component_id": {
+                      "type": "string"
+                    },
+                    "asset": {
+                      "type": "string"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "enum": [
+                        "documented",
+                        "via_software"
+                      ],
+                      "description": "'documented' = ATT&CK attributes the technique to the actor; 'via_software' = only its tooling implements it. The PLACEMENT is always a model inference either way."
+                    },
+                    "rationale": {
+                      "type": "string"
+                    },
+                    "leads_to": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "mitigations": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "uncovered_mitigations": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "ATT&CK mitigations for this technique that no control on this component declares."
+                    },
+                    "notes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "convergence_points": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "branch_points": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "scenario_seeds": {
+      "type": "array",
+      "description": "One scenario per path, shaped for threat_model_analyzer's SecurityControl and AttackEvent dataclasses. One per path because sequence_order is linear and a projection is a graph.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source_type": {
+            "type": "string"
+          },
+          "threat_actor_profile": {
+            "type": "string"
+          },
+          "attack_objective": {
+            "type": "string"
+          },
+          "target_assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "entry_vectors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "security_controls": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "attack_sequence": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "rejections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "Placements discarded because the technique was outside the closed set or the component outside the flow map."
+    },
+    "mitre_mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "technique_id": {
+            "type": "string"
+          },
+          "technique_name": {
+            "type": "string"
+          },
+          "tactic": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

@@ -18,10 +18,15 @@ See docs/specs/adversary_path_projector.md.
 from __future__ import annotations
 
 import json
+import logging
+import os
+import re
 from collections import deque
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-from framework.plugins.protocol import ToolResult, ValidationResult
+from framework.plugins.protocol import QueryHints, ToolResult, ValidationResult
 from framework.reference_data.mitre_attack import (
     TACTIC_ORDER,
     canonical_tactic,
@@ -30,16 +35,20 @@ from framework.reference_data.mitre_attack import (
     find_software,
     get_mitre_db,
     get_mitre_relationships,
+    mitigations_for_technique,
+    resolve_legacy_tactic,
     tactic_ordinal,
     techniques_for_campaign,
     techniques_for_group,
     techniques_for_software,
 )
 
-ACTIONS = ("profile_actor", "validate_flow_map")
+logger = logging.getLogger("eventmill.plugin.adversary_path_projector")
+
+ACTIONS = ("profile_actor", "validate_flow_map", "project_paths")
 
 # Planned but not yet implemented; named so validate_inputs can say so.
-PLANNED_ACTIONS = ("normalize_flow_map", "project_paths")
+PLANNED_ACTIONS = ("normalize_flow_map",)
 
 SOFTWARE_SCOPES = ("none", "delivery", "all")
 
@@ -851,6 +860,574 @@ def _isolated_components(flow_map: dict[str, Any]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Phase B — projection prompt
+# ---------------------------------------------------------------------------
+
+# Cap on techniques listed in the prompt. Delivery scope keeps a well-documented
+# actor near 110, so this only bites on 'all'. Core-set techniques are kept
+# first, so what gets dropped is the weakest material.
+MAX_TECHNIQUES_IN_PROMPT = 250
+
+PROJECTION_SYSTEM_CONTEXT = (
+    "You are a threat modelling analyst. You map a named adversary's documented "
+    "tradecraft onto a specific application architecture. You never invent "
+    "techniques an adversary is not documented using, and you never invent "
+    "connectivity the architecture does not declare."
+)
+
+PROJECTION_PROMPT = """Project how {actor_label} would move through this application.
+
+You are NOT choosing techniques. The technique set below is closed — it is what
+MITRE ATT&CK documents this actor using. Your job is PLACEMENT: deciding which
+of these techniques lands on which component of this specific architecture, and
+in what order.
+
+HARD RULES — a step breaking any of these is discarded:
+1. `technique_id` MUST be copied exactly from the TECHNIQUE SET below.
+2. `component_id` MUST be copied exactly from the COMPONENTS table below.
+3. `tactic` MUST be one of the ATT&CK v19 tactics listed below, and MUST be a
+   tactic that technique actually carries.
+4. Consecutive steps MUST follow a declared flow, or stay on one component.
+   The REACHABLE ROUTES below are the only connectivity that exists. Do not
+   invent a hop between components with no flow between them.
+5. The first step of a path MUST be on an internet- or partner-exposed
+   component. That is where an external attacker starts.
+
+ATT&CK v19 tactics (use these names exactly):
+{tactic_names}
+
+"Defense Evasion" was retired in v19. Use "Stealth" for hiding, blending in,
+obfuscation or masquerading, and "Defense Impairment" for disabling or
+tampering with security controls. Never output "Defense Evasion".
+
+APPLICATION: {application}
+{application_description}
+
+COMPONENTS:
+{components_table}
+
+REACHABLE ROUTES (entry point to crown jewel, over declared flows):
+{routes_block}
+
+TECHNIQUE SET — the closed set, grouped by tactic:
+{technique_block}
+
+{objective_block}
+Produce {max_paths} attack path(s) at most. Give each a short slug id. Prefer
+few strong paths over many weak ones; if the architecture only supports one
+credible route, return one. For each step, `rationale` must say what about THIS
+component makes THIS technique apply — its technology, its exposure, its
+authentication, its data, or the control that is missing or weak. A rationale
+that would read the same for any application is not useful.
+
+`leads_to` lists the `technique_id` values of the next steps within the same
+path. The final step of a path has an empty `leads_to`.
+
+Respond ONLY with a JSON object in this exact format:
+{{
+  "paths": [
+    {{
+      "path_id": "short-slug",
+      "description": "One sentence describing this path.",
+      "objective": "What the actor achieves at the end of it.",
+      "steps": [
+        {{
+          "technique_id": "T1190",
+          "tactic": "Initial Access",
+          "component_id": "portal",
+          "rationale": "Why this technique on this component.",
+          "leads_to": ["T1059.001"]
+        }}
+      ]
+    }}
+  ],
+  "convergence_points": ["T1059.001"],
+  "branch_points": []
+}}
+"""
+
+
+def _parse_llm_json(response_text: str) -> tuple[dict | None, str]:
+    """Parse an LLM JSON reply, stripping markdown fences.
+
+    Returns ``(parsed, error)``.  No truncation repair: a partial projection is
+    a partial attack path, and silently closing brackets would hand back a
+    graph missing steps with no indication that it is incomplete.  The caller
+    reports the failure instead.
+    """
+    text = (response_text or "").strip()
+    if not text:
+        return None, "empty response"
+
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+        text = text.strip()
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "Projection JSON parse failed at char %d (line %d col %d): %s "
+            "| length=%d last_100=%r",
+            exc.pos, exc.lineno, exc.colno, exc.msg, len(text), text[-100:],
+        )
+        return None, f"invalid JSON at line {exc.lineno} col {exc.colno}: {exc.msg}"
+
+    if not isinstance(parsed, dict):
+        return None, f"expected a JSON object, got {type(parsed).__name__}"
+    return parsed, ""
+
+
+def _format_components(flow_map: dict[str, Any]) -> str:
+    """Compact component table for the prompt."""
+    zones = flow_map["zones"]
+    lines = []
+    for component in flow_map["components"].values():
+        trust = zones.get(component["zone"], {}).get("trust_level", "unzoned")
+        bits = [
+            f"  {component['id']} | {component['name']} | {component['type']}",
+            f"exposure={component['exposure']}",
+            f"zone={component['zone'] or '-'}({trust})",
+        ]
+        if component["authentication"]:
+            bits.append(f"auth={component['authentication']}")
+        if component["technologies"]:
+            bits.append(f"tech={','.join(component['technologies'])}")
+        if component["data_classification"]:
+            bits.append(f"data={component['data_classification']}")
+        if component["controls"]:
+            controls = "; ".join(
+                f"{c['name']}({c['implementation_status']},"
+                f"bypass={c['bypass_difficulty']})"
+                for c in component["controls"]
+            )
+            bits.append(f"controls=[{controls}]")
+        else:
+            bits.append("controls=[none declared]")
+        lines.append(" | ".join(bits))
+
+    if flow_map["crown_jewels"]:
+        lines.append(f"  CROWN JEWELS: {', '.join(flow_map['crown_jewels'])}")
+    return "\n".join(lines)
+
+
+def _format_routes(routes: list[dict[str, Any]], flows: list[dict[str, Any]]) -> str:
+    """Reachable routes plus the raw flow list, so the model can see the graph."""
+    lines = []
+    if routes:
+        for route in routes[:12]:
+            lines.append(
+                f"  {' -> '.join(route['route'])}  "
+                f"({route['hops']} hops, "
+                f"{route['boundary_crossings']} boundary crossing(s), "
+                f"{route['unauthenticated_hops']} unauthenticated hop(s))"
+            )
+    else:
+        lines.append("  (no route from an entry point to a crown jewel)")
+
+    lines.append("  DECLARED FLOWS:")
+    for flow in flows:
+        arrow = "<->" if flow["bidirectional"] else "->"
+        auth = "authenticated" if flow["authenticated"] else "UNAUTHENTICATED"
+        proto = flow["protocol"] or "?"
+        lines.append(f"    {flow['from']} {arrow} {flow['to']} ({proto}, {auth})")
+    return "\n".join(lines)
+
+
+def _format_techniques(
+    techniques: list[dict[str, Any]],
+    software_techniques: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Group the closed set by tactic for the prompt, core techniques first.
+
+    Provenance is shown inline so the model can prefer what the actor is
+    documented doing over what its tooling merely implements.
+    """
+    entries: list[tuple[str, str, str]] = []  # (tactic, technique_id, line)
+
+    def _push(technique: dict[str, Any], label: str) -> None:
+        for raw_tactic in technique["tactics"] or ["Unknown"]:
+            tactic = canonical_tactic(raw_tactic) or raw_tactic
+            entries.append((
+                tactic,
+                technique["technique_id"],
+                f"  {technique['technique_id']}  "
+                f"{technique['name'] or '(unnamed)'}  [{label}]",
+            ))
+
+    kept = 0
+    for technique in techniques:
+        if kept >= MAX_TECHNIQUES_IN_PROMPT:
+            break
+        _push(technique, "documented")
+        kept += 1
+    for technique in software_techniques:
+        if kept >= MAX_TECHNIQUES_IN_PROMPT:
+            break
+        tools = ", ".join(s["name"] or s["id"] for s in technique["software"][:3])
+        _push(technique, f"via {tools}" if tools else "via actor tooling")
+        kept += 1
+
+    by_tactic: dict[str, list[str]] = {}
+    for tactic, _tid, line in entries:
+        by_tactic.setdefault(tactic, []).append(line)
+
+    blocks = []
+    for tactic in sorted(by_tactic, key=lambda t: (tactic_ordinal(t), t)):
+        blocks.append(tactic.upper())
+        blocks.extend(sorted(set(by_tactic[tactic])))
+    return "\n".join(blocks), kept
+
+
+def _build_projection_prompt(
+    actor_label: str,
+    techniques: list[dict[str, Any]],
+    software_techniques: list[dict[str, Any]],
+    flow_map: dict[str, Any],
+    routes: list[dict[str, Any]],
+    objective: str,
+    max_paths: int,
+) -> tuple[str, int]:
+    technique_block, listed = _format_techniques(techniques, software_techniques)
+    objective_block = (
+        f"ANALYST'S STATED CONCERN: {objective}\nWeight paths toward it.\n"
+        if objective else ""
+    )
+    prompt = PROJECTION_PROMPT.format(
+        actor_label=actor_label,
+        tactic_names=", ".join(TACTIC_ORDER),
+        application=flow_map["application"],
+        application_description=flow_map["description"] or "",
+        components_table=_format_components(flow_map),
+        routes_block=_format_routes(routes, flow_map["flows"]),
+        technique_block=technique_block,
+        objective_block=objective_block,
+        max_paths=max_paths,
+    )
+    return prompt, listed
+
+
+# ---------------------------------------------------------------------------
+# Phase C — validate the model's placement against the closed set
+# ---------------------------------------------------------------------------
+
+def _resolve_step_tactic(
+    raw_tactic: str, technique_tactics: list[str]
+) -> tuple[str, str]:
+    """Normalise a step's tactic. Returns ``(tactic, note)``; note is '' if clean.
+
+    A retired name is mapped onto the successor the technique actually carries.
+    A tactic the technique does not carry is kept but flagged, not discarded —
+    the placement may still be sound and the analyst can judge it.
+    """
+    canonical = canonical_tactic(raw_tactic)
+    if canonical is None:
+        resolved = resolve_legacy_tactic(raw_tactic, technique_tactics)
+        if resolved:
+            return resolved, f"retired tactic {raw_tactic!r} mapped to {resolved!r}"
+        return (raw_tactic or "").strip(), f"unrecognised tactic {raw_tactic!r}"
+
+    if technique_tactics and canonical not in technique_tactics:
+        return canonical, (
+            f"technique is not documented under {canonical!r} "
+            f"(carries: {', '.join(technique_tactics)})"
+        )
+    return canonical, ""
+
+
+def _validate_projection(
+    parsed: dict[str, Any],
+    core_ids: set[str],
+    software_ids: set[str],
+    flow_map: dict[str, Any],
+    entry_ids: set[str],
+) -> dict[str, Any]:
+    """Reject placements the closed set and the flow map do not support.
+
+    Technique and component violations are rejections: a technique outside the
+    closed set is exactly what the set exists to prevent, and a component that
+    is not in the map cannot be reasoned about at all. Tactic problems and
+    unsupported hops are warnings recorded on the step — the placement may be
+    right even when the label is not.
+    """
+    database = get_mitre_db()
+    components = flow_map["components"]
+    allowed = core_ids | software_ids
+
+    adjacency, _edges = _build_adjacency(flow_map["flows"])
+
+    rejections: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
+    clean_paths: list[dict[str, Any]] = []
+    mappings: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for path_index, raw_path in enumerate(parsed.get("paths") or []):
+        if not isinstance(raw_path, dict):
+            rejections.append(_issue(
+                "PATH_NOT_OBJECT", "Path is not an object.", f"paths[{path_index}]"
+            ))
+            continue
+
+        path_id = str(raw_path.get("path_id", "") or f"path-{path_index + 1}")
+        steps: list[dict[str, Any]] = []
+        previous_component = ""
+
+        for step_index, raw_step in enumerate(raw_path.get("steps") or []):
+            location = f"{path_id}.steps[{step_index}]"
+            if not isinstance(raw_step, dict):
+                rejections.append(_issue(
+                    "STEP_NOT_OBJECT", "Step is not an object.", location
+                ))
+                continue
+
+            technique_id = str(raw_step.get("technique_id", "") or "").strip()
+            component_id = str(raw_step.get("component_id", "") or "").strip()
+
+            if technique_id not in allowed:
+                rejections.append(_issue(
+                    "TECHNIQUE_NOT_IN_SET",
+                    f"{technique_id or '(missing)'} is not in the actor's "
+                    f"documented technique set.",
+                    location,
+                ))
+                continue
+            if component_id not in components:
+                rejections.append(_issue(
+                    "COMPONENT_NOT_IN_FLOW_MAP",
+                    f"{component_id or '(missing)'} is not a component of this "
+                    f"application.",
+                    location,
+                ))
+                continue
+
+            entry = database.get(technique_id, {})
+            technique_tactics = list(entry.get("tactics", []))
+            tactic, tactic_note = _resolve_step_tactic(
+                str(raw_step.get("tactic", "") or ""), technique_tactics
+            )
+
+            notes: list[str] = []
+            if tactic_note:
+                notes.append(tactic_note)
+                warnings.append(_issue("TACTIC_CORRECTED", tactic_note, location))
+
+            if step_index == 0 and component_id not in entry_ids:
+                note = (
+                    f"path starts on '{component_id}', which is not "
+                    f"externally exposed"
+                )
+                notes.append(note)
+                warnings.append(_issue("ENTRY_NOT_EXPOSED", note, location))
+
+            if (
+                previous_component
+                and component_id != previous_component
+                and component_id not in adjacency.get(previous_component, [])
+            ):
+                note = (
+                    f"no declared flow from '{previous_component}' to "
+                    f"'{component_id}'"
+                )
+                notes.append(note)
+                warnings.append(_issue("HOP_NOT_DECLARED", note, location))
+
+            # Evidence is derived, never taken from the model — it cannot be
+            # trusted to label the strength of its own source.
+            evidence = "documented" if technique_id in core_ids else "via_software"
+
+            mitigations = mitigations_for_technique(technique_id)
+            declared = {
+                c["mitre_mitigation_id"]
+                for c in components[component_id]["controls"]
+                if c["mitre_mitigation_id"]
+            }
+
+            steps.append({
+                "technique_id": technique_id,
+                "technique_name": entry.get("name", ""),
+                "tactic": tactic,
+                "component_id": component_id,
+                "asset": components[component_id]["name"],
+                "evidence": evidence,
+                "rationale": str(raw_step.get("rationale", "") or ""),
+                "leads_to": [
+                    str(t).strip() for t in (raw_step.get("leads_to") or [])
+                    if str(t).strip()
+                ],
+                "mitigations": mitigations,
+                "uncovered_mitigations": [
+                    m for m in mitigations if m not in declared
+                ],
+                "notes": notes,
+            })
+            previous_component = component_id
+
+            key = (technique_id, tactic)
+            if key not in mappings:
+                mappings[key] = {
+                    "technique_id": technique_id,
+                    "technique_name": entry.get("name", ""),
+                    "tactic": tactic,
+                    "confidence": "high" if evidence == "documented" else "medium",
+                }
+
+        if not steps:
+            rejections.append(_issue(
+                "PATH_EMPTY",
+                f"Path '{path_id}' had no step survive validation.",
+                f"paths[{path_index}]",
+            ))
+            continue
+
+        # Drop leads_to targets that are not techniques in this path.
+        present = {s["technique_id"] for s in steps}
+        for step in steps:
+            dropped = [t for t in step["leads_to"] if t not in present]
+            if dropped:
+                warnings.append(_issue(
+                    "DANGLING_LEADS_TO",
+                    f"Dropped leads_to target(s) not in path '{path_id}': "
+                    f"{', '.join(dropped)}.",
+                    path_id,
+                ))
+            step["leads_to"] = [t for t in step["leads_to"] if t in present]
+
+        clean_paths.append({
+            "path_id": path_id,
+            "description": str(raw_path.get("description", "") or ""),
+            "objective": str(raw_path.get("objective", "") or ""),
+            "steps": steps,
+        })
+
+    kept_ids = {s["technique_id"] for p in clean_paths for s in p["steps"]}
+    return {
+        "attack_graph": {
+            "paths": clean_paths,
+            "convergence_points": [
+                t for t in (parsed.get("convergence_points") or [])
+                if isinstance(t, str) and t in kept_ids
+            ],
+            "branch_points": [
+                t for t in (parsed.get("branch_points") or [])
+                if isinstance(t, str) and t in kept_ids
+            ],
+        },
+        "mitre_mappings": [mappings[k] for k in sorted(mappings)],
+        "rejections": rejections,
+        "warnings": warnings,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Scenario seed — one scenario per path, for threat_model_analyzer
+# ---------------------------------------------------------------------------
+
+# Access level a tactic typically requires and confers. Used to fill
+# AttackEvent.required_access / resulting_access deterministically.
+_ACCESS_BY_TACTIC: dict[str, tuple[str, str]] = {
+    "Reconnaissance": ("none", "none"),
+    "Resource Development": ("none", "none"),
+    "Initial Access": ("none", "user"),
+    "Execution": ("user", "user"),
+    "Persistence": ("user", "user"),
+    "Privilege Escalation": ("user", "admin"),
+    "Credential Access": ("user", "credentials"),
+    "Discovery": ("user", "user"),
+    "Lateral Movement": ("user", "user"),
+    "Collection": ("user", "data"),
+    "Command and Control": ("user", "user"),
+    "Exfiltration": ("data", "data"),
+    "Impact": ("admin", "admin"),
+}
+
+
+def _build_scenario_seeds(
+    actor_label: str,
+    flow_map: dict[str, Any],
+    attack_graph: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """One scenario per path, shaped for threat_model_analyzer's dataclasses.
+
+    AttackEvent.sequence_order is a linear integer and a projection is a graph,
+    so flattening every path into one scenario would misrepresent the branching.
+    One scenario per path keeps each sequence honest.
+    """
+    controls: list[dict[str, Any]] = []
+    control_ids: dict[tuple[str, str], str] = {}
+    for component in flow_map["components"].values():
+        for control in component["controls"]:
+            key = (component["id"], control["name"])
+            control_id = f"SC-{len(controls) + 1:04d}"
+            control_ids[key] = control_id
+            controls.append({
+                "control_id": control_id,
+                "name": control["name"],
+                "control_type": control["control_type"] or "application",
+                "description": (
+                    control["description"]
+                    or f"Protects {component['name']} ({component['id']})."
+                ),
+                "implementation_status": control["implementation_status"],
+                "bypass_difficulty": control["bypass_difficulty"],
+                "bypass_requirements": control["bypass_requirements"],
+                "detection_capability": control["detection_capability"],
+            })
+
+    seeds = []
+    for path in attack_graph["paths"]:
+        events = []
+        for order, step in enumerate(path["steps"], start=1):
+            component = flow_map["components"][step["component_id"]]
+            blocking, detecting = [], []
+            for control in component["controls"]:
+                name = control["name"]
+                if control["implementation_status"] != "implemented":
+                    continue
+                if control["control_type"] in PREVENTIVE_LAYERS:
+                    blocking.append(name)
+                if control["detection_capability"] in ("medium", "high"):
+                    detecting.append(name)
+
+            required, resulting = _ACCESS_BY_TACTIC.get(
+                step["tactic"], ("none", "none")
+            )
+            events.append({
+                "event_id": f"AE-{order:04d}",
+                "name": (
+                    f"{step['technique_name'] or step['technique_id']} "
+                    f"on {component['name']}"
+                ),
+                "description": step["rationale"],
+                "sequence_order": order,
+                "target_asset": component["name"],
+                "attack_technique": step["technique_name"],
+                "technique_id": step["technique_id"],
+                "required_access": required,
+                "resulting_access": resulting,
+                "blocking_controls": blocking,
+                "detecting_controls": detecting,
+            })
+
+        seeds.append({
+            "path_id": path["path_id"],
+            "name": f"{actor_label} vs {flow_map['application']}: {path['path_id']}",
+            "description": path["description"],
+            "source_type": "actor_projection",
+            "threat_actor_profile": actor_label,
+            "attack_objective": path["objective"],
+            "target_assets": sorted({
+                flow_map["components"][s["component_id"]]["name"]
+                for s in path["steps"]
+            }),
+            "entry_vectors": [path["steps"][0]["component_id"]],
+            "security_controls": controls,
+            "attack_sequence": events,
+        })
+    return seeds
+
+
+# ---------------------------------------------------------------------------
 # Tool implementation
 # ---------------------------------------------------------------------------
 
@@ -888,14 +1465,9 @@ class AdversaryPathProjector:
                 f"Invalid action '{action}'. Must be one of: {', '.join(ACTIONS)}."
             )
 
-        if action == "profile_actor":
+        if action in ("profile_actor", "project_paths"):
             if not str(payload.get("threat_actor", "") or "").strip():
-                errors.append("'threat_actor' is required for profile_actor")
-            max_procedures = payload.get("max_procedures", 5)
-            if not isinstance(max_procedures, int) or isinstance(max_procedures, bool):
-                errors.append("'max_procedures' must be an integer")
-            elif not 0 <= max_procedures <= 50:
-                errors.append("'max_procedures' must be between 0 and 50")
+                errors.append(f"'threat_actor' is required for {action}")
 
             scope = payload.get("software_scope", "delivery")
             if scope not in SOFTWARE_SCOPES:
@@ -904,7 +1476,14 @@ class AdversaryPathProjector:
                     f"{', '.join(SOFTWARE_SCOPES)}."
                 )
 
-        if action == "validate_flow_map":
+        if action == "profile_actor":
+            max_procedures = payload.get("max_procedures", 5)
+            if not isinstance(max_procedures, int) or isinstance(max_procedures, bool):
+                errors.append("'max_procedures' must be an integer")
+            elif not 0 <= max_procedures <= 50:
+                errors.append("'max_procedures' must be between 0 and 50")
+
+        if action in ("validate_flow_map", "project_paths"):
             has_inline = isinstance(payload.get("flow_map"), dict)
             has_reference = bool(
                 str(payload.get("flow_map_artifact_id", "") or "").strip()
@@ -912,11 +1491,18 @@ class AdversaryPathProjector:
             )
             if not has_inline and not has_reference:
                 errors.append(
-                    "validate_flow_map needs 'flow_map', 'flow_map_artifact_id' "
-                    "or 'file_path'"
+                    f"{action} needs 'flow_map', 'flow_map_artifact_id' "
+                    f"or 'file_path'"
                 )
             if "flow_map" in payload and not has_inline:
                 errors.append("'flow_map' must be an object")
+
+        if action == "project_paths":
+            max_paths = payload.get("max_paths", 3)
+            if not isinstance(max_paths, int) or isinstance(max_paths, bool):
+                errors.append("'max_paths' must be an integer")
+            elif not 1 <= max_paths <= 10:
+                errors.append("'max_paths' must be between 1 and 10")
 
         if errors:
             return ValidationResult(ok=False, errors=errors)
@@ -929,6 +1515,8 @@ class AdversaryPathProjector:
                 return self._profile_actor(payload, context)
             if action == "validate_flow_map":
                 return self._validate_flow_map(payload, context)
+            if action == "project_paths":
+                return self._project_paths(payload, context)
             return ToolResult(
                 ok=False,
                 error_code="INPUT_VALIDATION_FAILED",
@@ -971,16 +1559,21 @@ class AdversaryPathProjector:
     # Actions
     # -------------------------------------------------------------------
 
-    def _profile_actor(self, payload: dict[str, Any], context: Any) -> ToolResult:
-        """Resolve an actor and build its closed technique set."""
+    def _load_actor_profile(
+        self, payload: dict[str, Any], context: Any
+    ) -> tuple[dict[str, Any] | None, ToolResult | None]:
+        """Resolve the actor and build the closed technique set.
+
+        Shared by profile_actor and project_paths so the set that constrains
+        projection is assembled exactly once, in one place.
+        """
         query = str(payload["threat_actor"]).strip()
         software_scope = str(payload.get("software_scope", "delivery"))
-        max_procedures = payload.get("max_procedures", 5)
         intel_artifact_id = str(payload.get("intel_artifact_id", "") or "").strip()
 
         relationships = get_mitre_relationships()
         if not relationships.get("groups"):
-            return ToolResult(
+            return None, ToolResult(
                 ok=False,
                 error_code="DEPENDENCY_MISSING",
                 message=(
@@ -993,12 +1586,12 @@ class AdversaryPathProjector:
         if intel_artifact_id:
             data, error = self._read_json_artifact(intel_artifact_id, context)
             if error is not None:
-                return error
+                return None, error
             intel_mappings = (data or {}).get("mitre_mappings", []) or []
 
         actor = _resolve_actor(query)
         if actor is None and not intel_mappings:
-            return ToolResult(
+            return None, ToolResult(
                 ok=False,
                 error_code="ACTOR_NOT_FOUND",
                 message=(
@@ -1019,15 +1612,11 @@ class AdversaryPathProjector:
             intel_mappings=intel_mappings,
             intel_source=intel_artifact_id,
         )
-
         record = actor["record"]
         techniques = _enrich_claims(claims)
         software_techniques = _collect_software_techniques(
             actor, software_scope, exclude=set(claims)
         )
-        coverage = _tactic_coverage(techniques)
-        covered = {entry["tactic"] for entry in coverage}
-
         software = [
             {
                 "id": software_id,
@@ -1036,6 +1625,44 @@ class AdversaryPathProjector:
             }
             for software_id in record.get("software", [])
         ]
+        label = record.get("name", "") or query
+        if actor["attck_id"]:
+            label = f"{label} ({actor['attck_id']})"
+
+        return {
+            "query": query,
+            "resolved": resolved,
+            "actor": actor,
+            "record": record,
+            "label": label,
+            "software_scope": software_scope,
+            "techniques": techniques,
+            "software_techniques": software_techniques,
+            "software": software,
+            "relationships": relationships,
+            "claims": claims,
+        }, None
+
+    def _profile_actor(self, payload: dict[str, Any], context: Any) -> ToolResult:
+        """Resolve an actor and build its closed technique set."""
+        profile, error = self._load_actor_profile(payload, context)
+        if error is not None:
+            return error
+        assert profile is not None
+
+        query = profile["query"]
+        resolved = profile["resolved"]
+        actor = profile["actor"]
+        record = profile["record"]
+        software_scope = profile["software_scope"]
+        techniques = profile["techniques"]
+        software_techniques = profile["software_techniques"]
+        software = profile["software"]
+        relationships = profile["relationships"]
+
+        max_procedures = payload.get("max_procedures", 5)
+        coverage = _tactic_coverage(techniques)
+        covered = {entry["tactic"] for entry in coverage}
 
         source_ids = {actor["attck_id"]} | {s["id"] for s in software}
         source_ids.discard("")
@@ -1079,27 +1706,35 @@ class AdversaryPathProjector:
             },
         )
 
+    def _load_flow_map_source(
+        self, payload: dict[str, Any], context: Any
+    ) -> tuple[Any, ToolResult | None]:
+        """Resolve the flow map from an inline object, an artifact, or a file."""
+        raw: Any = payload.get("flow_map")
+        if raw is not None:
+            return raw, None
+
+        artifact_id = str(payload.get("flow_map_artifact_id", "") or "").strip()
+        file_path = str(payload.get("file_path", "") or "").strip()
+        if artifact_id:
+            return self._read_json_artifact(artifact_id, context)
+        if file_path:
+            try:
+                with open(file_path, "r", encoding="utf-8") as handle:
+                    return json.load(handle), None
+            except Exception as exc:
+                return None, ToolResult(
+                    ok=False,
+                    error_code="ARTIFACT_UNREADABLE",
+                    message=f"Failed to read flow map '{file_path}': {exc}",
+                )
+        return None, None
+
     def _validate_flow_map(self, payload: dict[str, Any], context: Any) -> ToolResult:
         """Lint a flow map, rank its entry surface, and compute reachability."""
-        raw: Any = payload.get("flow_map")
-
-        if raw is None:
-            artifact_id = str(payload.get("flow_map_artifact_id", "") or "").strip()
-            file_path = str(payload.get("file_path", "") or "").strip()
-            if artifact_id:
-                raw, error = self._read_json_artifact(artifact_id, context)
-                if error is not None:
-                    return error
-            elif file_path:
-                try:
-                    with open(file_path, "r", encoding="utf-8") as handle:
-                        raw = json.load(handle)
-                except Exception as exc:
-                    return ToolResult(
-                        ok=False,
-                        error_code="ARTIFACT_UNREADABLE",
-                        message=f"Failed to read flow map '{file_path}': {exc}",
-                    )
+        raw, error = self._load_flow_map_source(payload, context)
+        if error is not None:
+            return error
 
         flow_map, errors, warnings = _normalize_flow_map(raw)
 
@@ -1169,6 +1804,245 @@ class AdversaryPathProjector:
             },
         )
 
+    def _project_paths(self, payload: dict[str, Any], context: Any) -> ToolResult:
+        """Bind the actor's closed technique set onto the flow map (Phases A-C)."""
+        max_paths = int(payload.get("max_paths", 3))
+        objective = str(payload.get("objective", "") or "").strip()
+
+        # --- Phase A: the closed set and the topology, both deterministic ---
+        profile, error = self._load_actor_profile(payload, context)
+        if error is not None:
+            return error
+        assert profile is not None
+
+        raw, error = self._load_flow_map_source(payload, context)
+        if error is not None:
+            return error
+
+        flow_map, map_errors, map_warnings = _normalize_flow_map(raw)
+        if map_errors:
+            return ToolResult(
+                ok=False,
+                error_code="INPUT_VALIDATION_FAILED",
+                message=(
+                    f"Flow map has {len(map_errors)} blocking error(s); projection "
+                    f"needs a valid topology. First: "
+                    f"{map_errors[0]['code']} — {map_errors[0]['message']} "
+                    f"Run 'validate_flow_map' for the full list."
+                ),
+                details={"errors": map_errors, "warnings": map_warnings},
+            )
+
+        core_ids = {t["technique_id"] for t in profile["techniques"]}
+        software_ids = {t["technique_id"] for t in profile["software_techniques"]}
+        if not (core_ids | software_ids):
+            return ToolResult(
+                ok=False,
+                error_code="INPUT_VALIDATION_FAILED",
+                message=(
+                    f"No techniques in the closed set for "
+                    f"'{profile['query']}' — nothing to project."
+                ),
+            )
+
+        entry_surface = _entry_surface(flow_map)
+        routes, unreachable = _crown_jewel_routes(flow_map, entry_surface)
+        entry_ids = {
+            e["component_id"] for e in entry_surface
+            if flow_map["components"][e["component_id"]]["exposure"]
+            in _EXTERNAL_EXPOSURES
+        } or {entry_surface[0]["component_id"]}
+
+        # --- Phase B: placement, the only step that needs a model ---
+        if not getattr(context, "llm_query", None):
+            return ToolResult(
+                ok=False,
+                error_code="LLM_UNAVAILABLE",
+                message=(
+                    "project_paths needs an LLM. Set GEMINI_PRO_API_KEY (see "
+                    ".env.example) and run 'connect', or use 'profile_actor' and "
+                    "'validate_flow_map' for the deterministic groundwork."
+                ),
+            )
+
+        prompt, listed = _build_projection_prompt(
+            profile["label"],
+            profile["techniques"],
+            profile["software_techniques"],
+            flow_map,
+            routes,
+            objective,
+            max_paths,
+        )
+
+        response = context.llm_query.query_text(
+            prompt=prompt,
+            system_context=PROJECTION_SYSTEM_CONTEXT,
+            max_tokens=16384,
+            hints=QueryHints(
+                tier="heavy",
+                needs_reasoning=True,
+                needs_structured_output=True,
+            ),
+        )
+        if not response.ok:
+            return ToolResult(
+                ok=False,
+                error_code="LLM_QUERY_FAILED",
+                message=f"Projection query failed: {response.error}",
+            )
+        if getattr(response, "truncated", False):
+            return ToolResult(
+                ok=False,
+                error_code="LLM_QUERY_FAILED",
+                message=(
+                    "Projection reply hit the output-token cap and is incomplete. "
+                    "Lower 'max_paths', or narrow 'software_scope' to shrink the "
+                    "technique set."
+                ),
+            )
+
+        parsed, parse_error = _parse_llm_json(response.text or "")
+        if parsed is None:
+            return ToolResult(
+                ok=False,
+                error_code="LLM_QUERY_FAILED",
+                message=f"Could not parse the projection reply: {parse_error}",
+            )
+
+        # --- Phase C: reject what the closed set and the map do not support ---
+        validated = _validate_projection(
+            parsed, core_ids, software_ids, flow_map, entry_ids
+        )
+        attack_graph = validated["attack_graph"]
+
+        if not attack_graph["paths"]:
+            return ToolResult(
+                ok=False,
+                error_code="PROJECTION_REJECTED",
+                message=(
+                    f"No projected path survived validation "
+                    f"({len(validated['rejections'])} rejection(s)). "
+                    f"The model placed techniques outside the actor's documented "
+                    f"set or components outside the flow map."
+                ),
+                details={"rejections": validated["rejections"]},
+            )
+
+        seeds = _build_scenario_seeds(profile["label"], flow_map, attack_graph)
+        artifacts = self._write_projection_artifacts(
+            profile, flow_map, attack_graph, validated["mitre_mappings"], seeds,
+            context,
+        )
+
+        steps = [s for p in attack_graph["paths"] for s in p["steps"]]
+        return ToolResult(
+            ok=True,
+            result={
+                "action": "project_paths",
+                "actor": profile["label"],
+                "application": flow_map["application"],
+                "software_scope": profile["software_scope"],
+                "allowed_technique_count": len(core_ids | software_ids),
+                "techniques_offered_to_model": listed,
+                "path_count": len(attack_graph["paths"]),
+                "step_count": len(steps),
+                "evidence_counts": {
+                    "documented": sum(
+                        1 for s in steps if s["evidence"] == "documented"
+                    ),
+                    "via_software": sum(
+                        1 for s in steps if s["evidence"] == "via_software"
+                    ),
+                },
+                "attack_graph": attack_graph,
+                "mitre_mappings": validated["mitre_mappings"],
+                "scenario_seeds": seeds,
+                "rejections": validated["rejections"],
+                "warnings": validated["warnings"] + map_warnings,
+                "unreachable_crown_jewels": unreachable,
+                "model_used": getattr(response, "model_used", None),
+            },
+            output_artifacts=artifacts or None,
+        )
+
+    @staticmethod
+    def _write_projection_artifacts(
+        profile: dict[str, Any],
+        flow_map: dict[str, Any],
+        attack_graph: dict[str, Any],
+        mitre_mappings: list[dict[str, Any]],
+        seeds: list[dict[str, Any]],
+        context: Any,
+    ) -> list[dict[str, Any]]:
+        """Write the visualizer graph and the scenario seed as separate files.
+
+        The graph file carries exactly the keys attack_path_visualizer reads,
+        so it chains with no translation; the extra per-step keys it does not
+        read are harmless.
+        """
+        workspace = Path(os.environ.get("EVENTMILL_WORKSPACE", "./workspace"))
+        art_dir = workspace / "artifacts"
+        try:
+            art_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            logger.warning("Could not create artifact directory: %s", exc)
+            return []
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        written: list[dict[str, Any]] = []
+
+        payloads = [
+            (
+                f"adversary_path_graph_{stamp}.json",
+                {
+                    "source_tool": "adversary_path_projector",
+                    "actor": profile["label"],
+                    "application": flow_map["application"],
+                    "mitre_mappings": mitre_mappings,
+                    "attack_graph": attack_graph,
+                },
+            ),
+            (
+                f"adversary_scenario_seed_{stamp}.json",
+                {
+                    "source_tool": "adversary_path_projector",
+                    "actor": profile["label"],
+                    "application": flow_map["application"],
+                    "scenarios": seeds,
+                },
+            ),
+        ]
+
+        for filename, body in payloads:
+            path = art_dir / filename
+            try:
+                path.write_text(
+                    json.dumps(body, indent=2, default=str), encoding="utf-8"
+                )
+            except Exception as exc:
+                logger.warning("Could not write %s: %s", path, exc)
+                continue
+
+            register = getattr(context, "register_artifact", None)
+            if callable(register):
+                try:
+                    register(
+                        "json_events",
+                        str(path),
+                        "adversary_path_projector",
+                        {"kind": filename.split("_2")[0]},
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning("register_artifact failed for %s: %s", path, exc)
+            written.append({
+                "artifact_id": f"art_{path.stem}",
+                "artifact_type": "json_events",
+                "file_path": str(path),
+            })
+        return written
+
     # -------------------------------------------------------------------
     # LLM summary
     # -------------------------------------------------------------------
@@ -1185,6 +2059,8 @@ class AdversaryPathProjector:
             summary = self._summarize_actor(data)
         elif action == "validate_flow_map":
             summary = self._summarize_flow_map(data)
+        elif action == "project_paths":
+            summary = self._summarize_projection(data)
         else:
             summary = f"adversary_path_projector completed action '{action}'."
 
@@ -1245,6 +2121,50 @@ class AdversaryPathProjector:
             "Projection may use only these techniques; anything outside the set "
             "is unsupported by the actor's documented behaviour."
         )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _summarize_projection(data: dict[str, Any]) -> str:
+        graph = data.get("attack_graph", {})
+        evidence = data.get("evidence_counts", {})
+        rejections = data.get("rejections", [])
+
+        lines = [
+            f"{data.get('actor', '?')} vs {data.get('application', '?')}: "
+            f"{data.get('path_count', 0)} path(s), "
+            f"{data.get('step_count', 0)} step(s). "
+            f"{evidence.get('documented', 0)} step(s) use techniques attributed "
+            f"to the actor directly, {evidence.get('via_software', 0)} via its "
+            f"tooling. Placement is modelled, not observed."
+        ]
+
+        for path in graph.get("paths", [])[:3]:
+            hops = " -> ".join(
+                f"{s['component_id']}:{s['technique_id']}" for s in path["steps"]
+            )
+            lines.append(f"  [{path['path_id']}] {hops}")
+        remaining = len(graph.get("paths", [])) - 3
+        if remaining > 0:
+            lines.append(f"  ... {remaining} more path(s).")
+
+        if rejections:
+            codes: dict[str, int] = {}
+            for rejection in rejections:
+                codes[rejection["code"]] = codes.get(rejection["code"], 0) + 1
+            detail = ", ".join(f"{code} x{n}" for code, n in sorted(codes.items()))
+            lines.append(f"Rejected {len(rejections)} placement(s): {detail}.")
+
+        gaps = {
+            m
+            for path in graph.get("paths", [])
+            for step in path["steps"]
+            for m in step.get("uncovered_mitigations", [])
+        }
+        if gaps:
+            listed = ", ".join(sorted(gaps)[:6])
+            more = f", +{len(gaps) - 6} more" if len(gaps) > 6 else ""
+            lines.append(f"ATT&CK mitigations not declared anywhere: {listed}{more}.")
+
         return "\n".join(lines)
 
     @staticmethod

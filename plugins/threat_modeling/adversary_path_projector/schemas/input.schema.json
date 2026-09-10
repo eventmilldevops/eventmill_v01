@@ -4,18 +4,26 @@
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["profile_actor", "validate_flow_map"],
-      "description": "Action to perform. 'normalize_flow_map' and 'project_paths' are planned but not yet implemented."
+      "enum": [
+        "profile_actor",
+        "validate_flow_map",
+        "project_paths"
+      ],
+      "description": "Action to perform. 'normalize_flow_map' is planned but not yet implemented."
     },
     "threat_actor": {
       "type": "string",
-      "description": "Threat actor name, alias or ATT&CK id (profile_actor). Resolved against groups, then campaigns, then software — e.g. 'Cozy Bear', 'G0016', 'APT29'."
+      "description": "Threat actor name, alias or ATT&CK id (profile_actor, project_paths). Resolved against groups, then campaigns, then software — e.g. 'Cozy Bear', 'G0016', 'APT29'."
     },
     "software_scope": {
       "type": "string",
-      "enum": ["none", "delivery", "all"],
+      "enum": [
+        "none",
+        "delivery",
+        "all"
+      ],
       "default": "delivery",
-      "description": "How much of the actor's associated-software technique mapping to return, as a block separate from the actor's own techniques (profile_actor). 'delivery' keeps only techniques whose tactics include resource development, initial access, execution, persistence or command and control — the stages where the actor's own tooling determines the technique. 'all' includes post-compromise techniques too, which are dominated by behaviour any actor would perform with whatever is already on the host. 'none' returns the actor's directly attributed techniques only."
+      "description": "How much of the actor's associated-software technique mapping to return, as a block separate from the actor's own techniques (profile_actor). 'delivery' keeps only techniques whose tactics include resource development, initial access, execution, persistence or command and control — the stages where the actor's own tooling determines the technique. 'all' includes post-compromise techniques too, which are dominated by behaviour any actor would perform with whatever is already on the host. 'none' returns the actor's directly attributed techniques only. Applies to project_paths as well: it decides what the model is allowed to place."
     },
     "intel_artifact_id": {
       "type": "string",
@@ -30,30 +38,117 @@
     },
     "flow_map": {
       "type": "object",
-      "description": "Inline flow map conforming to schemas/flow_map.schema.json (validate_flow_map). Supply this or 'flow_map_artifact_id'."
+      "description": "Inline flow map conforming to schemas/flow_map.schema.json (validate_flow_map, project_paths). Supply this, 'flow_map_artifact_id' or 'file_path'."
     },
     "flow_map_artifact_id": {
       "type": "string",
-      "description": "Id of a json_events artifact holding a flow map (validate_flow_map). Supply this or 'flow_map'."
+      "description": "Id of a json_events artifact holding a flow map (validate_flow_map, project_paths)."
     },
     "file_path": {
       "type": "string",
-      "description": "Path to a JSON flow map file (validate_flow_map). Injected by the shell when 'flow_map_artifact_id' is given."
+      "description": "Path to a JSON flow map file (validate_flow_map, project_paths). Injected by the shell when 'flow_map_artifact_id' is given."
+    },
+    "max_paths": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "default": 3,
+      "description": "Maximum attack paths to project (project_paths). Fewer, stronger paths beat many weak ones; raising this also raises the chance the reply hits the output-token cap."
+    },
+    "objective": {
+      "type": "string",
+      "description": "Optional analyst concern to weight the projection toward, e.g. 'exfiltration of claims data' or 'ransomware detonation' (project_paths)."
     }
   },
-  "required": ["action"],
+  "required": [
+    "action"
+  ],
   "allOf": [
     {
-      "if": { "properties": { "action": { "const": "profile_actor" } }, "required": ["action"] },
-      "then": { "required": ["threat_actor"] }
+      "if": {
+        "properties": {
+          "action": {
+            "const": "profile_actor"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "required": [
+          "threat_actor"
+        ]
+      }
     },
     {
-      "if": { "properties": { "action": { "const": "validate_flow_map" } }, "required": ["action"] },
+      "if": {
+        "properties": {
+          "action": {
+            "const": "validate_flow_map"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
       "then": {
         "anyOf": [
-          { "required": ["flow_map"] },
-          { "required": ["flow_map_artifact_id"] },
-          { "required": ["file_path"] }
+          {
+            "required": [
+              "flow_map"
+            ]
+          },
+          {
+            "required": [
+              "flow_map_artifact_id"
+            ]
+          },
+          {
+            "required": [
+              "file_path"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "project_paths"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "allOf": [
+          {
+            "required": [
+              "threat_actor"
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "flow_map"
+                ]
+              },
+              {
+                "required": [
+                  "flow_map_artifact_id"
+                ]
+              },
+              {
+                "required": [
+                  "file_path"
+                ]
+              }
+            ]
+          }
         ]
       }
     }

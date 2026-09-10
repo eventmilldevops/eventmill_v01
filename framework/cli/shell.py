@@ -3894,14 +3894,30 @@ def main() -> None:
     
     # Cloud Run sets K_SERVICE env var — use JSON logging for Cloud Logging
     is_cloud_run = os.environ.get("K_SERVICE") is not None
-    
+
+    # Local development: read .env from the working directory so API keys do
+    # not have to be exported by hand. Never on Cloud Run, where the same
+    # variables arrive from Secret Manager via --set-secrets and a stray file
+    # must not shadow them. override=False means a variable already in the
+    # environment always wins, on either path.
+    dotenv_path: Path | None = None
+    if not is_cloud_run:
+        from dotenv import find_dotenv, load_dotenv
+
+        found = find_dotenv(usecwd=True)
+        if found and load_dotenv(found, override=False):
+            dotenv_path = Path(found)
+
     setup_logging(
         log_level=log_level,
         log_file=log_file,
         console=True,
         cloud_json=is_cloud_run,
     )
-    
+
+    if dotenv_path is not None:
+        logger.info("Loaded local environment from %s", dotenv_path)
+
     # Gracefully handle SIGHUP (signal 1) — sent by ttyd when a browser
     # tab closes or Cloud Run manages instance lifecycle. Without this,
     # the Python process crashes with "Uncaught signal: 1".

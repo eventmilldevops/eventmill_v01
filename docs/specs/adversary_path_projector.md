@@ -1,8 +1,10 @@
 # Adversary Path Projector
 
-Version: 0.1.0 (design)
+Version: 0.2.0
 Pillar: `threat_modeling`
-Status: proposed — not yet implemented
+Status: Phases 1 and 2 implemented (`profile_actor`, `validate_flow_map`,
+`project_paths`). Phase 3 (threat_model_analyzer handoff) and Phase 4
+(`normalize_flow_map`, README) outstanding.
 
 ---
 
@@ -49,15 +51,21 @@ repaired, using the same vocabulary helpers the ingester uses.
 
 ### Evidence marking
 
-Each step carries `evidence`:
+Each step carries `evidence`, recording how strong the actor-to-technique claim
+is:
 
-- `documented` — ATT&CK records this actor using this technique.
-- `inferred` — the *placement* of that technique on this component is a model
-  inference.
+- `documented` — ATT&CK attributes this technique to this actor directly.
+- `via_software` — only the actor's tooling implements it (see the software
+  block below).
 
-Nothing in the output may read as "this actor attacked this application."
-Actor capability is sourced; placement is explicitly modelled. The distinction
-is carried through to the rendered markdown and the `summarize_for_llm()` text.
+**The placement is a model inference either way.** That is the point of the
+field: capability is sourced, placement never is, and nothing in the output may
+read as "this actor attacked this application." `summarize_for_llm()` says
+"Placement is modelled, not observed" on every projection.
+
+`evidence` is **derived from the closed set, never read from the model's
+reply** — a model cannot be trusted to label the strength of its own source. A
+contract test asserts that an `evidence` key in the reply is ignored.
 
 ### Tactic vocabulary
 
@@ -315,13 +323,15 @@ for LLM-using plugins.
 
 ## Phasing
 
-**Phase 1 — deterministic spine.** Flow map schema and `validate_flow_map`,
+**Phase 1 — deterministic spine. DONE.** Flow map schema and `validate_flow_map`,
 `profile_actor`, `allowed_techniques` assembly with provenance, entry-surface
 ranking, contract tests. No LLM. This is the part Phase B's output gets checked
 against, so it is built and tested first.
 
-**Phase 2 — projection.** Phase B prompt, Phase C validator, both artifacts,
-`summarize_for_llm()` under the 2000-character cap.
+**Phase 2 — projection. DONE.** Phase B prompt, Phase C validator, both
+artifacts, `summarize_for_llm()` under the 2000-character cap. Verified
+against Gemini 3.1 Pro; see
+`docs/change_log/2026-09-09-adversary-path-projector-phase-2.md`.
 
 **Phase 3 — `threat_model_analyzer` handoff.** `export_scenario`,
 `import_scenario`, `source_type` enum, narrowed `analyze_document`.
