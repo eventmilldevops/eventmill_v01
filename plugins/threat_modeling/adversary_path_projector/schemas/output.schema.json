@@ -588,6 +588,10 @@
           }
         }
       }
+    },
+    "thinking_level": {
+      "type": "string",
+      "description": "Reasoning depth the projection call actually used."
     }
   }
 }

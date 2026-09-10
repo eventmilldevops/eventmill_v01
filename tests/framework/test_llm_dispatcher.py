@@ -15,6 +15,7 @@ import pytest
 from framework.llm.backends.base import DocumentPart
 from framework.llm.client import (
     LLMDispatcher,
+    MCPLLMClient,
     TierScopedLLMClient,
     _build_config,
     _finish_reason,
@@ -787,3 +788,46 @@ class TestNativeDocumentCapability:
 
     def test_unknown_mime_type_is_never_native(self, dispatcher):
         assert not dispatcher.supports_native_document("application/zip")
+
+
+class TestTransientErrorClassification:
+    """A gateway timeout is the failure long generations actually hit.
+
+    The marker list originally carried only the camelCase "DeadlineExceeded",
+    which Google never emits, so 503 and 429 retried while 504 was fatal.
+    """
+
+    def _retriable(self, message: str) -> bool:
+        return MCPLLMClient._is_retriable(Exception(message))
+
+    def test_gateway_timeout_retries(self):
+        assert self._retriable(
+            "504 DEADLINE_EXCEEDED. {'error': {'code': 504, 'message': "
+            "'Deadline expired before operation could complete.', "
+            "'status': 'DEADLINE_EXCEEDED'}}"
+        )
+
+    def test_status_code_alone_retries(self):
+        assert self._retriable("504 Gateway Timeout")
+
+    def test_screaming_snake_form_retries(self):
+        assert self._retriable("DEADLINE_EXCEEDED")
+
+    def test_camel_case_form_still_retries(self):
+        assert self._retriable("DeadlineExceeded")
+
+    def test_other_transient_errors_unchanged(self):
+        for message in ("503 UNAVAILABLE", "429 RESOURCE_EXHAUSTED",
+                        "Read timed out", "Timeout"):
+            assert self._retriable(message), message
+
+    def test_permanent_errors_do_not_retry(self):
+        for message in ("400 INVALID_ARGUMENT", "403 PERMISSION_DENIED",
+                        "404 NOT_FOUND"):
+            assert not self._retriable(message), message
+
+    def test_free_tier_quota_never_retries(self):
+        """Quota will not recover inside the backoff window."""
+        assert not self._retriable(
+            "429 RESOURCE_EXHAUSTED free_tier quota exceeded"
+        )

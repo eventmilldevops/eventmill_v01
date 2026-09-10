@@ -52,6 +52,45 @@ PLANNED_ACTIONS = ("normalize_flow_map",)
 
 SOFTWARE_SCOPES = ("none", "delivery", "all")
 
+THINKING_LEVELS = ("minimal", "low", "medium", "high")
+
+# Reasoning depth for the projection call, stated explicitly rather than left to
+# the dispatcher. `needs_reasoning=True` with no level makes client.py resolve
+# to "high", which is the latency that pushes a multi-path run into the
+# provider's gateway deadline. Deep reasoning about how an actor would move
+# through *this* architecture is the entire value over re-summarising ATT&CK, so
+# this is a deliberate floor, not a cost saving — drop it per call only when a
+# large map needs the latency back.
+DEFAULT_THINKING_LEVEL = "medium"
+
+# Operator override for the above, so an environment with more latency headroom
+# than an interactive session can run deeper without a code edit — Cloud Run at
+# "high", a laptop at "medium". Named after the existing tier overrides in
+# framework/llm/providers/__init__.py.
+THINKING_LEVEL_ENV_OVERRIDE = "EVENTMILL_PROJECTION_THINKING"
+
+
+def _default_thinking_level() -> str:
+    """Reasoning depth for a call that does not name one.
+
+    Precedence mirrors the tier rule in CLAUDE.md: per-call payload > env >
+    the constant above. Read at call time rather than import time so a .env
+    loaded after this module is imported still takes effect, and so tests can
+    set it without reloading. An unusable value warns and falls back rather
+    than failing the run — an operator typo should not cost a projection.
+    """
+    value = (os.environ.get(THINKING_LEVEL_ENV_OVERRIDE) or "").strip().lower()
+    if not value:
+        return DEFAULT_THINKING_LEVEL
+    if value in THINKING_LEVELS:
+        return value
+    logger.warning(
+        "Ignoring %s=%r — must be one of: %s. Using %r.",
+        THINKING_LEVEL_ENV_OVERRIDE, value,
+        ", ".join(THINKING_LEVELS), DEFAULT_THINKING_LEVEL,
+    )
+    return DEFAULT_THINKING_LEVEL
+
 # Where the software-derived block came from. ATT&CK's software-to-technique
 # mapping is the only source today; the block is kept separate from the actor's
 # own techniques so a live lookup can replace it without touching the core set.
@@ -1597,6 +1636,13 @@ class AdversaryPathProjector:
             elif not 1 <= max_paths <= 10:
                 errors.append("'max_paths' must be between 1 and 10")
 
+            level = payload.get("thinking_level", _default_thinking_level())
+            if level not in THINKING_LEVELS:
+                errors.append(
+                    f"Invalid thinking_level {level!r}. Must be one of: "
+                    f"{', '.join(THINKING_LEVELS)}."
+                )
+
         if errors:
             return ValidationResult(ok=False, errors=errors)
         return ValidationResult(ok=True)
@@ -1901,6 +1947,9 @@ class AdversaryPathProjector:
         """Bind the actor's closed technique set onto the flow map (Phases A-C)."""
         max_paths = int(payload.get("max_paths", 3))
         objective = str(payload.get("objective", "") or "").strip()
+        thinking_level = str(
+            payload.get("thinking_level") or _default_thinking_level()
+        )
 
         # --- Phase A: the closed set and the topology, both deterministic ---
         profile, error = self._load_actor_profile(payload, context)
@@ -1976,6 +2025,7 @@ class AdversaryPathProjector:
                 tier="heavy",
                 needs_reasoning=True,
                 needs_structured_output=True,
+                thinking_level=thinking_level,
             ),
         )
         if not response.ok:
@@ -2036,6 +2086,7 @@ class AdversaryPathProjector:
                 "actor": profile["label"],
                 "application": flow_map["application"],
                 "software_scope": profile["software_scope"],
+                "thinking_level": thinking_level,
                 "allowed_technique_count": len(core_ids | software_ids),
                 "techniques_offered_to_model": listed,
                 "path_count": len(attack_graph["paths"]),

@@ -58,6 +58,17 @@
     "objective": {
       "type": "string",
       "description": "Optional analyst concern to weight the projection toward, e.g. 'exfiltration of claims data' or 'ransomware detonation' (project_paths)."
+    },
+    "thinking_level": {
+      "type": "string",
+      "enum": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium",
+      "description": "Reasoning depth for the projection call (project_paths). Stated explicitly rather than left to the dispatcher, which resolves an unset level to 'high' whenever needs_reasoning is set. Deep reasoning about how the actor would move through this specific architecture is the value over re-summarising ATT&CK, so lower it only when a large flow map needs the latency back — 'high' pushes a multi-path run toward the provider's gateway deadline. Omit to take EVENTMILL_PROJECTION_THINKING, or the plugin default ('medium') when that is unset. Precedence: this field > env > default."
     }
   },
   "required": [

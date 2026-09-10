@@ -1496,3 +1496,123 @@ class TestKillChainSequence:
         result, _ = _project(plugin_instance, sample_flow_map, reply)
         summary = plugin_instance.summarize_for_llm(result)
         assert "tactic label(s) corrected" in summary
+
+
+class TestThinkingLevel:
+    def test_default_is_medium(self, plugin_instance, sample_flow_map):
+        result, llm = _project(plugin_instance, sample_flow_map,
+                               _good_projection())
+        assert llm.hints[0].thinking_level == "medium"
+        assert result.result["thinking_level"] == "medium"
+
+    def test_default_is_stated_not_left_to_the_dispatcher(self):
+        """An unset level plus needs_reasoning resolves to 'high' in
+        client.py:_build_config. The plugin must state its own floor."""
+        assert _tool_mod.DEFAULT_THINKING_LEVEL in _tool_mod.THINKING_LEVELS
+        assert _tool_mod.DEFAULT_THINKING_LEVEL is not None
+
+    def test_level_is_overridable(self, plugin_instance, sample_flow_map):
+        llm = _ScriptedLLM(_good_projection())
+        context = FakeContext()
+        context.llm_query = llm
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "thinking_level": "low",
+        }, context)
+        assert result.ok
+        assert llm.hints[0].thinking_level == "low"
+        assert result.result["thinking_level"] == "low"
+
+    def test_invalid_level_is_rejected(self, plugin_instance, sample_flow_map):
+        result = plugin_instance.validate_inputs({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "thinking_level": "ludicrous",
+        })
+        assert not result.ok
+        assert "thinking_level" in result.errors[0]
+
+    def test_every_level_validates(self, plugin_instance, sample_flow_map):
+        for level in _tool_mod.THINKING_LEVELS:
+            result = plugin_instance.validate_inputs({
+                "action": "project_paths", "threat_actor": "APT29",
+                "flow_map": sample_flow_map, "thinking_level": level,
+            })
+            assert result.ok, level
+
+    def test_reasoning_flag_still_set(self, plugin_instance, sample_flow_map):
+        """Explicit level must not displace the heavy tier or the reasoning hint."""
+        _, llm = _project(plugin_instance, sample_flow_map, _good_projection())
+        hints = llm.hints[0]
+        assert hints.tier == "heavy"
+        assert hints.needs_reasoning is True
+        assert hints.needs_structured_output is True
+
+
+class TestThinkingLevelEnvOverride:
+    ENV = "EVENTMILL_PROJECTION_THINKING"
+
+    def test_unset_falls_back_to_the_plugin_default(self, monkeypatch):
+        monkeypatch.delenv(self.ENV, raising=False)
+        assert _tool_mod._default_thinking_level() == "medium"
+
+    def test_env_raises_the_default(self, monkeypatch, plugin_instance,
+                                    sample_flow_map):
+        monkeypatch.setenv(self.ENV, "high")
+        result, llm = _project(plugin_instance, sample_flow_map,
+                               _good_projection())
+        assert llm.hints[0].thinking_level == "high"
+        assert result.result["thinking_level"] == "high"
+
+    def test_env_is_case_insensitive(self, monkeypatch):
+        monkeypatch.setenv(self.ENV, "  HIGH  ")
+        assert _tool_mod._default_thinking_level() == "high"
+
+    def test_every_level_is_accepted(self, monkeypatch):
+        for level in _tool_mod.THINKING_LEVELS:
+            monkeypatch.setenv(self.ENV, level)
+            assert _tool_mod._default_thinking_level() == level
+
+    def test_bad_value_warns_and_falls_back(self, monkeypatch, caplog):
+        """An operator typo must not cost a projection."""
+        monkeypatch.setenv(self.ENV, "ludicrous")
+        with caplog.at_level("WARNING"):
+            assert _tool_mod._default_thinking_level() == "medium"
+        assert any(
+            self.ENV in r.getMessage() and "ludicrous" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_empty_value_is_ignored(self, monkeypatch):
+        monkeypatch.setenv(self.ENV, "")
+        assert _tool_mod._default_thinking_level() == "medium"
+
+    def test_per_call_flag_beats_the_env(self, monkeypatch, plugin_instance,
+                                        sample_flow_map):
+        """Precedence: payload > env > default."""
+        monkeypatch.setenv(self.ENV, "high")
+        llm = _ScriptedLLM(_good_projection())
+        context = FakeContext()
+        context.llm_query = llm
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "thinking_level": "low",
+        }, context)
+        assert result.ok
+        assert llm.hints[0].thinking_level == "low"
+
+    def test_env_read_at_call_time_not_import_time(self, monkeypatch):
+        """A .env loaded after import must still apply."""
+        monkeypatch.setenv(self.ENV, "minimal")
+        assert _tool_mod._default_thinking_level() == "minimal"
+        monkeypatch.setenv(self.ENV, "high")
+        assert _tool_mod._default_thinking_level() == "high"
+
+    def test_bad_env_still_validates_inputs(self, monkeypatch, plugin_instance,
+                                            sample_flow_map):
+        """A bad env value must not make every payload fail validation."""
+        monkeypatch.setenv(self.ENV, "ludicrous")
+        result = plugin_instance.validate_inputs({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map,
+        })
+        assert result.ok

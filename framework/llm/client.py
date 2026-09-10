@@ -374,9 +374,14 @@ class MCPLLMClient:
         if MCPLLMClient._is_quota_exhausted(exc):
             return False
         msg = str(exc)
+        # Google emits the screaming-snake form ("504 DEADLINE_EXCEEDED"), never
+        # the camelCase one, so matching only "DeadlineExceeded" made a gateway
+        # timeout fatal while 503 and 429 both retried — the one failure class
+        # long generations actually hit was the one that never backed off.
         return any(marker in msg for marker in (
             "503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED",
-            "DeadlineExceeded", "Timeout", "timed out",
+            "504", "DEADLINE_EXCEEDED", "DeadlineExceeded",
+            "Timeout", "timed out",
         ))
 
     def _execute_mcp_query(
