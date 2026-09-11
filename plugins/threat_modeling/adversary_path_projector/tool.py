@@ -103,9 +103,10 @@ PROJECTION_INTERPRETATION = (
     "assessment. An LLM placed techniques that MITRE ATT&CK documents this "
     "actor using onto the organization's own flow map, reasoning the way an "
     "adversary would. Technique ids, technique names and controls are "
-    "sourced; the route and the step rationales are the model's projection, "
-    "and required/resulting access is typical for each step's tactic, not "
-    "tracked attacker state."
+    "sourced; the route, the step rationales and the access states are the "
+    "model's projection. Each step's access is checked only for continuity — "
+    "that an earlier step produced what the step needs — never for truth. A "
+    "step that states no access falls back to a typical value for its tactic."
 )
 
 
@@ -1085,9 +1086,12 @@ TECHNIQUE SET — the closed set, grouped by tactic:
 {technique_block}
 
 {objective_block}
-Produce {max_paths} attack path(s) at most. Give each a short slug id. Prefer
-few strong paths over many weak ones; if the architecture only supports one
-credible route, return one. For each step, `rationale` must say in one sentence
+Produce up to {max_paths} attack path(s). Give each a short slug id. Cover
+DISTINCT routes: where the REACHABLE ROUTES above reach more than one crown
+jewel, or reach one by a materially different route, give each its own path. A
+second path ending at a different crown jewel is worth more than a longer
+version of the first. Return a single path only if the architecture genuinely
+supports one. For each step, `rationale` must say in one sentence
 what about THIS component makes THIS technique apply — its technology, its
 exposure, its authentication, its data, or the control that is missing or weak.
 A rationale that would read the same for any application is not useful.
@@ -1112,6 +1116,8 @@ STEP STATE — make every step reviewable by someone who will test it:
 - `control_note` (optional): how the step gets past, or around, the controls on
   this component.
 Do not describe flows or list controls; the tool attaches those from the map.
+Every path carries this state for every step. Detail on one path is not a
+reason to return fewer paths than the routes support.
 
 `leads_to` lists the `technique_id` values of the next steps within the same
 path. The final step of a path has an empty `leads_to`.
@@ -1368,6 +1374,23 @@ def _resolve_step_tactic(
             return resolved, f"retired tactic {claimed!r} mapped to {resolved!r}"
 
     if canonical is not None and canonical in technique_tactics:
+        # A label the technique carries is normally right. "Initial Access" past
+        # the first step is the exception: the entry has already happened, so
+        # presenting a stolen credential to an internal component is not initial
+        # access. Two live runs labelled T1078 that way, each earning two
+        # sequence warnings for what is really a wording problem.
+        if (
+            canonical == "Initial Access"
+            and previous_ordinal
+            and len(technique_tactics) > 1
+        ):
+            chosen = _closest_tactic(technique_tactics, previous_ordinal)
+            if chosen != "Initial Access":
+                return chosen, (
+                    f"tactic 'Initial Access' after the first step corrected to "
+                    f"{chosen!r}, which ATT&CK also documents for this technique "
+                    f"— the entry point is earlier in the path"
+                )
         return canonical, ""
 
     if not technique_tactics:
@@ -1559,6 +1582,31 @@ class _HeldState:
         more = f", +{len(parts) - 6} more" if len(parts) > 6 else ""
         return ", ".join(parts[:6]) + more
 
+    def sources_reaching(self, component: str) -> list[str]:
+        """Components with a declared flow to *component* where something is held."""
+        return sorted(
+            source for source in self._scoped
+            if source != component and component in self._adjacency.get(source, [])
+        )
+
+    def describe_for(self, component: str) -> str:
+        """What is held that bears on reaching *component*.
+
+        The full list names reach on every exposed component, which for a gap
+        deep in a path is noise. What a reader needs is what is held here, and
+        what is held on the components with a declared flow to here.
+        """
+        relevant = [component] + self.sources_reaching(component)
+        parts = sorted(s for s in self._portable if s != "none")
+        parts += sorted(
+            f"{state} on {name}"
+            for name in relevant for state in self._scoped.get(name, set())
+        )
+        if not parts:
+            return "nothing that bears on it"
+        more = f", +{len(parts) - 6} more" if len(parts) > 6 else ""
+        return ", ".join(parts[:6]) + more
+
 
 def _step_transition(
     previous: str,
@@ -1653,6 +1701,41 @@ def _describe_transition(transition: dict[str, Any] | None) -> str:
     return (
         f"flow {transition['flow']}: {transition['from']} -> {transition['to']} "
         f"({protocol}{auth})"
+    )
+
+
+def _describe_gap(needed: str, component_id: str, held: _HeldState) -> str:
+    """Why a step's access_before is not held, in terms a reader can act on.
+
+    Three gaps read alike and mean different things. Needing access on a
+    component nothing earlier touches is the skipped bridge the check was built
+    for. Needing it on a component the attacker can only talk to — over a
+    declared flow, holding no control of the component at the other end — is
+    the path leaning on that component to act for the attacker, which is a
+    question to ask rather than a missing step. Needing a stronger foothold
+    somewhere already reached is a missing step again, but a different one.
+    """
+    holdings = held.describe_for(component_id)
+    if needed not in COMPONENT_SCOPED_STATES:
+        return f"needs {needed}; no earlier step yields one. Path holds {holdings}"
+
+    if held.holds("network_reach", component_id):
+        return (
+            f"needs {needed} on {component_id}; the path reaches it but no "
+            f"earlier step takes {needed} there. Path holds {holdings}"
+        )
+
+    talking = held.sources_reaching(component_id)
+    if talking:
+        named = ", ".join(talking[:3])
+        return (
+            f"needs {needed} on {component_id}; the declared flow to it comes "
+            f"from {named}, which no earlier step takes control of, so the path "
+            f"depends on {named} acting for the attacker. Path holds {holdings}"
+        )
+    return (
+        f"needs {needed} on {component_id}; no earlier step reaches it. "
+        f"Path holds {holdings}"
     )
 
 
@@ -1824,14 +1907,9 @@ def _validate_projection(
             elif held.holds(state["access_before"], component_id):
                 state_check, state_note = "ok", ""
             else:
-                scope = (
-                    f" on {component_id}"
-                    if state["access_before"] in COMPONENT_SCOPED_STATES else ""
-                )
                 state_check = "gap"
-                state_note = (
-                    f"needs {state['access_before']}{scope}; path holds "
-                    f"{held.describe()}"
+                state_note = _describe_gap(
+                    state["access_before"], component_id, held
                 )
                 notes.append(f"state gap: {state_note}")
                 warnings.append(_issue("STATE_GAP", state_note, location))

@@ -1,9 +1,11 @@
 # Adversary Path Projector — Step State (Phase 3c)
 
 Status: **Implemented 2026-09-11** as Phase 3c, with the six recommended
-decisions at the end taken as defaults. **Not yet run against a live model** —
-the budget measurement below is still outstanding. See
-`docs/change_log/2026-09-11-projection-step-state.md`.
+decisions at the end taken as defaults. **Run against a live model on
+2026-09-11** — three runs at `medium`, run group `stepstate-medium`; the budget
+measurement is in `docs/change_log/2026-09-11-live-run-findings.md`, which also
+records what the runs changed. See
+`docs/change_log/2026-09-11-projection-step-state.md` for the build itself.
 Parent spec: `docs/specs/adversary_path_projector.md`.
 Proposed order: before Phase 3b (run-group summary).
 
@@ -326,3 +328,23 @@ Taken as the recommended defaults when implementation was requested:
 - **Step state is not counted in `total_issues`.** An assumption is something
   to test, not a defect; a state gap is a question about the projection, not the
   defences. `gap_analysis` reports both separately.
+
+## Refinements after the first live runs (2026-09-11)
+
+- **A gap says which kind it is.** Every one of the first three live runs
+  gapped on the last step, always because the path reached a data store *by way
+  of* a component it never took control of. That is a different finding from a
+  skipped bridge, so `_describe_gap` now distinguishes three cases: a portable
+  credential nothing yields; a component the path reaches but takes no stronger
+  foothold on; and a component whose only declared flow in comes from one the
+  path never controls — *delegated access*, where the path depends on that
+  component acting for the attacker. The held-state list is also scoped to the
+  component in question and the components with a flow to it; naming reach on
+  every exposed component was noise.
+- **The access vocabulary has no state for delegated use.** The model reached
+  for `data_access` or `network_reach` on the API to mean "the API will answer
+  my calls". A state for it was considered and rejected: it would let any
+  credential holder reach every downstream store without a reader noticing, and
+  the assumption the model writes ("the API allows arbitrary document
+  retrieval") is the claim a person should test. The gap is the signal, so it
+  says so plainly instead.

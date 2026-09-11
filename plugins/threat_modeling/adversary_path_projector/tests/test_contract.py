@@ -1416,6 +1416,7 @@ class TestStepState:
         steps = _steps(result)
         assert [s["state_check"] for s in steps] == ["ok", "gap", "ok"]
         assert "needs service_credential" in steps[1]["state_note"]
+        assert "no earlier step yields one" in steps[1]["state_note"]
         gaps = [w for w in result.result["warnings"] if w["code"] == "STATE_GAP"]
         assert len(gaps) == 1  # flagged once, not again downstream
 
@@ -1557,6 +1558,36 @@ class TestStepState:
         assert "portal-to-db.steps[1]" in summary
         assert len(summary) <= 2000
 
+    def test_a_gap_names_delegated_access(self, plugin_instance, sample_flow_map):
+        """Every live run gapped this way: the path can only talk to the next
+        component through one it never takes control of."""
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][0]["access_after"] = "data_access"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        note = _steps(result)[1]["state_note"]
+        assert "needs network_reach on api" in note
+        assert "depends on web acting for the attacker" in note
+        # Only what bears on reaching api, not reach on every exposed component.
+        assert "customer_db" not in note
+
+    def test_a_gap_separates_reach_from_control(self, plugin_instance,
+                                                sample_flow_map):
+        """Reaching a component and holding it are different misses."""
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][2]["access_before"] = "code_execution"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        note = _steps(result)[2]["state_note"]
+        assert "the path reaches it but no earlier step takes code_execution" in note
+
+    def test_prompt_asks_for_distinct_routes(self, plugin_instance,
+                                             sample_flow_map):
+        """Four live runs returned one path against a map with two crown
+        jewels; the prompt has to ask for the distinct routes."""
+        _, llm = _project(plugin_instance, sample_flow_map, _stateful_projection())
+        prompt = llm.prompts[0]
+        assert "DISTINCT routes" in prompt
+        assert "return fewer paths than the routes support" in prompt
+
     def test_prompt_asks_for_step_state(self, plugin_instance, sample_flow_map):
         _, llm = _project(plugin_instance, sample_flow_map, _stateful_projection())
         prompt = llm.prompts[0]
@@ -1612,7 +1643,10 @@ class TestProjectionSummary:
             assert "not confirmed" in body["interpretation"]
             assert "not a likelihood" in body["interpretation"]
             assert "stimate" not in body["interpretation"]
-            assert "not tracked" in body["interpretation"]
+            # Access is the model's own, checked for continuity — saying it is
+            # a per-tactic default contradicts the per-step label.
+            assert "checked only for continuity" in body["interpretation"]
+            assert "never for truth" in body["interpretation"]
 
     def test_summary_says_what_the_gap_list_checked(self, plugin_instance,
                                                     sample_flow_map):
@@ -1736,6 +1770,30 @@ class TestTacticCorrection:
         assert first["tactic"] == "Initial Access"
         assert not first["notes"]
 
+    def test_initial_access_past_the_entry_is_corrected(self, plugin_instance,
+                                                        sample_flow_map):
+        """Two live runs labelled T1078 'Initial Access' mid-path, each earning
+        two sequence warnings for what is a wording problem: the entry already
+        happened, so presenting a stolen token to an internal API is not it."""
+        from framework.reference_data.mitre_attack import get_mitre_db
+        reply = _good_projection()
+        reply["paths"][0]["steps"][1]["tactic"] = "Initial Access"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        step = result.result["attack_graph"]["paths"][0]["steps"][1]
+        assert step["tactic"] != "Initial Access"
+        assert step["tactic"] in get_mitre_db()["T1078"]["tactics"]
+        codes = {w["code"] for w in result.result["warnings"]}
+        assert "TACTIC_CORRECTED" in codes
+        assert "LATE_INITIAL_ACCESS" not in codes
+
+    def test_entry_step_keeps_initial_access(self, plugin_instance,
+                                             sample_flow_map):
+        """The correction applies past the first step only."""
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        first = result.result["attack_graph"]["paths"][0]["steps"][0]
+        assert first["tactic"] == "Initial Access"
+        assert not first["notes"]
+
     def test_closest_tactic_prefers_forward_progress(self):
         pick = _tool_mod._closest_tactic
         # Persistence(5), Privilege Escalation(6), Stealth(7), Initial Access(3)
@@ -1806,11 +1864,14 @@ class TestKillChainSequence:
         assert "LATE_INITIAL_ACCESS" not in codes
 
     def test_late_initial_access_is_flagged(self, plugin_instance, sample_flow_map):
+        """The second step must be a technique ATT&CK gives no other tactic —
+        T1190 — or the label is corrected instead of flagged, which is what
+        happens to T1133 now that it also carries Persistence."""
         reply = _good_projection()
         reply["paths"][0]["steps"] = [
-            {"technique_id": "T1190", "tactic": "Initial Access",
-             "component_id": "web", "rationale": "entry", "leads_to": ["T1133"]},
             {"technique_id": "T1133", "tactic": "Initial Access",
+             "component_id": "web", "rationale": "entry", "leads_to": ["T1190"]},
+            {"technique_id": "T1190", "tactic": "Initial Access",
              "component_id": "api", "rationale": "second entry", "leads_to": []},
         ]
         result, _ = _project(plugin_instance, sample_flow_map, reply)

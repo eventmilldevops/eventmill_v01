@@ -335,10 +335,20 @@ feedback on the map as much as on the estate:
   filtered by the WAF" — is a test to run. The analyzer's report collects these
   under **Assumptions to Test**.
 
-A **`STATE_GAP`** — a step that needs access no earlier step provided — is
-usually the model skipping a bridge, but it can also mean the map omits the
-flow or credential store that would supply it. Check the map before blaming the
-model.
+A **`STATE_GAP`** — a step that needs access no earlier step provided — can
+also mean the map omits the flow or credential store that would supply it, so
+check the map before blaming the model. The note says which of three it is:
+
+- **"no earlier step yields one"** — a credential appears from nowhere. Either
+  the model skipped the step that takes it, or the map does not say where that
+  credential lives.
+- **"the path reaches it but no earlier step takes …"** — connectivity is
+  there and the foothold is not. Usually a skipped bridge step.
+- **"depends on X acting for the attacker"** — the only declared flow in comes
+  from a component the path never takes control of, so the path leans on that
+  component answering the attacker's calls. This is the one to read closely:
+  the step's assumptions say what it is relying on, and whether a token holder
+  really can make X do that is a question for the team that runs X.
 
 ---
 

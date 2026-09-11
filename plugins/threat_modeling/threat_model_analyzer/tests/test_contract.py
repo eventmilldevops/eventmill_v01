@@ -717,6 +717,9 @@ class TestImportScenario:
         assert "*Path summary written by the LLM (projection):*" in md
         assert "*LLM rationale (projection, not verified):*" in md
         assert "**Typical access for this tactic (not tracked step to step):**" in md
+        # No event states its own access here, so the paragraph keeps the
+        # per-tactic wording that matches the step label above.
+        assert "typical values for each step's tactic" in md
         assert "**Preventive Controls Present:** WAF" in md
         assert "Blocking Controls" not in md
         assert "not a likelihood assessment" in md
@@ -808,6 +811,10 @@ class TestStepStateInReport:
         assert "**State check:** ok" in md
         assert "**State check:** gap — needs service_credential" in md
         assert _tool_mod.PROJECTION_NOTICE in md
+        # The model stated these access values, so the paragraph must not call
+        # them per-tactic defaults.
+        assert "checked for continuity between steps but never for truth" in md
+        assert "typical values for each step's tactic" not in md
 
     def test_report_collects_assumptions_to_test(self, plugin_instance, tmp_path):
         scenario_id = self._import_stateful(plugin_instance, tmp_path)

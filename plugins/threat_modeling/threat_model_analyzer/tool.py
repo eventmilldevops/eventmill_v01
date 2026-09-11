@@ -1142,6 +1142,17 @@ class ThreatModelAnalyzer:
         lines.append("")
 
         if projected:
+            # The access line changes with where the values came from, so the
+            # paragraph must not claim they are tactic defaults when the model
+            # stated them and the projector checked the chain.
+            access_clause = (
+                "the access levels are the model's too, checked for continuity "
+                "between steps but never for truth"
+                if any(
+                    e.access_source == "model" for e in scenario.attack_sequence
+                )
+                else "the access levels are typical values for each step's tactic"
+            )
             lines.append(
                 f"**{PROJECTION_NOTICE}** An LLM generated this path the way an "
                 f"adversary would: it reasoned over the techniques MITRE ATT&CK "
@@ -1150,9 +1161,8 @@ class ThreatModelAnalyzer:
                 f"and controls is better than an external attacker's, and an "
                 f"attacker can run the same kind of speculation. Technique ids, "
                 f"technique names and controls are sourced; the route and the step "
-                f"rationales are the model's projection, and the access levels are "
-                f"typical values for each step's tactic. This is not a likelihood "
-                f"assessment."
+                f"rationales are the model's projection, and {access_clause}. This "
+                f"is not a likelihood assessment."
             )
             lines.append("")
 
