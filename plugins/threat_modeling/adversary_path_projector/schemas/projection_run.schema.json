@@ -188,6 +188,23 @@
                       "description": "Derived from which block of the closed set the technique came from, never read from the reply."
                     },
                     "rationale": { "type": "string" },
+                    "precondition": { "type": "string" },
+                    "access_before": { "enum": ["none", "network_reach", "code_execution", "user_credential", "service_credential", "privileged", "data_access", null] },
+                    "exploited_condition": { "type": "string" },
+                    "result": { "type": "string" },
+                    "access_after": { "enum": ["none", "network_reach", "code_execution", "user_credential", "service_credential", "privileged", "data_access", null] },
+                    "assumptions": { "type": "array", "items": { "type": "string" } },
+                    "control_note": { "type": "string" },
+                    "actor_support": {
+                      "type": "string",
+                      "enum": ["procedure_documented", "technique_documented", "via_software", ""],
+                      "description": "Derived from ATT&CK procedure examples, never read from the reply."
+                    },
+                    "state_check": {
+                      "type": "string",
+                      "enum": ["ok", "gap", "unchecked", ""],
+                      "description": "Continuity check result. Schema version 2 onward."
+                    },
                     "uncovered_mitigations": {
                       "type": "array",
                       "items": { "type": "string" }

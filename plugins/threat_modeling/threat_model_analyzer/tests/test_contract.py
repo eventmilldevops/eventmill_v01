@@ -756,6 +756,111 @@ class _PromptCapture:
         return SimpleNamespace(ok=True, text="summary")
 
 
+def _stateful_seed_scenario(path_id: str) -> dict[str, Any]:
+    """_seed_scenario with the step state Phase 3c adds to projected events."""
+    scenario = _seed_scenario(path_id)
+    first, second = scenario["attack_sequence"]
+    first.update({
+        "required_access": "network_reach", "resulting_access": "code_execution",
+        "access_source": "model",
+        "precondition": "The portal is reachable from the internet",
+        "exploited_condition": "nginx fronts an unpatched route",
+        "success_indicators": ["Command execution in the web container"],
+        "assumptions": ["The route is not filtered by the WAF",
+                        "The exploit works on the deployed nginx version"],
+        "transition": "entry point (internet-exposed)",
+        "actor_support": "procedure_documented",
+        "procedure_excerpt": "APT29 has exploited internet-facing servers.",
+        "control_note": "The WAF is only partially deployed",
+        "state_check": "ok",
+    })
+    second.update({
+        "required_access": "service_credential", "resulting_access": "data_access",
+        "access_source": "model",
+        "assumptions": ["A database credential is stored on the web tier"],
+        "transition": "flow f2: api -> customer_db (postgres, authenticated)",
+        "state_check": "gap — needs service_credential; path holds code_execution on web",
+    })
+    return scenario
+
+
+class TestStepStateInReport:
+    def _import_stateful(self, plugin, tmp_path):
+        path = _write_doc(tmp_path, {"scenarios": [_stateful_seed_scenario("p1")]})
+        result = _import(plugin, file_path=path)
+        assert result.ok, result.message
+        return result.result["imported"][0]["scenario_id"]
+
+    def test_report_shows_each_step_state(self, plugin_instance, tmp_path):
+        scenario_id = self._import_stateful(plugin_instance, tmp_path)
+        md = plugin_instance.execute(
+            {"action": "export", "scenario_id": scenario_id}, None).result["markdown"]
+        assert "**Precondition (LLM):** The portal is reachable" in md
+        assert "**Exploits (LLM):** nginx fronts an unpatched route" in md
+        assert "**Via:** entry point (internet-exposed)" in md
+        assert ("**Access (stated by the LLM, checked for continuity):** "
+                "network_reach -> code_execution") in md
+        assert "**Result (LLM):** Command execution in the web container" in md
+        assert "**Against the controls (LLM):** The WAF is only partially" in md
+        assert "**Assumptions to test:**\n  - The route is not filtered by the WAF" in md
+        assert "**ATT&CK support:** procedure_documented — ATT&CK has a procedure" in md
+        assert "**ATT&CK procedure example:** APT29 has exploited" in md
+        assert "**State check:** ok" in md
+        assert "**State check:** gap — needs service_credential" in md
+        assert _tool_mod.PROJECTION_NOTICE in md
+
+    def test_report_collects_assumptions_to_test(self, plugin_instance, tmp_path):
+        scenario_id = self._import_stateful(plugin_instance, tmp_path)
+        md = plugin_instance.execute(
+            {"action": "export", "scenario_id": scenario_id}, None).result["markdown"]
+        section = md.split("## Assumptions to Test", 1)[1].split("## Gap Summary")[0]
+        assert ("1. **Step 1** (T1190 on Portal frontend): "
+                "The route is not filtered by the WAF") in section
+        assert "3. **Step 2** (T1005 on Customer database):" in section
+        assert "- **Assumptions to Test:** 3" in md
+        assert "- **State Gaps:** 1" in md
+
+    def test_gap_analysis_counts_step_state(self, plugin_instance, tmp_path):
+        scenario_id = self._import_stateful(plugin_instance, tmp_path)
+        gap = plugin_instance.execute(
+            {"action": "gap_analysis", "scenario_id": scenario_id}, None)
+        analysis = gap.result["gap_analysis"]
+        assert analysis["assumptions_to_test"] == 3
+        assert [g["sequence_order"] for g in analysis["state_gaps"]] == [2]
+        assert analysis["total_issues"] == 3  # step state is not counted as issues
+        summary = plugin_instance.summarize_for_llm(gap)
+        assert "Step state: 3 assumption(s) to test, 1 state gap(s)." in summary
+
+    def test_step_state_survives_export_and_import(self, plugin_instance, tmp_path):
+        scenario_id = self._import_stateful(plugin_instance, tmp_path)
+        exported = plugin_instance.execute(
+            {"action": "export_scenario", "scenario_id": scenario_id}, None)
+        fresh = _tool_mod.ThreatModelAnalyzer()
+        _import(fresh, file_path=_write_doc(tmp_path, exported.result, "again.json"))
+        again = fresh.execute({"action": "export_scenario"}, None)
+        event = again.result["scenarios"][0]["attack_sequence"][0]
+        assert event["assumptions"] == ["The route is not filtered by the WAF",
+                                        "The exploit works on the deployed nginx version"]
+        assert event["access_source"] == "model"
+        assert event["actor_support"] == "procedure_documented"
+
+    def test_bad_assumptions_are_refused(self, plugin_instance, tmp_path):
+        doc = {"scenarios": [_stateful_seed_scenario("p1")]}
+        doc["scenarios"][0]["attack_sequence"][0]["assumptions"] = "not a list"
+        result = _import(plugin_instance, file_path=_write_doc(tmp_path, doc))
+        assert not result.ok
+        assert any("assumptions" in p for p in result.details["problems"])
+
+    def test_analyst_report_has_no_step_state(self, plugin_instance,
+                                              scenario_with_data):
+        md = plugin_instance.execute(
+            {"action": "export", "scenario_id": scenario_with_data},
+            None).result["markdown"]
+        assert "Assumptions to Test" not in md
+        assert "State check" not in md
+        assert "State Gaps" not in md
+
+
 class TestProjectionWordingIsShared:
     def test_both_plugins_use_one_sentence(self):
         """Readers should meet the identical caveat wherever they look."""

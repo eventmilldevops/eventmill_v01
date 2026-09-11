@@ -479,7 +479,20 @@
                       "items": {
                         "type": "string"
                       }
-                    }
+                    },
+                    "precondition": { "type": "string", "description": "Model: what must already be true." },
+                    "access_before": { "enum": ["none", "network_reach", "code_execution", "user_credential", "service_credential", "privileged", "data_access", null], "description": "Model: what the attacker must hold for this step. Null when omitted or unrecognised." },
+                    "exploited_condition": { "type": "string", "description": "Model: the property of this component the technique relies on." },
+                    "result": { "type": "string", "description": "Model: what the attacker holds afterwards." },
+                    "access_after": { "enum": ["none", "network_reach", "code_execution", "user_credential", "service_credential", "privileged", "data_access", null], "description": "Model: what the attacker holds once the step succeeds." },
+                    "assumptions": { "type": "array", "items": { "type": "string" }, "maxItems": 3, "description": "Model: what must be true that the flow map does not state — the things to test. Not validated." },
+                    "control_note": { "type": "string", "description": "Model, optional: how the step contends with this component's controls." },
+                    "transition": { "type": ["object", "null"], "description": "From the flow map, never the reply: {entry, exposure} on the first step, the declared flow for a hop, null when the step stays on one component or the hop is undeclared." },
+                    "controls_in_play": { "type": "array", "items": { "type": "object" }, "description": "From the flow map: controls on the component and on the arriving flow, with status." },
+                    "actor_support": { "enum": ["procedure_documented", "technique_documented", "via_software"], "description": "Derived from ATT&CK, never the reply. procedure_documented = ATT&CK has a procedure example of this actor using the technique." },
+                    "procedure_excerpt": { "type": "string", "description": "ATT&CK procedure example for this actor (or its tooling) and technique, trimmed; empty when none exists." },
+                    "state_check": { "enum": ["ok", "gap", "unchecked"], "description": "Continuity check: does an earlier step (or the entry point) provide access_before? Proves consistency, not truth." },
+                    "state_note": { "type": "string", "description": "Why a gap or unchecked result." }
                   }
                 }
               }

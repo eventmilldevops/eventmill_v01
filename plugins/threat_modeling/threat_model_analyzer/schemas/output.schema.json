@@ -24,7 +24,9 @@
         "unprotected_events": { "type": "array", "items": { "type": "object" } },
         "weak_controls": { "type": "array", "items": { "type": "object" } },
         "easy_bypass": { "type": "array", "items": { "type": "object" } },
-        "total_issues": { "type": "integer" }
+        "total_issues": { "type": "integer" },
+        "assumptions_to_test": { "type": "integer", "description": "Assumptions carried by projected steps. Not counted in total_issues." },
+        "state_gaps": { "type": "array", "items": { "type": "object" }, "description": "Projected steps whose access_before no earlier step provided. Not counted in total_issues." }
       }
     },
     "markdown": { "type": "string" },

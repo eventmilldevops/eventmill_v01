@@ -90,6 +90,17 @@ EVIDENCE_MEANING = {
     "via_software": "in ATT&CK only the actor's tooling implements this technique",
 }
 
+ACTOR_SUPPORT_MEANING = {
+    "procedure_documented": (
+        "ATT&CK has a procedure example of this actor using this technique"
+    ),
+    "technique_documented": (
+        "ATT&CK attributes the technique to the actor, with no procedure "
+        "example describing how"
+    ),
+    "via_software": "in ATT&CK only the actor's tooling implements this technique",
+}
+
 
 # ---------------------------------------------------------------------------
 # Scenario Data Models
@@ -139,6 +150,18 @@ class AttackEvent:
     # tooling ("via_software").
     tactic: str = ""
     evidence: str = ""
+    # Step state from a projection: what had to be true, what the step relies
+    # on, the assumptions a person can test, and whether the chain of access
+    # is continuous. All optional; analyst-built events leave them empty.
+    precondition: str = ""
+    exploited_condition: str = ""
+    assumptions: list[str] = field(default_factory=list)
+    transition: str = ""
+    actor_support: str = ""
+    procedure_excerpt: str = ""
+    control_note: str = ""
+    state_check: str = ""
+    access_source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -156,6 +179,15 @@ class AttackEvent:
             "blocking_controls": self.blocking_controls,
             "detecting_controls": self.detecting_controls,
             "success_indicators": self.success_indicators,
+            "precondition": self.precondition,
+            "exploited_condition": self.exploited_condition,
+            "assumptions": self.assumptions,
+            "transition": self.transition,
+            "actor_support": self.actor_support,
+            "procedure_excerpt": self.procedure_excerpt,
+            "control_note": self.control_note,
+            "state_check": self.state_check,
+            "access_source": self.access_source,
         }
 
 
@@ -366,7 +398,10 @@ def _scenario_problems(raw: Any, where: str) -> list[str]:
         order = event.get("sequence_order")
         if not isinstance(order, int) or isinstance(order, bool) or order < 1:
             problems.append(f"{at}: 'sequence_order' must be an integer of 1 or more")
-        for key in ("blocking_controls", "detecting_controls", "success_indicators"):
+        for key in (
+            "blocking_controls", "detecting_controls", "success_indicators",
+            "assumptions",
+        ):
             if key in event and not _is_string_list(event[key]):
                 problems.append(f"{at}: '{key}' must be a list of strings")
 
@@ -565,6 +600,13 @@ class ThreatModelAnalyzer:
                 f"{len(gap.get('easy_bypass', []))} easy-bypass control(s). "
                 f"One control can count as both incomplete and easy to bypass."
             )
+            assumptions = gap.get("assumptions_to_test", 0)
+            state_gaps = gap.get("state_gaps", [])
+            if assumptions or state_gaps:
+                summary += (
+                    f" Step state: {assumptions} assumption(s) to test, "
+                    f"{len(state_gaps)} state gap(s)."
+                )
             if data.get("source_type") == "actor_projection":
                 summary += f" {PROJECTION_NOTICE}"
             return summary
@@ -773,6 +815,17 @@ class ThreatModelAnalyzer:
             if c.bypass_difficulty in ("trivial", "low")
         ]
 
+        # Step state from a projection. Kept out of total_issues: an assumption
+        # is something to test, not a defect, and a state gap is a question
+        # about the projection rather than about the defences.
+        assumptions_to_test = sum(len(e.assumptions) for e in scenario.attack_sequence)
+        state_gaps = [
+            {"event_id": e.event_id, "name": e.name,
+             "sequence_order": e.sequence_order, "state_check": e.state_check}
+            for e in scenario.attack_sequence
+            if e.state_check.startswith("gap")
+        ]
+
         weakest = scenario.get_weakest_point()
         coverage = scenario.get_defense_coverage()
 
@@ -795,6 +848,8 @@ class ThreatModelAnalyzer:
                         "name": weakest.name,
                     } if weakest else None,
                     "defense_coverage": coverage,
+                    "assumptions_to_test": assumptions_to_test,
+                    "state_gaps": state_gaps,
                 },
             },
         )
@@ -996,6 +1051,15 @@ class ThreatModelAnalyzer:
                 success_indicators=list(event.get("success_indicators") or []),
                 tactic=str(event.get("tactic", "") or ""),
                 evidence=str(event.get("evidence", "") or ""),
+                precondition=str(event.get("precondition", "") or ""),
+                exploited_condition=str(event.get("exploited_condition", "") or ""),
+                assumptions=list(event.get("assumptions") or []),
+                transition=str(event.get("transition", "") or ""),
+                actor_support=str(event.get("actor_support", "") or ""),
+                procedure_excerpt=str(event.get("procedure_excerpt", "") or ""),
+                control_note=str(event.get("control_note", "") or ""),
+                state_check=str(event.get("state_check", "") or ""),
+                access_source=str(event.get("access_source", "") or ""),
             )
         return scenario
 
@@ -1136,15 +1200,44 @@ class ThreatModelAnalyzer:
                         f"- **Evidence:** {e.evidence} — {meaning}" if meaning
                         else f"- **Evidence:** {e.evidence}"
                     )
+                if e.actor_support:
+                    support = ACTOR_SUPPORT_MEANING.get(e.actor_support)
+                    lines.append(
+                        f"- **ATT&CK support:** {e.actor_support} — {support}" if support
+                        else f"- **ATT&CK support:** {e.actor_support}"
+                    )
+                if e.procedure_excerpt:
+                    lines.append(f"- **ATT&CK procedure example:** {e.procedure_excerpt}")
                 if e.target_asset:
                     lines.append(f"- **Target:** {e.target_asset}")
-                if projected:
+                if e.transition:
+                    lines.append(f"- **Via:** {e.transition}")
+                if e.precondition:
+                    lines.append(f"- **Precondition (LLM):** {e.precondition}")
+                if e.exploited_condition:
+                    lines.append(f"- **Exploits (LLM):** {e.exploited_condition}")
+                if projected and e.access_source == "model":
+                    lines.append(
+                        f"- **Access (stated by the LLM, checked for continuity):** "
+                        f"{e.required_access} -> {e.resulting_access}"
+                    )
+                elif projected:
                     lines.append(
                         f"- **Typical access for this tactic (not tracked step to "
                         f"step):** {e.required_access} -> {e.resulting_access}"
                     )
                 else:
                     lines.append(f"- **Access:** {e.required_access} -> {e.resulting_access}")
+                if projected and e.success_indicators:
+                    lines.append(f"- **Result (LLM):** {'; '.join(e.success_indicators)}")
+                if e.control_note:
+                    lines.append(f"- **Against the controls (LLM):** {e.control_note}")
+                if e.assumptions:
+                    lines.append("- **Assumptions to test:**")
+                    for assumption in e.assumptions:
+                        lines.append(f"  - {assumption}")
+                if e.state_check:
+                    lines.append(f"- **State check:** {e.state_check}")
                 if e.blocking_controls:
                     # "Blocking" read as a claim the control stops the technique.
                     # What was checked is that an implemented preventive control
@@ -1158,6 +1251,27 @@ class ThreatModelAnalyzer:
         else:
             lines.append("*No attack events added yet.*")
 
+        # Assumptions to Test — the scenario's test plan, collected in one place
+        assumption_rows = [
+            (e, assumption)
+            for e in scenario.attack_sequence for assumption in e.assumptions
+        ]
+        if assumption_rows:
+            lines.append("## Assumptions to Test")
+            lines.append("")
+            lines.append(
+                "Each step above depends on these. None has been verified; each is "
+                "something to check against the real system."
+            )
+            lines.append("")
+            for index, (e, assumption) in enumerate(assumption_rows, start=1):
+                label = e.technique_id or e.name
+                where = f" on {e.target_asset}" if e.target_asset else ""
+                lines.append(
+                    f"{index}. **Step {e.sequence_order}** ({label}{where}): {assumption}"
+                )
+            lines.append("")
+
         # Gap Summary
         unprotected = [e for e in scenario.attack_sequence if not e.blocking_controls]
         weak = [c for c in scenario.security_controls if c.implementation_status in ("partial", "planned", "missing")]
@@ -1170,6 +1284,10 @@ class ThreatModelAnalyzer:
             f"- **Steps With No Implemented Preventive Control:** {len(unprotected)}"
         )
         lines.append(f"- **Incomplete Controls:** {len(weak)}")
+        if assumption_rows or any(e.state_check for e in scenario.attack_sequence):
+            gaps = [e for e in scenario.attack_sequence if e.state_check.startswith("gap")]
+            lines.append(f"- **Assumptions to Test:** {len(assumption_rows)}")
+            lines.append(f"- **State Gaps:** {len(gaps)}")
         lines.append("")
 
         return "\n".join(lines)

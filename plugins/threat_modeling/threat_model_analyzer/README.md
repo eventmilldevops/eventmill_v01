@@ -142,10 +142,24 @@ architecture and controls.
 | Controls, `CONTROL_PRESENT`, *Preventive Controls Present* | The organization's flow map |
 | The route from step to step | The model's projection, limited to flows the map declares |
 | *Path summary* and each step's *LLM rationale* | The model's projection, not verified — it can be wrong |
-| *Typical access for this tactic* | A fixed table keyed on the step's tactic — not the attacker's tracked state |
+| *Precondition*, *Exploits*, *Result*, *Against the controls* — all marked *(LLM)* | The model's account of the step — reasoning, not verified |
+| *Assumptions to test* | The model: what must be true that the flow map does not state. Collected again in the **Assumptions to Test** section — the scenario's test plan |
+| *Access (stated by the LLM, checked for continuity)* | The model's access before and after, from a fixed vocabulary, checked against what earlier steps provided |
+| *Typical access for this tactic* | Shown instead when the model gave no access state: a fixed table keyed on the step's tactic, not tracked |
+| *State check* | The tool: `ok`, `gap` (the step needs access no earlier step provided) or `unchecked`. Proves the chain is consistent, not that it is true |
+| *Via* | The flow map: the entry point, or the declared flow the step arrived over |
+| *ATT&CK support*, *ATT&CK procedure example* | ATT&CK: whether it holds a procedure example of this actor using the technique, and its text |
 
-Each step is atomic: one technique on one component. Nothing records how the
-step was carried out beyond the model's rationale.
+Each step is one technique on one component. Projected steps also carry the
+state that connects them: what had to be true, what the attacker held before and
+after, and the assumptions it rests on. Compare the *ATT&CK procedure example*
+with the step itself — where ATT&CK documents the actor exploiting VPN
+appliances and the step places the technique on a web portal, the technique is
+sourced and the setting is the model's adaptation. That difference is often the
+first thing worth testing.
+
+`gap_analysis` reports `assumptions_to_test` and `state_gaps` separately from
+`total_issues`: an assumption is something to check, not a defect.
 
 `gap_analysis` on a projected scenario ends with the same notice, and its
 summary breaks `total_issues` into its parts — it adds steps, incomplete

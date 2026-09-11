@@ -1,6 +1,9 @@
 # Adversary Path Projector — Step State (Phase 3c)
 
-Status: **Proposed — awaiting approval.** Nothing here is implemented.
+Status: **Implemented 2026-09-11** as Phase 3c, with the six recommended
+decisions at the end taken as defaults. **Not yet run against a live model** —
+the budget measurement below is still outstanding. See
+`docs/change_log/2026-09-11-projection-step-state.md`.
 Parent spec: `docs/specs/adversary_path_projector.md`.
 Proposed order: before Phase 3b (run-group summary).
 
@@ -226,7 +229,8 @@ rules; none of it can admit a technique or component the rules would reject.
 |---|---|---|
 | Output per step | ~60–80 tokens | ~200–250 tokens |
 | 3 paths × 7 steps | ~1.5k tokens | ~5k tokens |
-| `max_tokens` on the call | 16,384 | 32,768 (provider cap is 65,536 per `gcp_gemini.json`) |
+| `max_tokens` on the call | 16,384 | 49,152 — 48K (provider cap is 65,536 per `gcp_gemini.json`) |
+| Client request timeout (`client.py`) | 120 s | 180 s — applies to every LLM plugin |
 
 Output is not the latency driver — thinking is — but it adds. Before settling
 defaults: the claims portal and telemetry SaaS maps, `medium`, three runs each,
@@ -287,13 +291,38 @@ the ceiling to watch.
   their absence on analyst-built scenarios.
 - Run-record schema v2 validates; v1 records remain readable.
 
-## Decisions needed
+## Decisions taken
 
-1. **The seven access states** — accept as listed, or adjust?
-2. **Procedure excerpts** — in the output (deterministic, cheap): recommended.
-   In the *prompt* as grounding (~5k more input tokens for a 100-technique set):
-   recommended **not** for v1; revisit after the budget measurement.
-3. **Assumption cap** — three per step.
-4. **`STATE_GAP` as a warning** rather than a rejection.
-5. **The aggregated *Assumptions to Test* section** in the analyzer report.
-6. **Order** — this before Phase 3b.
+Taken as the recommended defaults when implementation was requested:
+
+1. **The seven access states**, as listed.
+2. **Procedure excerpts in the output, not in the prompt** for v1. Revisit
+   prompt grounding after the budget measurement.
+3. **Three assumptions per step**; more are truncated with a warning.
+4. **`STATE_GAP` is a warning**, never a rejection.
+5. **The aggregated *Assumptions to Test* section** is in the analyzer report.
+6. **This lands before Phase 3b.**
+
+## Refinements made during implementation
+
+- **An excerpt only where it matches the label.** A directly attributed
+  technique with no procedure example from the actor — but one from its
+  software — gets `technique_documented` and **no** excerpt. Showing the
+  tooling's procedure beside that label would read as the actor's own
+  behaviour. A `via_software` step shows its tooling's excerpt.
+- **A gap is reported once.** After flagging `STATE_GAP`, the check treats the
+  missing access as held, so one skipped bridge does not flag every later step.
+- **An omitted `access_after` stops the check for the rest of the path.** Later
+  steps are `unchecked`, not `gap` — a gap there could be an artefact of the
+  omission rather than a real break.
+- **Unambiguous synonyms are accepted silently** (`RCE` → `code_execution`,
+  `admin` → `privileged`, `api_token` → `service_credential`, and so on);
+  anything else is `ACCESS_STATE_UNKNOWN` and treated as missing.
+- **`network_reach` is derived** for a component when the attacker holds
+  `code_execution` or `privileged` on a component with a declared flow to it,
+  as designed. The check examines only the stated `access_before`; it does not
+  separately require reach to a component a credential is presented to — the
+  hop check already covers connectivity between consecutive steps.
+- **Step state is not counted in `total_issues`.** An assumption is something
+  to test, not a defect; a state gap is a question about the projection, not the
+  defences. `gap_analysis` reports both separately.

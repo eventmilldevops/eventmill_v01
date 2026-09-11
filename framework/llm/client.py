@@ -193,7 +193,7 @@ class MCPLLMClient:
         try:
             self._genai_client = genai.Client(
                 api_key=resolved_key,
-                http_options={"timeout": 120_000},  # 120 s per request
+                http_options={"timeout": 180_000},  # 180 s per request
             )
             self._connected = True
             logger.info(

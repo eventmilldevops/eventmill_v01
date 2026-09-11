@@ -1362,6 +1362,234 @@ class TestScenarioSeed:
         assert "**Tactic:** Initial Access" in md
 
 
+def _stateful_projection() -> dict[str, Any]:
+    """_good_projection with step state that chains cleanly over the sample map.
+
+    web is internet-exposed, so reach there is held from the start; execution
+    on web gives reach to api over f1, and execution on api reaches the
+    database over f2.
+    """
+    reply = _good_projection()
+    state = [
+        {"precondition": "The portal is reachable from the internet",
+         "access_before": "network_reach",
+         "exploited_condition": "nginx fronts an unpatched application route",
+         "result": "Command execution in the web container",
+         "access_after": "code_execution",
+         "assumptions": ["The exploited route is not filtered by the WAF"]},
+        {"precondition": "The attacker runs code on the web tier",
+         "access_before": "network_reach",
+         "exploited_condition": "The API accepts the web tier's OAuth2 tokens",
+         "result": "Code execution on the API host",
+         "access_after": "code_execution",
+         "assumptions": ["Tokens on the web tier are reusable against the API"]},
+        {"precondition": "The attacker operates from the API host",
+         "access_before": "network_reach",
+         "exploited_condition": "The API's database role can read PII",
+         "result": "Customer records read",
+         "access_after": "data_access",
+         "assumptions": ["The API's database role can read customer tables"]},
+    ]
+    for step, extra in zip(reply["paths"][0]["steps"], state):
+        step.update(extra)
+    return reply
+
+
+def _steps(result) -> list[dict[str, Any]]:
+    return result.result["attack_graph"]["paths"][0]["steps"]
+
+
+class TestStepState:
+    def test_a_continuous_chain_checks_ok(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _stateful_projection())
+        assert result.ok, result.message
+        assert [s["state_check"] for s in _steps(result)] == ["ok", "ok", "ok"]
+        codes = {w["code"] for w in result.result["warnings"]}
+        assert not codes & {"STATE_GAP", "MISSING_STEP_STATE", "ACCESS_STATE_UNKNOWN"}
+
+    def test_a_skipped_bridge_is_a_state_gap(self, plugin_instance, sample_flow_map):
+        """The criticism's case: a credential appears with no step that took it."""
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][1]["access_before"] = "service_credential"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok
+        steps = _steps(result)
+        assert [s["state_check"] for s in steps] == ["ok", "gap", "ok"]
+        assert "needs service_credential" in steps[1]["state_note"]
+        gaps = [w for w in result.result["warnings"] if w["code"] == "STATE_GAP"]
+        assert len(gaps) == 1  # flagged once, not again downstream
+
+    def test_execution_is_held_on_one_component(self, plugin_instance,
+                                                sample_flow_map):
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][2]["access_before"] = "code_execution"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        step = _steps(result)[2]
+        assert step["state_check"] == "gap"
+        assert "code_execution on customer_db" in step["state_note"]
+
+    def test_credentials_travel_with_the_attacker(self, plugin_instance,
+                                                  sample_flow_map):
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][0]["access_after"] = "service_credential"
+        reply["paths"][0]["steps"][1]["access_before"] = "service_credential"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert _steps(result)[1]["state_check"] == "ok"
+
+    def test_reach_needs_execution_and_a_declared_flow(self, plugin_instance,
+                                                       sample_flow_map):
+        """Reading data on web does not give a foothold that reaches api."""
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][0]["access_after"] = "data_access"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert _steps(result)[1]["state_check"] == "gap"
+
+    def test_missing_state_degrades_to_unchecked(self, plugin_instance,
+                                                 sample_flow_map):
+        """A model that ignores the new section gives today's output, not errors."""
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        assert result.ok
+        assert {s["state_check"] for s in _steps(result)} == {"unchecked"}
+        codes = [w["code"] for w in result.result["warnings"]]
+        assert codes.count("MISSING_STEP_STATE") == 3
+        assert "STATE_GAP" not in codes
+        event = result.result["scenario_seeds"][0]["attack_sequence"][0]
+        assert event["access_source"] == "tactic_table"
+
+    def test_an_omitted_access_after_stops_the_check_downstream(
+            self, plugin_instance, sample_flow_map):
+        reply = _stateful_projection()
+        del reply["paths"][0]["steps"][0]["access_after"]
+        reply["paths"][0]["steps"][2]["access_before"] = "privileged"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert [s["state_check"] for s in _steps(result)] == [
+            "ok", "unchecked", "unchecked"]
+        assert "STATE_GAP" not in {w["code"] for w in result.result["warnings"]}
+
+    def test_unknown_access_state_warns_and_aliases_map(self, plugin_instance,
+                                                        sample_flow_map):
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][0]["access_after"] = "RCE"
+        reply["paths"][0]["steps"][2]["access_before"] = "sort of inside"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        steps = _steps(result)
+        assert steps[0]["access_after"] == "code_execution"
+        assert steps[2]["access_before"] is None
+        assert steps[2]["state_check"] == "unchecked"
+        unknown = [w for w in result.result["warnings"]
+                   if w["code"] == "ACCESS_STATE_UNKNOWN"]
+        assert len(unknown) == 1 and "sort of inside" in unknown[0]["message"]
+
+    def test_assumptions_are_capped_at_three(self, plugin_instance, sample_flow_map):
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][0]["assumptions"] = ["a", "b", "c", "d", "e"]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert _steps(result)[0]["assumptions"] == ["a", "b", "c"]
+        assert "ASSUMPTIONS_TRUNCATED" in {
+            w["code"] for w in result.result["warnings"]}
+
+    def test_transition_comes_from_the_map_not_the_reply(self, plugin_instance,
+                                                         sample_flow_map):
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][1]["transition"] = "teleported in"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        steps = _steps(result)
+        assert steps[0]["transition"] == {"entry": True, "exposure": "internet"}
+        assert steps[1]["transition"]["flow"] == "f1"
+        assert steps[1]["transition"]["protocol"] == "https"
+        assert steps[1]["transition"]["authenticated"] is True
+
+    def test_controls_in_play_come_from_the_map(self, plugin_instance,
+                                                sample_flow_map):
+        sample_flow_map["flows"][0]["controls"] = [{
+            "name": "API gateway auth", "control_type": "identity",
+            "implementation_status": "planned",
+        }]
+        result, _ = _project(plugin_instance, sample_flow_map, _stateful_projection())
+        steps = _steps(result)
+        assert {c["name"] for c in steps[0]["controls_in_play"]} == {"WAF"}
+        assert steps[1]["controls_in_play"] == [{
+            "name": "API gateway auth", "control_type": "identity",
+            "status": "planned", "on": "flow f1",
+        }]
+
+    def test_actor_support_is_derived_from_attck(self, plugin_instance,
+                                                 sample_flow_map):
+        from framework.reference_data.mitre_attack import procedures_for_technique
+
+        reply = _stateful_projection()
+        for step in reply["paths"][0]["steps"]:
+            step["actor_support"] = "procedure_documented"  # must be ignored
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        for step in _steps(result):
+            documented = bool(procedures_for_technique(step["technique_id"], "G0016"))
+            expected = "procedure_documented" if documented else "technique_documented"
+            assert step["actor_support"] == expected, step["technique_id"]
+            assert bool(step["procedure_excerpt"]) == documented
+            assert "(Citation:" not in step["procedure_excerpt"]
+
+    def test_seed_carries_step_state(self, plugin_instance, sample_flow_map):
+        result, _ = _project(plugin_instance, sample_flow_map, _stateful_projection())
+        events = result.result["scenario_seeds"][0]["attack_sequence"]
+        assert events[1]["required_access"] == "network_reach"
+        assert events[1]["resulting_access"] == "code_execution"
+        assert events[1]["access_source"] == "model"
+        assert events[1]["success_indicators"] == ["Code execution on the API host"]
+        assert events[1]["assumptions"] == [
+            "Tokens on the web tier are reusable against the API"]
+        assert events[1]["transition"] == "flow f1: web -> api (https, authenticated)"
+        assert events[0]["transition"] == "entry point (internet-exposed)"
+        assert events[1]["state_check"] == "ok"
+
+    def test_seed_describes_a_gap(self, plugin_instance, sample_flow_map):
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][1]["access_before"] = "service_credential"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        event = result.result["scenario_seeds"][0]["attack_sequence"][1]
+        assert event["state_check"].startswith("gap — needs service_credential")
+
+    def test_summary_reports_step_state(self, plugin_instance, sample_flow_map):
+        reply = _stateful_projection()
+        reply["paths"][0]["steps"][1]["access_before"] = "service_credential"
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        summary = plugin_instance.summarize_for_llm(result)
+        assert "Step state: 3 assumption(s) to test; 1 state gap(s)" in summary
+        assert "portal-to-db.steps[1]" in summary
+        assert len(summary) <= 2000
+
+    def test_prompt_asks_for_step_state(self, plugin_instance, sample_flow_map):
+        _, llm = _project(plugin_instance, sample_flow_map, _stateful_projection())
+        prompt = llm.prompts[0]
+        assert "STEP STATE" in prompt
+        for state in _tool_mod.ACCESS_STATES:
+            assert state in prompt
+        assert '"assumptions"' in prompt
+
+    def test_run_record_carries_step_state(self, plugin_instance, sample_flow_map):
+        import jsonschema
+
+        llm = _ScriptedLLM(_stateful_projection())
+        context = FakeContext()
+        context.llm_query = llm
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        assert result.ok, result.message
+        artifacts = Path(os.environ["EVENTMILL_WORKSPACE"]) / "artifacts"
+        (record_file,) = artifacts.glob("adversary_projection_run_*.json")
+        record = json.loads(record_file.read_text(encoding="utf-8"))
+        schema = json.loads(
+            (PLUGIN_DIR / "schemas" / "projection_run.schema.json").read_text())
+        jsonschema.validate(record, schema)
+        assert record["run"]["schema_version"] == 2
+        assert record["model"]["max_tokens"] == _tool_mod.PROJECTION_MAX_TOKENS
+        step = record["sampled"]["paths"][0]["steps"][0]
+        assert step["access_after"] == "code_execution"
+        assert step["assumptions"] == ["The exploited route is not filtered by the WAF"]
+        assert step["state_check"] == "ok"
+
+
 class TestProjectionSummary:
     def test_summary_under_cap_and_honest(self, plugin_instance, sample_flow_map):
         result, _ = _project(plugin_instance, sample_flow_map, _good_projection())

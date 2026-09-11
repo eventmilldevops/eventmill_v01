@@ -364,13 +364,14 @@ against Gemini 3.1 Pro; see
 gained `tactic`, `evidence` and the controls it used to drop. See
 `docs/change_log/2026-09-11-adversary-path-projector-phase-3.md`.
 
-**Phase 3c — step state (proposed, awaiting approval).** Each step records
+**Phase 3c — step state. DONE (2026-09-11); not yet run live.** Each step records
 the attack state connecting it to the next — precondition, access before and
 after from a fixed vocabulary, what it exploits, what it yields, and the
 assumptions a threat modeller could test — with a deterministic continuity check
 that flags a step needing access no earlier step provided. Path mapping is
-unchanged. Design: `docs/specs/adversary_path_projector_step_state.md`.
-Proposed to land before 3b.
+unchanged. Design: `docs/specs/adversary_path_projector_step_state.md`;
+change log `docs/change_log/2026-09-11-projection-step-state.md`. Landed before
+3b.
 
 **Phase 3b — run-group summary (agreed, not started).** For one `run_group`,
 count how often each path recurs across runs and show one representative

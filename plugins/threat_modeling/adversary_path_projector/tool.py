@@ -75,7 +75,15 @@ THINKING_LEVEL_ENV_OVERRIDE = "EVENTMILL_PROJECTION_THINKING"
 # Run records. The corpus these build is compared by eye, one record against
 # another, so the schema version is what tells a later reader whether two
 # records are the same shape.
-RUN_RECORD_SCHEMA_VERSION = 1
+# 2: sampled steps carry the model's step state (Phase 3c).
+RUN_RECORD_SCHEMA_VERSION = 2
+
+# Output cap for the projection call: 48K (48 x 1024). Step state roughly
+# triples the size of a step, and the assessment sets out to show what deep
+# work really costs, so the cap leaves the model room rather than trimming it.
+# Still inside the provider's own output cap (gcp_gemini.json). Latency, not
+# this number, is the practical ceiling.
+PROJECTION_MAX_TOKENS = 49152
 
 # A run at "medium" on a ten-component map is roughly 27s, so 25 is already a
 # ten-minute invocation. The cap is about keeping that a deliberate choice.
@@ -1079,10 +1087,31 @@ TECHNIQUE SET — the closed set, grouped by tactic:
 {objective_block}
 Produce {max_paths} attack path(s) at most. Give each a short slug id. Prefer
 few strong paths over many weak ones; if the architecture only supports one
-credible route, return one. For each step, `rationale` must say what about THIS
-component makes THIS technique apply — its technology, its exposure, its
-authentication, its data, or the control that is missing or weak. A rationale
-that would read the same for any application is not useful.
+credible route, return one. For each step, `rationale` must say in one sentence
+what about THIS component makes THIS technique apply — its technology, its
+exposure, its authentication, its data, or the control that is missing or weak.
+A rationale that would read the same for any application is not useful.
+
+STEP STATE — make every step reviewable by someone who will test it:
+- `access_before` is what the attacker must already hold for this step;
+  `access_after` is what they hold once it succeeds. Use exactly one of:
+  {access_states}.
+  network_reach, code_execution, privileged and data_access are held ON a
+  component; credentials travel with the attacker. At the start the attacker
+  holds only network_reach on the externally exposed components.
+- `access_before` must be something an earlier step in the same path gave the
+  attacker. If you cannot say how they came to hold it, add the step that gives
+  it to them, using a technique from the set. If the set has no technique for
+  that bridge, say so in `assumptions` rather than skipping it.
+- `precondition`: what must already be true, in one sentence.
+- `exploited_condition`: the property of THIS component the technique relies on.
+- `result`: what the attacker holds afterwards, concretely.
+- `assumptions`: one to three things that must be true for this step to work
+  and that the COMPONENTS table does not state — what a defender would go and
+  check. Do not restate the table. Under 20 words each.
+- `control_note` (optional): how the step gets past, or around, the controls on
+  this component.
+Do not describe flows or list controls; the tool attaches those from the map.
 
 `leads_to` lists the `technique_id` values of the next steps within the same
 path. The final step of a path has an empty `leads_to`.
@@ -1099,7 +1128,14 @@ Respond ONLY with a JSON object in this exact format:
           "technique_id": "T1190",
           "tactic": "Initial Access",
           "component_id": "portal",
-          "rationale": "Why this technique on this component.",
+          "rationale": "One sentence: why this technique on this component.",
+          "precondition": "What must already be true.",
+          "access_before": "network_reach",
+          "exploited_condition": "The property of this component the technique relies on.",
+          "result": "What the attacker holds afterwards.",
+          "access_after": "code_execution",
+          "assumptions": ["Something the map does not state that must be true."],
+          "control_note": "How the step deals with this component's controls.",
           "leads_to": ["T1059.001"]
         }}
       ]
@@ -1268,6 +1304,7 @@ def _build_projection_prompt(
         technique_block=technique_block,
         objective_block=objective_block,
         max_paths=max_paths,
+        access_states=", ".join(ACCESS_STATES),
     )
     return prompt, listed
 
@@ -1350,6 +1387,281 @@ def _resolve_step_tactic(
     )
 
 
+# ---------------------------------------------------------------------------
+# Step state — what the attacker holds between steps (Phase 3c)
+#
+# A path of technique -> component pairs does not say how one step leads to the
+# next. The model states each step's access before and after from a fixed
+# vocabulary, and Phase C checks the chain is continuous. The check proves
+# consistency, not truth: the assumptions carry the claims a person tests.
+# ---------------------------------------------------------------------------
+
+ACCESS_STATES = (
+    "none", "network_reach", "code_execution", "user_credential",
+    "service_credential", "privileged", "data_access",
+)
+
+# Held on one component: execution on the portal is not execution on the API.
+# Credentials are portable — a token taken on one host works wherever a flow
+# reaches.
+COMPONENT_SCOPED_STATES = frozenset({
+    "network_reach", "code_execution", "privileged", "data_access",
+})
+
+# A stronger foothold on a component implies the weaker ones there.
+_STATE_IMPLIES = {
+    "privileged": {"code_execution", "network_reach"},
+    "code_execution": {"network_reach"},
+    "data_access": {"network_reach"},
+}
+
+# Execution on a component lets the attacker reach its declared flow targets.
+_REACH_GRANTING_STATES = frozenset({"code_execution", "privileged"})
+
+# Unambiguous synonyms a model is likely to use. Anything else is not guessed.
+_ACCESS_ALIASES = {
+    "no_access": "none",
+    "unauthenticated": "none",
+    "network": "network_reach",
+    "network_access": "network_reach",
+    "reach": "network_reach",
+    "execution": "code_execution",
+    "code_exec": "code_execution",
+    "command_execution": "code_execution",
+    "rce": "code_execution",
+    "shell": "code_execution",
+    "user_session": "user_credential",
+    "user_credentials": "user_credential",
+    "service_credentials": "service_credential",
+    "service_account": "service_credential",
+    "api_token": "service_credential",
+    "admin": "privileged",
+    "administrator": "privileged",
+    "root": "privileged",
+    "data": "data_access",
+}
+
+MAX_ASSUMPTIONS = 3
+
+# What makes a step's state reviewable. A step missing any of these is kept —
+# dropping it would strand its edges — and its continuity may go unchecked.
+_STEP_STATE_FIELDS = (
+    "precondition", "access_before", "result", "access_after", "assumptions",
+)
+
+_CITATION = re.compile(r"\(Citation:[^)]*\)")
+
+
+def _normalize_access_state(value: Any) -> tuple[str | None, str | None]:
+    """Map a reply's access state onto the vocabulary: ``(state, unrecognised)``."""
+    if value is None:
+        return None, None
+    text = re.sub(r"[\s\-]+", "_", str(value).strip().lower())
+    if not text:
+        return None, None
+    if text in ACCESS_STATES:
+        return text, None
+    if text in _ACCESS_ALIASES:
+        return _ACCESS_ALIASES[text], None
+    return None, str(value)
+
+
+def _read_step_state(
+    raw_step: dict[str, Any], location: str, warnings: list[dict[str, str]]
+) -> dict[str, Any]:
+    """The model's account of one step's state, normalized. Never raises."""
+    def text(key: str) -> str:
+        return " ".join(str(raw_step.get(key, "") or "").split())
+
+    state: dict[str, Any] = {
+        key: text(key)
+        for key in ("precondition", "exploited_condition", "result", "control_note")
+    }
+
+    raw_assumptions = raw_step.get("assumptions") or []
+    if isinstance(raw_assumptions, str):
+        raw_assumptions = [raw_assumptions]
+    assumptions = (
+        [" ".join(str(a).split()) for a in raw_assumptions if str(a).strip()]
+        if isinstance(raw_assumptions, list) else []
+    )
+    if len(assumptions) > MAX_ASSUMPTIONS:
+        warnings.append(_issue(
+            "ASSUMPTIONS_TRUNCATED",
+            f"{len(assumptions)} assumptions given; kept the first {MAX_ASSUMPTIONS}.",
+            location,
+        ))
+        assumptions = assumptions[:MAX_ASSUMPTIONS]
+    state["assumptions"] = assumptions
+
+    for key in ("access_before", "access_after"):
+        value, unrecognised = _normalize_access_state(raw_step.get(key))
+        if unrecognised:
+            warnings.append(_issue(
+                "ACCESS_STATE_UNKNOWN",
+                f"{key} {unrecognised!r} is not one of: {', '.join(ACCESS_STATES)}; "
+                f"treated as missing.",
+                location,
+            ))
+        state[key] = value
+
+    missing = [key for key in _STEP_STATE_FIELDS if not state.get(key)]
+    if missing:
+        warnings.append(_issue(
+            "MISSING_STEP_STATE", f"Step omits {', '.join(missing)}.", location
+        ))
+    return state
+
+
+class _HeldState:
+    """What the attacker holds along one path. Access accumulates."""
+
+    def __init__(
+        self, entry_ids: set[str], adjacency: dict[str, list[str]]
+    ) -> None:
+        self._portable: set[str] = {"none"}
+        self._scoped: dict[str, set[str]] = {c: {"network_reach"} for c in entry_ids}
+        self._adjacency = adjacency
+
+    def _on(self, component: str) -> set[str]:
+        held = set(self._scoped.get(component, set()))
+        for state in list(held):
+            held |= _STATE_IMPLIES.get(state, set())
+        return held
+
+    def holds(self, state: str, component: str) -> bool:
+        if state not in COMPONENT_SCOPED_STATES:
+            return state in self._portable
+        if state in self._on(component):
+            return True
+        if state == "network_reach":
+            return any(
+                component in self._adjacency.get(source, [])
+                and self._on(source) & _REACH_GRANTING_STATES
+                for source in self._scoped
+            )
+        return False
+
+    def add(self, state: str, component: str) -> None:
+        if state in COMPONENT_SCOPED_STATES:
+            self._scoped.setdefault(component, set()).add(state)
+        else:
+            self._portable.add(state)
+
+    def describe(self) -> str:
+        parts = sorted(s for s in self._portable if s != "none")
+        parts += sorted(
+            f"{state} on {component}"
+            for component, states in self._scoped.items() for state in states
+        )
+        if not parts:
+            return "nothing"
+        more = f", +{len(parts) - 6} more" if len(parts) > 6 else ""
+        return ", ".join(parts[:6]) + more
+
+
+def _step_transition(
+    previous: str,
+    component_id: str,
+    flow: dict[str, Any] | None,
+    components: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """How the attacker arrived at this step, from the map — never the reply."""
+    if not previous:
+        return {"entry": True, "exposure": components[component_id]["exposure"]}
+    if flow is None:
+        return None
+    return {
+        "flow": flow["id"],
+        "from": previous,
+        "to": component_id,
+        "protocol": flow["protocol"],
+        "authenticated": flow["authenticated"],
+        "crosses_boundary": flow["crosses_boundary"],
+    }
+
+
+def _controls_in_play(
+    component: dict[str, Any], flow: dict[str, Any] | None
+) -> list[dict[str, str]]:
+    """Controls on the component and on the flow the step arrived over."""
+    in_play = [
+        {
+            "name": c["name"],
+            "control_type": c["control_type"],
+            "status": c["implementation_status"],
+            "on": "component",
+        }
+        for c in component["controls"]
+    ]
+    if flow:
+        in_play += [
+            {
+                "name": c["name"],
+                "control_type": c["control_type"],
+                "status": c["implementation_status"],
+                "on": f"flow {flow['id']}",
+            }
+            for c in flow["controls"]
+        ]
+    return in_play
+
+
+def _procedure_index(
+    actor_id: str, software_ids: set[str], technique_ids: set[str]
+) -> dict[str, dict[str, str]]:
+    """The first ATT&CK procedure example per technique, for this actor or its tooling.
+
+    One scan of the procedure list per invocation, as _procedures_for_sources
+    does. The actor's own example is preferred over its software's, since it is
+    the stronger claim.
+    """
+    index: dict[str, dict[str, str]] = {}
+    for procedure in get_mitre_relationships().get("procedures", []):
+        technique = procedure.get("technique")
+        source = procedure.get("source")
+        if technique not in technique_ids:
+            continue
+        if actor_id and source == actor_id:
+            if index.get(technique, {}).get("by") != "actor":
+                index[technique] = {
+                    "source": source, "text": procedure.get("text", ""), "by": "actor",
+                }
+        elif source in software_ids and technique not in index:
+            index[technique] = {
+                "source": source, "text": procedure.get("text", ""), "by": "software",
+            }
+    return index
+
+
+def _excerpt(text: str, limit: int = 200) -> str:
+    """A procedure example trimmed for display, citations removed."""
+    text = " ".join(_CITATION.sub("", text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def _describe_transition(transition: dict[str, Any] | None) -> str:
+    """One line for a report: how the attacker arrived at the step."""
+    if not transition:
+        return ""
+    if transition.get("entry"):
+        return f"entry point ({transition['exposure']}-exposed)"
+    auth = "authenticated" if transition["authenticated"] else "unauthenticated"
+    protocol = f"{transition['protocol']}, " if transition.get("protocol") else ""
+    return (
+        f"flow {transition['flow']}: {transition['from']} -> {transition['to']} "
+        f"({protocol}{auth})"
+    )
+
+
+def _describe_state_check(step: dict[str, Any]) -> str:
+    status = step.get("state_check", "")
+    note = step.get("state_note", "")
+    return f"{status} — {note}" if status and note else status
+
+
 def _control_tagging(
     components: dict[str, dict[str, Any]], paths: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -1377,6 +1689,7 @@ def _validate_projection(
     software_ids: set[str],
     flow_map: dict[str, Any],
     entry_ids: set[str],
+    procedures: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Reject placements the closed set and the flow map do not support.
 
@@ -1390,7 +1703,7 @@ def _validate_projection(
     components = flow_map["components"]
     allowed = core_ids | software_ids
 
-    adjacency, _edges = _build_adjacency(flow_map["flows"])
+    adjacency, edges = _build_adjacency(flow_map["flows"])
 
     rejections: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
@@ -1408,6 +1721,10 @@ def _validate_projection(
         steps: list[dict[str, Any]] = []
         previous_component = ""
         previous_ordinal = 0
+        held = _HeldState(entry_ids, adjacency)
+        # Once a step omits what it yields, later gaps may be artefacts of the
+        # omission rather than real — so later steps go unchecked, not flagged.
+        chain_known = True
 
         for step_index, raw_step in enumerate(raw_path.get("steps") or []):
             location = f"{path_id}.steps[{step_index}]"
@@ -1493,9 +1810,58 @@ def _validate_projection(
                 notes.append(note)
                 warnings.append(_issue("HOP_NOT_DECLARED", note, location))
 
+            # Step state. The model's account of what the attacker holds is
+            # checked against what earlier steps gave them. A gap is flagged,
+            # never rejected: it usually means a missing bridge step, and
+            # rejecting would strand the edges either side.
+            state = _read_step_state(raw_step, location, warnings)
+            if not chain_known:
+                state_check = "unchecked"
+                state_note = "an earlier step omitted its access_after"
+            elif state["access_before"] is None:
+                state_check = "unchecked"
+                state_note = "step omits access_before"
+            elif held.holds(state["access_before"], component_id):
+                state_check, state_note = "ok", ""
+            else:
+                scope = (
+                    f" on {component_id}"
+                    if state["access_before"] in COMPONENT_SCOPED_STATES else ""
+                )
+                state_check = "gap"
+                state_note = (
+                    f"needs {state['access_before']}{scope}; path holds "
+                    f"{held.describe()}"
+                )
+                notes.append(f"state gap: {state_note}")
+                warnings.append(_issue("STATE_GAP", state_note, location))
+                # Report the gap once, not again on every later step.
+                held.add(state["access_before"], component_id)
+            if state["access_after"] is None:
+                chain_known = False
+            else:
+                held.add(state["access_after"], component_id)
+
+            flow = (
+                edges.get((previous_component, component_id))
+                if previous_component and previous_component != component_id
+                else None
+            )
+
             # Evidence is derived, never taken from the model — it cannot be
-            # trusted to label the strength of its own source.
+            # trusted to label the strength of its own source. actor_support
+            # refines it from ATT&CK's procedure examples, by the same rule.
             evidence = "documented" if technique_id in core_ids else "via_software"
+            procedure = (procedures or {}).get(technique_id)
+            if evidence == "via_software":
+                actor_support = "via_software"
+            elif procedure and procedure["by"] == "actor":
+                actor_support = "procedure_documented"
+            else:
+                actor_support = "technique_documented"
+                # A tooling procedure beside "technique_documented" would read
+                # as the actor's own behaviour; show only what matches the label.
+                procedure = None
 
             mitigations = mitigations_for_technique(technique_id)
             declared = {
@@ -1521,6 +1887,23 @@ def _validate_projection(
                     m for m in mitigations if m not in declared
                 ],
                 "notes": notes,
+                # From the model, checked for continuity:
+                "precondition": state["precondition"],
+                "access_before": state["access_before"],
+                "exploited_condition": state["exploited_condition"],
+                "result": state["result"],
+                "access_after": state["access_after"],
+                "assumptions": state["assumptions"],
+                "control_note": state["control_note"],
+                # From the map and ATT&CK, never from the reply:
+                "transition": _step_transition(
+                    previous_component, component_id, flow, components
+                ),
+                "controls_in_play": _controls_in_play(components[component_id], flow),
+                "actor_support": actor_support,
+                "procedure_excerpt": _excerpt(procedure["text"]) if procedure else "",
+                "state_check": state_check,
+                "state_note": state_note,
             })
             previous_component = component_id
             previous_ordinal = ordinal
@@ -1678,9 +2061,16 @@ def _build_scenario_seeds(
                 if control["detection_capability"] in ("medium", "high"):
                     detecting.append(name)
 
-            required, resulting = _ACCESS_BY_TACTIC.get(
-                step["tactic"], _ACCESS_FALLBACK
-            )
+            # The model's stated access when it gave both ends, since that is
+            # what the continuity check examined; the tactic table otherwise.
+            if step.get("access_before") and step.get("access_after"):
+                required, resulting = step["access_before"], step["access_after"]
+                access_source = "model"
+            else:
+                required, resulting = _ACCESS_BY_TACTIC.get(
+                    step["tactic"], _ACCESS_FALLBACK
+                )
+                access_source = "tactic_table"
             events.append({
                 "event_id": f"AE-{order:04d}",
                 "name": (
@@ -1696,8 +2086,18 @@ def _build_scenario_seeds(
                 "evidence": step["evidence"],
                 "required_access": required,
                 "resulting_access": resulting,
+                "access_source": access_source,
                 "blocking_controls": blocking,
                 "detecting_controls": detecting,
+                "success_indicators": [step["result"]] if step.get("result") else [],
+                "precondition": step.get("precondition", ""),
+                "exploited_condition": step.get("exploited_condition", ""),
+                "assumptions": list(step.get("assumptions", [])),
+                "control_note": step.get("control_note", ""),
+                "transition": _describe_transition(step.get("transition")),
+                "actor_support": step.get("actor_support", ""),
+                "procedure_excerpt": step.get("procedure_excerpt", ""),
+                "state_check": _describe_state_check(step),
             })
 
         seeds.append({
@@ -2213,6 +2613,14 @@ class AdversaryPathProjector:
             "allowed_technique_count": len(core_ids | software_ids),
         }
 
+        # ATT&CK procedure examples for the closed set: one scan, reused by
+        # every run in a loop.
+        procedures = _procedure_index(
+            (profile.get("actor") or {}).get("attck_id", ""),
+            {s["id"] for s in profile["software"]},
+            core_ids | software_ids,
+        )
+
         outcomes: list[dict[str, Any]] = []
         artifacts: list[dict[str, Any]] = []
         export_errors: list[str] = []
@@ -2221,7 +2629,7 @@ class AdversaryPathProjector:
         for index in range(1, runs + 1):
             attempt = self._run_one_projection(
                 context, prompt, thinking_level, core_ids, software_ids,
-                flow_map, entry_ids, profile["label"],
+                flow_map, entry_ids, profile["label"], procedures=procedures,
             )
 
             # The graph and the seed are the product of a projection and chain
@@ -2270,6 +2678,7 @@ class AdversaryPathProjector:
         flow_map: dict[str, Any],
         entry_ids: set[str],
         actor_label: str,
+        procedures: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """One Phase B + Phase C cycle.
 
@@ -2291,7 +2700,7 @@ class AdversaryPathProjector:
         response = context.llm_query.query_text(
             prompt=prompt,
             system_context=PROJECTION_SYSTEM_CONTEXT,
-            max_tokens=16384,
+            max_tokens=PROJECTION_MAX_TOKENS,
             hints=QueryHints(
                 tier="heavy",
                 needs_reasoning=True,
@@ -2331,7 +2740,7 @@ class AdversaryPathProjector:
 
         # --- Phase C: reject what the closed set and the map do not support ---
         validated = _validate_projection(
-            parsed, core_ids, software_ids, flow_map, entry_ids
+            parsed, core_ids, software_ids, flow_map, entry_ids, procedures
         )
         attack_graph = validated["attack_graph"]
 
@@ -2414,7 +2823,7 @@ class AdversaryPathProjector:
                 "model_configured": getattr(response, "model_used", None),
                 "tier": "heavy",
                 "thinking_level": run_context["thinking_level"],
-                "max_tokens": 16384,
+                "max_tokens": PROJECTION_MAX_TOKENS,
                 "max_paths": run_context["max_paths"],
                 "software_scope": run_context["software_scope"],
             },
@@ -2455,6 +2864,17 @@ class AdversaryPathProjector:
                                 "uncovered_mitigations": step.get(
                                     "uncovered_mitigations", []
                                 ),
+                                "precondition": step.get("precondition", ""),
+                                "access_before": step.get("access_before"),
+                                "exploited_condition": step.get(
+                                    "exploited_condition", ""
+                                ),
+                                "result": step.get("result", ""),
+                                "access_after": step.get("access_after"),
+                                "assumptions": step.get("assumptions", []),
+                                "control_note": step.get("control_note", ""),
+                                "actor_support": step.get("actor_support", ""),
+                                "state_check": step.get("state_check", ""),
                             }
                             for step in path["steps"]
                         ],
@@ -2862,6 +3282,23 @@ class AdversaryPathProjector:
         ]
         if corrected:
             lines.append(f"{len(corrected)} tactic label(s) corrected against ATT&CK.")
+
+        all_steps = [s for p in graph.get("paths", []) for s in p["steps"]]
+        if all_steps:
+            state_gaps = [
+                w for w in data.get("warnings", []) if w["code"] == "STATE_GAP"
+            ]
+            assumptions = sum(len(s.get("assumptions", [])) for s in all_steps)
+            unchecked = sum(1 for s in all_steps if s.get("state_check") == "unchecked")
+            line = (
+                f"Step state: {assumptions} assumption(s) to test; "
+                f"{len(state_gaps)} state gap(s)"
+            )
+            if state_gaps:
+                line += " — " + "; ".join(w["location"] for w in state_gaps[:4])
+            if unchecked:
+                line += f"; continuity not checked on {unchecked} step(s)"
+            lines.append(line + ".")
 
         # Readers struggle with ambiguity, so each line says exactly what was
         # checked: an absent control first, then the gap list scoped to what it
