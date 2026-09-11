@@ -83,6 +83,23 @@ MAX_RUNS = 25
 
 DEFAULT_RUN_GROUP = "ungrouped"
 
+# A projection is not a confirmed attack, and readers struggle with ambiguity,
+# so every projected output carries the same sentence. threat_model_analyzer
+# uses identical wording for imported scenarios. "Projected", not "estimated":
+# the tool scores no likelihood, and "estimated" invites the question.
+PROJECTION_NOTICE = "Projected from threat intelligence, not a confirmed attack path."
+
+# Written into the graph and seed files, which people open directly.
+PROJECTION_INTERPRETATION = (
+    "Projected attack paths: not confirmed attacks, and not a likelihood "
+    "assessment. An LLM placed techniques that MITRE ATT&CK documents this "
+    "actor using onto the organization's own flow map, reasoning the way an "
+    "adversary would. Technique ids, technique names and controls are "
+    "sourced; the route and the step rationales are the model's projection, "
+    "and required/resulting access is typical for each step's tactic, not "
+    "tracked attacker state."
+)
+
 
 def _default_thinking_level() -> str:
     """Reasoning depth for a call that does not name one.
@@ -1333,6 +1350,27 @@ def _resolve_step_tactic(
     )
 
 
+def _control_tagging(
+    components: dict[str, dict[str, Any]], paths: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """How far a step's uncovered-mitigation list can be trusted.
+
+    Uncovered mitigations are diffed against the mitre_mitigation_id values on
+    the step's own component. A control with no id can never cover anything, so
+    read without these counts the gap list overstates what is missing.
+    """
+    targeted = sorted({s["component_id"] for p in paths for s in p["steps"]})
+    controls = [c for cid in targeted for c in components[cid]["controls"]]
+    return {
+        "targeted_components": targeted,
+        "control_count": len(controls),
+        "tagged_control_count": sum(1 for c in controls if c["mitre_mitigation_id"]),
+        "components_without_controls": [
+            cid for cid in targeted if not components[cid]["controls"]
+        ],
+    }
+
+
 def _validate_projection(
     parsed: dict[str, Any],
     core_ids: set[str],
@@ -1540,6 +1578,7 @@ def _validate_projection(
         "mitre_mappings": [mappings[k] for k in sorted(mappings)],
         "rejections": rejections,
         "warnings": warnings,
+        "control_tagging": _control_tagging(components, clean_paths),
     }
 
 
@@ -2540,6 +2579,7 @@ class AdversaryPathProjector:
             "scenario_seeds": attempt["seeds"],
             "rejections": validated["rejections"],
             "warnings": validated["warnings"] + map_warnings,
+            "control_tagging": validated["control_tagging"],
             "unreachable_crown_jewels": run_context["unreachable"],
             "model_used": getattr(attempt.get("response"), "model_used", None),
         }
@@ -2641,6 +2681,8 @@ class AdversaryPathProjector:
                 f"adversary_path_graph_{stamp}.json",
                 {
                     "source_tool": "adversary_path_projector",
+                    "status": "projected",
+                    "interpretation": PROJECTION_INTERPRETATION,
                     "actor": profile["label"],
                     "application": flow_map["application"],
                     "mitre_mappings": mitre_mappings,
@@ -2651,6 +2693,8 @@ class AdversaryPathProjector:
                 f"adversary_scenario_seed_{stamp}.json",
                 {
                     "source_tool": "adversary_path_projector",
+                    "status": "projected",
+                    "interpretation": PROJECTION_INTERPRETATION,
                     "actor": profile["label"],
                     "application": flow_map["application"],
                     "scenarios": seeds,
@@ -2782,7 +2826,7 @@ class AdversaryPathProjector:
             f"{data.get('step_count', 0)} step(s). "
             f"{evidence.get('documented', 0)} step(s) use techniques attributed "
             f"to the actor directly, {evidence.get('via_software', 0)} via its "
-            f"tooling. Placement is modelled, not observed."
+            f"tooling. {PROJECTION_NOTICE}"
         ]
 
         for path in graph.get("paths", [])[:3]:
@@ -2819,6 +2863,17 @@ class AdversaryPathProjector:
         if corrected:
             lines.append(f"{len(corrected)} tactic label(s) corrected against ATT&CK.")
 
+        # Readers struggle with ambiguity, so each line says exactly what was
+        # checked: an absent control first, then the gap list scoped to what it
+        # compares, then why that list may overstate.
+        tagging = data.get("control_tagging") or {}
+        bare = tagging.get("components_without_controls", [])
+        if bare:
+            more = f", +{len(bare) - 6} more" if len(bare) > 6 else ""
+            lines.append(
+                f"No controls declared at all on: {', '.join(bare[:6])}{more}."
+            )
+
         gaps = {
             m
             for path in graph.get("paths", [])
@@ -2828,7 +2883,19 @@ class AdversaryPathProjector:
         if gaps:
             listed = ", ".join(sorted(gaps)[:6])
             more = f", +{len(gaps) - 6} more" if len(gaps) > 6 else ""
-            lines.append(f"ATT&CK mitigations not declared anywhere: {listed}{more}.")
+            lines.append(
+                f"ATT&CK mitigations for these techniques that no control on the "
+                f"targeted component declares: {listed}{more}."
+            )
+            total = tagging.get("control_count", 0)
+            untagged = total - tagging.get("tagged_control_count", 0)
+            if untagged:
+                lines.append(
+                    f"Caution: {untagged} of {total} control(s) on the targeted "
+                    f"components carry no ATT&CK mitigation id and cannot be "
+                    f"matched, so some listed mitigations may already be in place. "
+                    f"Estate-wide and flow controls are not checked against this list."
+                )
 
         return "\n".join(lines)
 
@@ -2869,8 +2936,7 @@ class AdversaryPathProjector:
                 + "."
             )
         lines.append(
-            "Records written per run; compare them directly. Placement is "
-            "modelled, not observed."
+            f"Records written per run; compare them directly. {PROJECTION_NOTICE}"
         )
         return "\n".join(lines)
 

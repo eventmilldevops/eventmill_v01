@@ -500,6 +500,16 @@
         }
       }
     },
+    "control_tagging": {
+      "type": "object",
+      "description": "How far the steps' uncovered_mitigations can be trusted (project_paths). Uncovered mitigations are compared only against mitre_mitigation_id values on the step's own component, so a control without an id can never cover anything, and estate-wide and flow controls are not counted.",
+      "properties": {
+        "targeted_components": { "type": "array", "items": { "type": "string" } },
+        "control_count": { "type": "integer", "description": "Controls declared on the targeted components." },
+        "tagged_control_count": { "type": "integer", "description": "Of those, how many declare a mitre_mitigation_id." },
+        "components_without_controls": { "type": "array", "items": { "type": "string" }, "description": "Targeted components with no control declared at all." }
+      }
+    },
     "scenario_seeds": {
       "type": "array",
       "description": "One scenario per path, shaped for threat_model_analyzer's SecurityControl and AttackEvent dataclasses and loaded by its import_scenario action. One per path because sequence_order is linear and a projection is a graph. security_controls carries every control the flow map declares — per-component, per-flow and estate-wide. Each attack_sequence event carries the step's tactic and evidence so the scenario is auditable on its own.",

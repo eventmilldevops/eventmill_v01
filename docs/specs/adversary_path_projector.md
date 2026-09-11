@@ -65,8 +65,14 @@ is:
 
 **The placement is a model inference either way.** That is the point of the
 field: capability is sourced, placement never is, and nothing in the output may
-read as "this actor attacked this application." `summarize_for_llm()` says
-"Placement is modelled, not observed" on every projection.
+read as "this actor attacked this application." Every projected output —
+`summarize_for_llm()`, both artifact files (`status: "projected"` plus an
+`interpretation` field) and `threat_model_analyzer`'s report for an imported
+scenario — carries the same sentence: "Projected from threat intelligence, not
+a confirmed attack path." "Projected" rather than "estimated": the tool scores
+no likelihood, and "estimated" invites the question of how likely. The framing: an LLM reasons over the actor's
+documented techniques the way an adversary would, but with the organization's
+inside view of its own architecture and controls.
 
 `evidence` is **derived from the closed set, never read from the model's
 reply** — a model cannot be trusted to label the strength of its own source. A

@@ -1360,8 +1360,50 @@ class TestProjectionSummary:
         result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
         summary = plugin_instance.summarize_for_llm(result)
         assert 0 < len(summary) <= 2000
-        assert "modelled, not observed" in summary
+        assert _tool_mod.PROJECTION_NOTICE in summary
         assert "web:T1190" in summary
+
+    def test_artifacts_say_they_are_projections(self, plugin_instance,
+                                                sample_flow_map, tmp_path,
+                                                monkeypatch):
+        """People open these files directly, so each file says what it is."""
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        _project(plugin_instance, sample_flow_map, _good_projection())
+        files = sorted((tmp_path / "artifacts").glob("adversary_*.json"))
+        assert len(files) == 2
+        for path in files:
+            body = json.loads(path.read_text(encoding="utf-8"))
+            assert body["status"] == "projected"
+            assert "not confirmed" in body["interpretation"]
+            assert "not a likelihood" in body["interpretation"]
+            assert "stimate" not in body["interpretation"]
+            assert "not tracked" in body["interpretation"]
+
+    def test_summary_says_what_the_gap_list_checked(self, plugin_instance,
+                                                    sample_flow_map):
+        """Neither sample control carries a mitigation id, so the gap list
+        must not read as a list of missing controls."""
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        assert result.result["control_tagging"] == {
+            "targeted_components": ["api", "customer_db", "web"],
+            "control_count": 2,
+            "tagged_control_count": 0,
+            "components_without_controls": ["api"],
+        }
+        summary = plugin_instance.summarize_for_llm(result)
+        assert "No controls declared at all on: api." in summary
+        assert "no control on the targeted component declares" in summary
+        assert "Caution: 2 of 2 control(s)" in summary
+        assert "not declared anywhere" not in summary
+        assert len(summary) <= 2000
+
+    def test_no_caution_when_every_control_is_tagged(self, plugin_instance,
+                                                    sample_flow_map):
+        sample_flow_map["components"][0]["controls"][0]["mitre_mitigation_id"] = "M1050"
+        sample_flow_map["components"][2]["controls"][0]["mitre_mitigation_id"] = "M1030"
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        assert result.result["control_tagging"]["tagged_control_count"] == 2
+        assert "Caution:" not in plugin_instance.summarize_for_llm(result)
 
     def test_summary_reports_rejections(self, plugin_instance, sample_flow_map):
         reply = _good_projection()

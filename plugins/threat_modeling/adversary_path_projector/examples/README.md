@@ -277,12 +277,28 @@ think it says:
   high `thinking_level` will find the provider's gateway deadline. Shrink the
   map before reducing reasoning depth.
 
-## Two notes on mitigation ids
+## Notes on mitigation ids
 
 `mitre_mitigation_id` is optional and only affects `uncovered_mitigations` — per
 step, the projector diffs ATT&CK's mitigations for the technique against the ids
-your controls declare. A control with no id simply never counts as covering
-anything.
+declared by the controls **on that step's own component**. A control with no id
+simply never counts as covering anything, and estate-wide and flow controls are
+not consulted.
+
+That is why a `project_paths` summary ends with up to three lines about
+controls, each saying exactly what was checked:
+
+```
+No controls declared at all on: claims_api, doc_store.
+ATT&CK mitigations for these techniques that no control on the targeted component declares: M1013, ... +16 more.
+Caution: 1 of 2 control(s) on the targeted components carry no ATT&CK mitigation id and cannot be matched, so some listed mitigations may already be in place. Estate-wide and flow controls are not checked against this list.
+```
+
+The first line is the plain triage answer. The second is only as good as your
+tagging — the claims portal map tags just its WAF, so most of its list reflects
+untagged controls rather than missing ones. The caution appears whenever an
+untagged control sits on a projected path. Tag your controls and the list gets
+both shorter and more trustworthy.
 
 Use **enterprise** ids (`M1xxx`). The closed technique set is enterprise, so ICS
 mitigations (`M0xxx`) can never match and would make every mitigation look

@@ -79,6 +79,17 @@ DETECTION_CAPABILITIES = ("none", "low", "medium", "high")
 DEFAULT_IMPORT_MAX_PATHS = 6
 MAX_IMPORT_PATHS = 10
 
+# A projected scenario is not a confirmed attack, and readers struggle with
+# ambiguity, so every projected output carries the same sentence.
+# adversary_path_projector uses identical wording. "Projected", not
+# "estimated": nothing here scores likelihood.
+PROJECTION_NOTICE = "Projected from threat intelligence, not a confirmed attack path."
+
+EVIDENCE_MEANING = {
+    "documented": "ATT&CK attributes this technique to the actor directly",
+    "via_software": "in ATT&CK only the actor's tooling implements this technique",
+}
+
 
 # ---------------------------------------------------------------------------
 # Scenario Data Models
@@ -545,7 +556,18 @@ class ThreatModelAnalyzer:
         elif action == "gap_analysis":
             gap = data.get("gap_analysis", {})
             total = gap.get("total_issues", 0)
-            return f"Gap analysis for {data.get('scenario_id')}: {total} issues found."
+            # total_issues adds unlike things, so say what it is made of.
+            summary = (
+                f"Gap analysis for {data.get('scenario_id')}: {total} issues found — "
+                f"{len(gap.get('unprotected_events', []))} step(s) with no "
+                f"implemented preventive control, "
+                f"{len(gap.get('weak_controls', []))} incomplete control(s), "
+                f"{len(gap.get('easy_bypass', []))} easy-bypass control(s). "
+                f"One control can count as both incomplete and easy to bypass."
+            )
+            if data.get("source_type") == "actor_projection":
+                summary += f" {PROJECTION_NOTICE}"
+            return summary
 
         elif action == "export":
             md = data.get("markdown", "")
@@ -566,7 +588,8 @@ class ThreatModelAnalyzer:
                 parts.append(
                     f"  {s['scenario_id']}{label}: {s['name']} "
                     f"({s['controls_count']}C/{s['events_count']}E, "
-                    f"{s['unprotected_count']} step(s) with no implemented control)"
+                    f"{s['unprotected_count']} step(s) with no implemented "
+                    f"preventive control)"
                 )
             skipped = data.get("skipped_path_ids", [])
             if skipped:
@@ -575,7 +598,7 @@ class ThreatModelAnalyzer:
                     f"{', '.join(skipped)}"
                 )
             if any(s.get("source_type") == "actor_projection" for s in imported):
-                parts.append("Placement is modelled, not observed.")
+                parts.append(PROJECTION_NOTICE)
             parts.append("Next: gap_analysis --scenario_id <id>.")
             return "\n".join(parts)[:1800]
 
@@ -761,6 +784,7 @@ class ThreatModelAnalyzer:
                 "action": "gap_analysis",
                 "scenario_id": scenario_id,
                 "scenario_name": scenario.name,
+                "source_type": scenario.source_type,
                 "gap_analysis": {
                     "unprotected_events": unprotected,
                     "weak_controls": weak_controls,
@@ -1017,11 +1041,19 @@ class ThreatModelAnalyzer:
 
     def _generate_markdown(self, scenario: ThreatScenario) -> str:
         """Generate a markdown report for a scenario."""
+        # A projected scenario is not a confirmed attack. Every place a reader
+        # could take it for one says otherwise.
+        projected = scenario.source_type == "actor_projection"
+        actor = scenario.threat_actor_profile or "the actor"
+
         lines = [
-            f"# Threat Scenario: {scenario.name}",
+            f"# {'Projected ' if projected else ''}Threat Scenario: {scenario.name}",
             "",
             f"**ID:** {scenario.scenario_id}",
-            f"**Source:** {scenario.source_type}",
+            (
+                f"**Source:** {scenario.source_type} (projected from threat intelligence)"
+                if projected else f"**Source:** {scenario.source_type}"
+            ),
             f"**Created:** {scenario.created_at}",
         ]
 
@@ -1037,13 +1069,26 @@ class ThreatModelAnalyzer:
             lines.append(f"**Entry Vectors:** {', '.join(scenario.entry_vectors)}")
 
         lines.append("")
-        lines.append(f"> {scenario.description}")
+        if projected:
+            lines.append(
+                f"> *Path summary written by the LLM (projection):* {scenario.description}"
+            )
+        else:
+            lines.append(f"> {scenario.description}")
         lines.append("")
 
-        if scenario.source_type == "actor_projection":
+        if projected:
             lines.append(
-                "*Placement is modelled, not observed: ATT&CK sources what the "
-                "actor can do, not that it has done it here.*"
+                f"**{PROJECTION_NOTICE}** An LLM generated this path the way an "
+                f"adversary would: it reasoned over the techniques MITRE ATT&CK "
+                f"documents {actor} using and placed them onto this organization's "
+                f"own flow map. The organization's inside view of its architecture "
+                f"and controls is better than an external attacker's, and an "
+                f"attacker can run the same kind of speculation. Technique ids, "
+                f"technique names and controls are sourced; the route and the step "
+                f"rationales are the model's projection, and the access levels are "
+                f"typical values for each step's tactic. This is not a likelihood "
+                f"assessment."
             )
             lines.append("")
 
@@ -1064,7 +1109,7 @@ class ThreatModelAnalyzer:
         lines.append("")
 
         # Attack Sequence
-        lines.append("## Attack Sequence")
+        lines.append("## Projected Attack Sequence" if projected else "## Attack Sequence")
         lines.append("")
         if scenario.attack_sequence:
             for e in scenario.attack_sequence:
@@ -1074,19 +1119,39 @@ class ThreatModelAnalyzer:
                 lines.append(f"### Step {e.sequence_order}: {e.name} [{protection}]")
                 lines.append("")
                 if e.description:
-                    lines.append(f"{e.description}")
+                    if projected:
+                        lines.append(
+                            f"*LLM rationale (projection, not verified):* {e.description}"
+                        )
+                    else:
+                        lines.append(f"{e.description}")
                     lines.append("")
                 if e.technique_id:
                     lines.append(f"- **MITRE ATT&CK:** {e.attack_technique} ({e.technique_id})")
                 if e.tactic:
                     lines.append(f"- **Tactic:** {e.tactic}")
                 if e.evidence:
-                    lines.append(f"- **Evidence:** {e.evidence}")
+                    meaning = EVIDENCE_MEANING.get(e.evidence)
+                    lines.append(
+                        f"- **Evidence:** {e.evidence} — {meaning}" if meaning
+                        else f"- **Evidence:** {e.evidence}"
+                    )
                 if e.target_asset:
                     lines.append(f"- **Target:** {e.target_asset}")
-                lines.append(f"- **Access:** {e.required_access} -> {e.resulting_access}")
+                if projected:
+                    lines.append(
+                        f"- **Typical access for this tactic (not tracked step to "
+                        f"step):** {e.required_access} -> {e.resulting_access}"
+                    )
+                else:
+                    lines.append(f"- **Access:** {e.required_access} -> {e.resulting_access}")
                 if e.blocking_controls:
-                    lines.append(f"- **Blocking Controls:** {', '.join(e.blocking_controls)}")
+                    # "Blocking" read as a claim the control stops the technique.
+                    # What was checked is that an implemented preventive control
+                    # sits on the component — how good it is is a later step.
+                    lines.append(
+                        f"- **Preventive Controls Present:** {', '.join(e.blocking_controls)}"
+                    )
                 if e.detecting_controls:
                     lines.append(f"- **Detecting Controls:** {', '.join(e.detecting_controls)}")
                 lines.append("")
@@ -1101,7 +1166,9 @@ class ThreatModelAnalyzer:
         lines.append("")
         lines.append(f"- **Total Controls:** {len(scenario.security_controls)}")
         lines.append(f"- **Total Attack Steps:** {len(scenario.attack_sequence)}")
-        lines.append(f"- **Unprotected Steps:** {len(unprotected)}")
+        lines.append(
+            f"- **Steps With No Implemented Preventive Control:** {len(unprotected)}"
+        )
         lines.append(f"- **Incomplete Controls:** {len(weak)}")
         lines.append("")
 

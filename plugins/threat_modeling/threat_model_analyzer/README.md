@@ -122,7 +122,35 @@ paths over the limit are listed by id and not imported. `--path_id` imports one.
 Imported scenarios are marked `source_type: actor_projection`. Each step keeps
 its ATT&CK tactic and its evidence — `documented` when ATT&CK attributes the
 technique to the actor, `via_software` when only the actor's tooling implements
-it — and the markdown report states that placement is modelled, not observed.
+it.
+
+**Reading a projected report.** A projected scenario is not a confirmed attack
+and not a likelihood assessment, and the report says so everywhere a reader
+could miss it. Every projected output carries the same sentence — *Projected
+from threat intelligence, not a confirmed attack path.* The title reads
+*Projected Threat Scenario*, the sequence *Projected Attack Sequence*, and a
+notice under the description explains how the path was made: an LLM reasoning
+over the techniques ATT&CK documents the actor using, placed onto the
+organization's own flow map. An adversary would run the same kind of
+speculation with an LLM; the organization runs it with a better view of its own
+architecture and controls.
+
+| In the report | Where it comes from |
+|---|---|
+| Technique id and name, tactic | MITRE ATT&CK, checked against the actor's documented set |
+| Evidence | Derived — `documented` or `via_software` — never the model's own claim; explained in words on each step |
+| Controls, `CONTROL_PRESENT`, *Preventive Controls Present* | The organization's flow map |
+| The route from step to step | The model's projection, limited to flows the map declares |
+| *Path summary* and each step's *LLM rationale* | The model's projection, not verified — it can be wrong |
+| *Typical access for this tactic* | A fixed table keyed on the step's tactic — not the attacker's tracked state |
+
+Each step is atomic: one technique on one component. Nothing records how the
+step was carried out beyond the model's rationale.
+
+`gap_analysis` on a projected scenario ends with the same notice, and its
+summary breaks `total_issues` into its parts — it adds steps, incomplete
+controls and easy-bypass controls together, and one control can count twice, so
+it is not a score.
 
 A document is checked in full before anything is created: an invalid control
 type, enum value or sequence order imports nothing and lists every problem.
@@ -133,7 +161,9 @@ old control ids follow.
 when it is implemented, on a preventive layer, and on the component the step
 lands on — whether or not it addresses that particular technique. That answers
 triage's first question, *is there a control there at all*, which is why the
-markdown report labels such a step `CONTROL_PRESENT` rather than "protected".
+markdown report labels such a step `CONTROL_PRESENT` rather than "protected",
+and lists the control under *Preventive Controls Present* rather than "blocking
+controls". The JSON field keeps its name, `blocking_controls`.
 How good the control is against the technique is a separate assessment.
 
 **JSON alternative.** Every tool also accepts a JSON payload. It is only

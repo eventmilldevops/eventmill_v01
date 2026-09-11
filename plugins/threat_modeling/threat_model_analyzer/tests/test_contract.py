@@ -690,6 +690,20 @@ class TestImportScenario:
         assert [c["name"] for c in analysis["weak_controls"]] == ["Database firewall"]
         assert [c["name"] for c in analysis["easy_bypass"]] == ["Database firewall"]
 
+    def test_gap_summary_spells_out_the_total(self, plugin_instance, tmp_path):
+        """total_issues adds unlike things; the summary must say what they are."""
+        result = _import(plugin_instance, file_path=_write_seed(tmp_path, 1))
+        scenario_id = result.result["imported"][0]["scenario_id"]
+        gap = plugin_instance.execute(
+            {"action": "gap_analysis", "scenario_id": scenario_id}, None)
+        assert gap.result["source_type"] == "actor_projection"
+        summary = plugin_instance.summarize_for_llm(gap)
+        assert "3 issues found" in summary
+        assert "1 step(s) with no implemented preventive control" in summary
+        assert "1 incomplete control(s)" in summary
+        assert "1 easy-bypass control(s)" in summary
+        assert _tool_mod.PROJECTION_NOTICE in summary
+
     def test_markdown_marks_a_projection(self, plugin_instance, tmp_path):
         result = _import(plugin_instance, file_path=_write_seed(tmp_path, 1))
         scenario_id = result.result["imported"][0]["scenario_id"]
@@ -697,17 +711,32 @@ class TestImportScenario:
             {"action": "export", "scenario_id": scenario_id}, None).result["markdown"]
         assert "**Source:** actor_projection" in md
         assert "**Projected Path:** path-1" in md
-        assert "modelled, not observed" in md
+        assert _tool_mod.PROJECTION_NOTICE in md
+        assert "# Projected Threat Scenario:" in md
+        assert "## Projected Attack Sequence" in md
+        assert "*Path summary written by the LLM (projection):*" in md
+        assert "*LLM rationale (projection, not verified):*" in md
+        assert "**Typical access for this tactic (not tracked step to step):**" in md
+        assert "**Preventive Controls Present:** WAF" in md
+        assert "Blocking Controls" not in md
+        assert "not a likelihood assessment" in md
+        assert "stimate" not in md
+        assert "**Access:**" not in md
         assert "**Tactic:** Initial Access" in md
         assert "**Evidence:** via_software" in md
+        assert "only the actor's tooling implements" in md
 
     def test_analyst_markdown_has_no_projection_caveat(self, plugin_instance,
                                                       scenario_with_data):
         md = plugin_instance.execute(
             {"action": "export", "scenario_id": scenario_with_data},
             None).result["markdown"]
-        assert "modelled, not observed" not in md
+        assert _tool_mod.PROJECTION_NOTICE not in md
         assert "Projected Path" not in md
+        assert "Projected" not in md
+        assert "**Access:**" in md
+        assert "**Preventive Controls Present:** SC-0001" in md
+        assert "**Steps With No Implemented Preventive Control:**" in md
 
     def test_summary(self, plugin_instance, tmp_path):
         result = _import(plugin_instance, file_path=_write_seed(tmp_path, 8))
@@ -715,7 +744,7 @@ class TestImportScenario:
         assert len(summary) <= 2000
         assert "Imported 6 scenario(s)" in summary
         assert "path-7, path-8" in summary
-        assert "modelled, not observed" in summary
+        assert _tool_mod.PROJECTION_NOTICE in summary
 
 
 class _PromptCapture:
@@ -725,6 +754,14 @@ class _PromptCapture:
     def query_text(self, prompt, **kwargs):
         self.prompts.append(prompt)
         return SimpleNamespace(ok=True, text="summary")
+
+
+class TestProjectionWordingIsShared:
+    def test_both_plugins_use_one_sentence(self):
+        """Readers should meet the identical caveat wherever they look."""
+        projector = (PLUGIN_DIR.parent / "adversary_path_projector" / "tool.py"
+                     ).read_text(encoding="utf-8")
+        assert f'PROJECTION_NOTICE = "{_tool_mod.PROJECTION_NOTICE}"' in projector
 
 
 class TestAnalyzeDocumentIsNarrowed:

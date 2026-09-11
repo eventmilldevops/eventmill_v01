@@ -1,4 +1,4 @@
-# Change Log — `adversary_path_projector` Phase 3: the `threat_model_analyzer` handoff
+# Change Log — `adversary_path_projector` Phase 3: the `threat_model_analyzer` handoff, and triage-report wording
 
 **Date:** 2026-09-11
 **Primary Files Modified:**
@@ -8,42 +8,80 @@
 `plugins/threat_modeling/threat_model_analyzer/schemas/output.schema.json`,
 `plugins/threat_modeling/threat_model_analyzer/tests/test_contract.py`,
 `plugins/threat_modeling/adversary_path_projector/tool.py`,
+`plugins/threat_modeling/adversary_path_projector/schemas/output.schema.json`,
 `plugins/threat_modeling/adversary_path_projector/tests/test_contract.py`
 **Supporting Files:**
 `plugins/threat_modeling/threat_model_analyzer/README.md`,
-`plugins/threat_modeling/adversary_path_projector/schemas/output.schema.json`,
+`plugins/threat_modeling/adversary_path_projector/examples/README.md`,
 `docs/specs/adversary_path_projector.md`
 
 Follows `2026-09-10-projection-run-records.md`.
 
 ---
 
+## Summary of the session
+
+1. Reviewed the 2026-09-09 and 2026-09-10 change logs and the spec, and
+   re-planned the remaining phases against the question the tool exists to
+   serve (below).
+2. Agreed the tool's scope: **first-step triage**, not a security platform and
+   not a safety verdict.
+3. Built Phase 3 — `import_scenario` and `export_scenario` on
+   `threat_model_analyzer`, `actor_projection` source type, narrowed
+   `analyze_document`, and fixes to the projector's scenario seed.
+4. Reviewed a live Volt Typhoon projection and its import (verified below).
+5. Made the projector's mitigation summary say exactly what it checked.
+6. Relabelled every projected output so no reader can take it for a confirmed
+   attack or a likelihood assessment: "Projected from threat intelligence, not
+   a confirmed attack path."
+
 ## Scope, as agreed
 
-The projector is a **first-step triage** tool, not a security platform. It
-answers two questions:
+The management question behind the tool is "is application X safe from threat
+actor Y, given current threat intelligence about Y?" The tool does not answer
+that yes or no, and should not claim to: the model is asked for attack paths and
+will always produce some, so the absence of a path can never mean "safe". The
+risk conversation with management is held by people.
 
-1. Is there a control at all where the actor's path lands?
-2. Is there a credible path we have not considered?
+What the tool does is first-step triage, answering two questions:
 
-It does not assess how good a control is, and it does not say whether an
-application is "safe" — the management conversation about risk is held by
-people. Control quality is an explicit later step. That scope decided several
-things below.
+1. **Is there a control at all** where the actor's projected path lands?
+2. **Is there a credible path we have not considered?** Credible means the
+   technique is sourced (ATT&CK attributes it to the actor) and the path
+   recurs — across runs, or across actors.
+
+**How good a control is** — whether a WAF actually addresses Valid Accounts —
+is an explicit later step, not this one.
+
+The framing readers should take away: the report combines the organization's
+inside knowledge of its own architecture and controls with a current LLM
+generating attack paths the way an adversary would have to. Both sides can
+speculate with LLMs; the insider has the better vantage point.
+
+## Decisions taken
+
+| Question | Decision |
+|---|---|
+| Carry tactic and evidence on imported events? | Yes — both, as optional `AttackEvent` fields |
+| What `import_scenario` does without `--path_id` | Imports each path, up to `max_paths`, default **6** — a cap to guard tokens and analyst time |
+| `normalize_flow_map` (Phase 4): a control whose status the source does not state | Set to `partial` and flagged as a potential weakness — never defaulted to `implemented` |
+| Run-group summary (Phase 3b) | Count recurring paths and show **one** representative variant per path — triage needs the distinct choices, not near-duplicates. Recurring = in at least half the runs of a group of three or more |
+| Per-component `blocking_controls` overstates protection | Accepted for triage; per-technique effectiveness belongs to the control-quality step |
+| Wording for projected output | "Projected", not "estimated" — see below |
 
 ## Problem
 
 Since Phase 2 the projector has written a scenario seed shaped for
 `threat_model_analyzer`, and nothing read it. The analyzer's gap analysis —
 steps with no implemented control, incomplete controls, easy bypasses,
-defense-in-depth coverage — is the answer to triage question 1, and the seed
-could not reach it.
+defense-in-depth coverage — answers triage question 1, and the seed could not
+reach it.
 
 The analyzer also had no way to save a scenario. `list_scenarios` returns
 counts and `export` returns markdown, so a half-built threat model died with
 the process.
 
-## Changes
+## Changes — Phase 3
 
 ### `threat_model_analyzer` — `import_scenario` (new)
 
@@ -53,9 +91,7 @@ the process.
 - **Each path becomes its own scenario, up to `max_paths` (default 6, 1–10).**
   The spec said to default to "the highest-ranked path", but the projection
   prompt never ranks paths — seed order is only reply order, so that default
-  had nothing behind it. Importing each path keeps every candidate in view,
-  which is what triage wants; the cap exists because every imported path is a
-  scenario an analyst has to read. Paths over the cap are listed by id in
+  had nothing behind it. Paths over the cap are listed by id in
   `skipped_path_ids`, not silently dropped. `--path_id` imports one.
 - **The document is validated in full before anything is created.** An invalid
   `control_type` used to raise inside `DefenseLayerType(...)` and surface as
@@ -65,9 +101,8 @@ the process.
   collide with scenarios already loaded. Event references to the old control ids
   follow the reissue; references by name (what the seed uses) pass through.
 - **Wrong documents are refused with a reason.** The projector's attack graph
-  artifact ("not its attack graph") and a `list_scenarios` result (counts only —
-  importing it would create empty scenarios) both fail with a message that
-  names the right artifact.
+  artifact and a `list_scenarios` result (counts only — importing it would
+  create empty scenarios) both fail with a message naming the right artifact.
 - Reads through `context.artifacts` like the other plugins, falling back to the
   `file_path` the shell injects from `artifact_id`.
 
@@ -75,23 +110,19 @@ the process.
 
 Returns scenarios in full — controls and events included — as `result.result`,
 so the shell's auto-persist writes an artifact that `import_scenario` reads back
-unchanged. A round-trip test asserts it. Omitting `--scenario_id` exports every
+unchanged; a round-trip test asserts it. Omitting `--scenario_id` exports every
 scenario in the tracker, which is the useful form for saving a session's work
 before a restart.
 
-### `threat_model_analyzer` — model and report changes
+### `threat_model_analyzer` — model changes
 
 - `AttackEvent` gained optional `tactic` and `evidence`; `add_event` accepts
-  both. This closes the question left open in Phase 2: without the tactic a
-  seed could not be audited on its own, which is how a bad tactic hid for four
-  events. `evidence` carries `documented` vs `via_software`, which is half of
-  what makes a projected path credible (question 2).
+  both. Without the tactic a seed could not be audited on its own, which is how
+  a bad tactic hid for four events in Phase 2. `evidence` (`documented` /
+  `via_software`) is half of what makes a projected path credible.
 - `AttackEvent.to_dict()` now includes `success_indicators`, which it always
   omitted — required for a lossless round trip.
 - `ThreatScenario` gained `path_id` and `to_full_dict()`.
-- The markdown report shows tactic, evidence and projected path per step, and
-  for `actor_projection` scenarios states that placement is modelled, not
-  observed. Analyst-built scenarios render as before.
 - `"actor_projection"` added to the `source_type` enum.
 
 ### `threat_model_analyzer` — `analyze_document` narrowed
@@ -117,44 +148,152 @@ extend it.
   per-component controls, so estate-wide controls (1 in the OT example, 2 in
   the SaaS example) and flow-level controls never reached gap analysis — which
   would answer question 1 with "no control" where there is one.
-- Events carry `tactic` (the corrected value Phase C settled on) and `evidence`.
+- Events carry `tactic` (the value Phase C settled on) and `evidence`.
 - The unused `control_ids` map was removed with the loop it lived in.
+
+## Verified against a live run
+
+`Volt Typhoon` against `claims_portal_flow_map.json`, `--max_paths 4`, Gemini at
+`medium`, ~60–70s. Two paths, 14 steps, all `documented`, no rejections, no
+tactic corrections, no kill-chain warnings. Two paths rather than four is the
+map's ceiling, not a failure: the portal is the only internet-facing component
+with onward flows, and there are two crown jewels.
+
+```
+[volt-portal-webshell-docstore]  portal:T1190 -> portal:T1505.003 -> portal:T1059.004
+                                 -> portal:T1552 -> claims_api:T1078
+                                 -> claims_api:T1090.001 -> doc_store:T1083 -> doc_store:T1005
+[volt-portal-mtls-claimsdb]      portal:T1190 -> portal:T1059.004 -> claims_api:T1570
+                                 -> claims_api:T1552.004 -> claims_db:T1078 -> claims_db:T1005
+```
+
+`import_scenario` on the seed produced exactly what the flow map predicts:
+TS-0003 with 8 of 8 steps having no implemented preventive control (the portal
+WAF is `partial`; the API and document store have no controls), and TS-0004 with
+4 of 6 (the two claims-database steps carry the implemented database firewall).
+
+What the run showed, recorded for readers of later reports:
+
+- **Two actors, the same two routes.** Scattered Spider on 2026-09-09 took the
+  same component routes through this map — through the unauthenticated
+  `claims_api → doc_store` flow `f5`, and through the API's mTLS private key to
+  the database. When different actors converge, the weakness is architectural.
+- **The strongest control was walked around, not defeated.** The IdP's
+  conditional access (implemented, high bypass difficulty) sits on neither
+  path: the first takes OAuth tokens from the portal's own configuration and
+  presents them to the API directly. "The attacker went around the thing that
+  was expected to stop them" is the management message.
+- **`CONTROL_PRESENT` is not "stopped".** The two database steps show the
+  firewall, and the path's premise is presenting stolen mTLS keys that the
+  firewall lets through — the control-quality question, deferred by design.
+- **Technique labels at data stores are the nearest documented fit.** The
+  document store (S3) and database (Postgres) steps use T1005 and T1083, which
+  describe host-local files. Better fits — T1530 Data from Cloud Storage, T1213
+  Data from Information Repositories — are not in Volt Typhoon's ATT&CK set, so
+  the closed set forced the nearest documented technique. That is the grounding
+  rule working, but the mitigation list for those steps is T1005's, not T1530's.
+- **Model prose is not validated.** The path description calls the document
+  store "unauthenticated"; the store requires IAM and it is flow `f5` that is
+  unauthenticated. The objective calls the same store "restricted". FRP, named
+  in a rationale, is genuinely Volt Typhoon's S1144 — correct by luck, not by
+  check.
+- **Access levels do not chain.** AE-0004 ends at `credentials` and AE-0005
+  starts at `user`: `required_access` / `resulting_access` come from a fixed
+  table keyed on each step's tactic (`_ACCESS_BY_TACTIC`), not from the model
+  and not threaded between steps. Each event is atomic — one technique on one
+  component — and nothing records how it was carried out beyond the model's
+  rationale.
+
+## Changes — the mitigation line in the projection summary
+
+The live run's summary ended:
+
+```
+ATT&CK mitigations not declared anywhere: M1013, M1015, M1016, M1017, M1018, M1022, +16 more.
+```
+
+That reads as 22 missing controls. It was not:
+
+- **Untagged controls cannot match.** Only one of that map's controls — the
+  `partial` WAF, `M1050` — declares a `mitre_mitigation_id`. Conditional access,
+  the database firewall and DDoS protection declare none.
+- **"Anywhere" was false.** `uncovered_mitigations` is diffed against the
+  controls on the step's own component only. Estate-wide and flow controls are
+  never consulted.
+
+The summary now says exactly what was checked:
+
+```
+No controls declared at all on: claims_api, doc_store.
+ATT&CK mitigations for these techniques that no control on the targeted component declares: M1013, ... +16 more.
+Caution: 1 of 2 control(s) on the targeted components carry no ATT&CK mitigation id and cannot be matched, so some listed mitigations may already be in place. Estate-wide and flow controls are not checked against this list.
+```
+
+The first line is the unambiguous triage answer and comes first. The caution
+appears only when an untagged control exists. Backed by a new `control_tagging`
+block on the `project_paths` result (targeted components, control count, tagged
+count, components with no controls), computed in `_validate_projection` from the
+kept paths. The comparison itself is unchanged.
+
+## Changes — wording: projected, not confirmed, not a likelihood
+
+The people reading these reports struggle with ambiguity, and several labels
+claimed more than was checked. "Placement is modelled, not observed" was
+accurate and too technical. "Estimated" was tried and dropped: it implies a
+likelihood assessment, which the tool does not make, and invites "estimated how
+likely?". "Projected" says what happened and matches the tool's name.
+
+One sentence now appears in every projected output, identical in both plugins
+(`PROJECTION_NOTICE`; a test asserts the two copies match):
+
+> Projected from threat intelligence, not a confirmed attack path.
+
+| Output | Change |
+|---|---|
+| Projector summary, single run and `--runs` | The sentence replaces "Placement is modelled, not observed" |
+| Attack graph and scenario seed files | New top-level `status: "projected"` and an `interpretation` paragraph — people open these files directly |
+| Analyzer report, projected scenarios | Title *Projected Threat Scenario*; source line *(projected from threat intelligence)*; the sentence plus how the path was made and that it is not a likelihood assessment; *Projected Attack Sequence* |
+| Analyzer report, each projected step | Path description prefixed *Path summary written by the LLM (projection)*; step prose prefixed *LLM rationale (projection, not verified)*; access relabelled *Typical access for this tactic (not tracked step to step)* |
+| Analyzer report, every scenario | Step label **PROTECTED → CONTROL_PRESENT**; "Blocking Controls" → *Preventive Controls Present*; evidence value explained in words; "Unprotected Steps" in the gap summary → *Steps With No Implemented Preventive Control*, which is what it counts (a detect-only step was included under "unprotected") |
+| `import_scenario` summary | The sentence; "no implemented control" → "no implemented preventive control" |
+| `gap_analysis` | Result carries `source_type`; summary breaks `total_issues` into steps, incomplete controls and easy-bypass controls, says one control can count twice (the claims portal WAF is both `partial` and `low` bypass), and ends with the sentence for a projected scenario |
+
+`CONTROL_PRESENT` and *Preventive Controls Present* both replace wording that
+read as a claim the control stops the technique. What was checked is that an
+implemented preventive control sits on the component; saying so starts the
+control-quality conversation instead of implying it is settled. The JSON field
+keeps its name, `blocking_controls`. `DETECT ONLY`, `UNPROTECTED` and
+*Detecting Controls* are unchanged.
 
 ## Deliberately not changed
 
-**`blocking_controls` stays per component.** Any implemented preventive control
-on the component a step lands on counts as blocking, whether or not it
-addresses that technique — a WAF "blocks" T1078. That is the right test for
-"is there a control at all" and an overstatement for "is it good enough". The
-second question belongs to the control-quality step, not here. Documented in
-the analyzer README and the spec so a reader does not take "blocking" as an
-effectiveness claim.
-
-The markdown label for such a step changed from **PROTECTED** to
-**CONTROL_PRESENT**. The check underneath is unchanged; the label now says what
-was actually checked, and so starts the conversation with a reader about
-whether the control is good enough rather than implying it has been answered.
-`DETECT ONLY` and `UNPROTECTED` are unchanged. Cosmetic, so not retested.
-
-`ScenarioTracker` is still process-scoped, not session-scoped. `export_scenario`
-gives persistence a manual path, which is what blocked work; the README now
-says scenarios live in memory until exported.
+- **`blocking_controls` stays per component.** Any implemented preventive
+  control on the component a step lands on counts, whether or not it addresses
+  that technique. Right for "is there a control at all", an overstatement for
+  "is it good enough" — which is the control-quality step.
+- **Whether estate-wide and flow controls should count toward covering a step's
+  mitigations** is a semantics decision, not a wording one, and was not taken.
+- **`ScenarioTracker` is still process-scoped.** `export_scenario` gives
+  persistence a manual path; the README now says scenarios live in memory until
+  exported.
 
 ## Tests
 
-`threat_model_analyzer` 69 (was 32); `adversary_path_projector` 195 (was 192);
-`threat_modeling` pillar 332 (was 292); full suite **883 passed** (was 843).
+`threat_model_analyzer` 71 (was 32); `adversary_path_projector` 198 (was 192);
+full suite **888 passed** (was 843).
 
-New coverage: import of each path, the default cap of 6 with skipped ids
+Coverage added: import of each path, the default cap of 6 with skipped ids
 reported, `max_paths` and `path_id`, unknown `path_id` listing what exists,
 tactic and evidence carried, id reissue with references following, a bad
 document importing nothing, `sequence_order` 0 refused, `list_scenarios` and
 attack-graph documents refused, artifact and file sources, gap analysis on an
-imported scenario, the projection caveat present on imported and absent on
-analyst scenarios, export/import round trip into a fresh tracker, schema enums
-asserted equal to the code's constants so they cannot drift, the narrowed
-prompt, and an end-to-end test that a real projector seed imports, analyses
-and renders.
+imported scenario, export/import round trip into a fresh tracker, schema enums
+asserted equal to the code's constants, the narrowed prompt, an end-to-end test
+that a real projector seed imports, analyses and renders, the seed carrying
+every declared control, the mitigation summary's three lines, artifact files
+marked `projected`, the gap summary breaking down `total_issues`, every
+relabelled line present on a projected report and absent from an analyst one,
+and the notice identical in both plugins.
 
 `validate_manifests.py` still reports exactly the 15 pre-existing `stability`
 errors and nothing else. `ruff` and `black` are not installed here; style was
@@ -162,10 +301,22 @@ matched by hand.
 
 ## Not verified
 
-No live run. Everything here is deterministic — the hand-off involves no LLM
-call — and the end-to-end test drives the real projector code path against a
-scripted reply. The narrowed `analyze_document` prompt has not been run against
-a model.
+The narrowed `analyze_document` prompt has not been run against a model. The
+relabelled report was rendered locally and checked by eye, not against a live
+import.
+
+## Open, not fixed
+
+- `attack_path_visualizer`'s diagram of a projection carries no notice; it
+  ignores `status` and `interpretation`. Belongs with the deferred renderer
+  change.
+- `entry_vectors` in the seed holds a component id (`portal`) while
+  `target_assets` holds names.
+- The projection summary's control lines are not indented to match the path
+  lines above them.
+- The Google SDK's "automatic function calling (AFC)" notice still reaches the
+  console, past the 2026-08-24 change that routed dependency warnings to the log
+  file.
 
 ## Next
 
@@ -173,7 +324,8 @@ a model.
   `run_group` and show one representative variant per recurring path rather
   than every near-duplicate. Recurring = present in at least half the runs, in a
   group of three or more.
-- **Phase 4** — `normalize_flow_map`. Agreed rule: a control whose status the
-  source does not state is set to `partial` and flagged as a potential
-  weakness, never defaulted to `implemented`. Plus the plugin README, a
-  deliberately malformed example map, and a first live run on the OT map.
+- **Phase 4** — `normalize_flow_map`. A control whose status the source does not
+  state is set to `partial` and flagged as a potential weakness, never
+  defaulted to `implemented`; the model marks every inferred field and the tool
+  lists them for review. Plus the plugin README, a deliberately malformed
+  example map, and a first live run on the OT map.
