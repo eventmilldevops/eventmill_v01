@@ -2,9 +2,14 @@
 
 Version: 0.2.0
 Pillar: `threat_modeling`
-Status: Phases 1 and 2 implemented (`profile_actor`, `validate_flow_map`,
-`project_paths`). Phase 3 (threat_model_analyzer handoff) and Phase 4
+Status: Phases 1, 2 and 3 implemented (`profile_actor`, `validate_flow_map`,
+`project_paths`, and the `threat_model_analyzer` handoff). Phase 4
 (`normalize_flow_map`, README) outstanding.
+
+Scope: first-step triage. The tool answers two questions — *is there a control
+at all where the actor's path lands*, and *is there a credible path we have not
+considered*. It does not assess how good a control is, and it does not issue a
+safety verdict; both are later steps, and the second is a human conversation.
 
 ---
 
@@ -231,9 +236,24 @@ so on); the LLM may override.
 
 **One path per scenario.** `AttackEvent.sequence_order` is a linear integer and
 the projector produces a DAG. Flattening a branching graph into one sequence
-would misrepresent it, so the seed emits one scenario per `path_id` and
-`import_scenario` takes an optional `--path_id`, defaulting to the
-highest-ranked path.
+would misrepresent it, so the seed emits one scenario per `path_id`.
+`import_scenario` imports each path as its own scenario, up to `--max_paths`
+(default 6); `--path_id` imports one. There is no "highest-ranked" default —
+the projection prompt does not rank paths, so seed order is only reply order.
+
+`security_controls` carries **every** control the flow map declares:
+per-component, per-flow and estate-wide. Only per-component controls were
+emitted until Phase 3, which made gap analysis report an estate-wide SIEM as
+absent.
+
+Each event carries the step's `tactic` and `evidence` (`documented` /
+`via_software`) so an imported scenario can be audited on its own.
+
+`blocking_controls` is per component: any implemented preventive control on the
+component the step lands on counts, whether or not it addresses that technique.
+That is the right test for triage's "is there a control at all" and a known
+overstatement for "is the control good enough", which is deferred to a separate
+control-quality step.
 
 ---
 
@@ -255,8 +275,8 @@ analyst to build.
 
 ### `import_scenario` (new action)
 
-`import_scenario --artifact_id <id> [--path_id <id>]` loads a scenario seed
-into the `ScenarioTracker` as a complete scenario. `gap_analysis` and `export`
+`import_scenario --artifact_id <id> [--path_id <id>] [--max_paths N]` loads a
+scenario seed into the `ScenarioTracker`, one complete scenario per path. `gap_analysis` and `export`
 then run unchanged against ATT&CK-grounded events instead of fifteen hand-typed
 `add_event` calls. This is the whole reason for the split: the projector never
 reimplements bypass-difficulty or defense-coverage analysis, it just hands over
@@ -333,8 +353,16 @@ artifacts, `summarize_for_llm()` under the 2000-character cap. Verified
 against Gemini 3.1 Pro; see
 `docs/change_log/2026-09-09-adversary-path-projector-phase-2.md`.
 
-**Phase 3 — `threat_model_analyzer` handoff.** `export_scenario`,
-`import_scenario`, `source_type` enum, narrowed `analyze_document`.
+**Phase 3 — `threat_model_analyzer` handoff. DONE.** `export_scenario`,
+`import_scenario`, `source_type` enum, narrowed `analyze_document`; the seed
+gained `tactic`, `evidence` and the controls it used to drop. See
+`docs/change_log/2026-09-11-adversary-path-projector-phase-3.md`.
+
+**Phase 3b — run-group summary (agreed, not started).** For one `run_group`,
+count how often each path recurs across runs and show one representative
+variant per recurring path, not every near-duplicate. Recurring means present in
+at least half the runs of a group of three or more. Answers triage's second
+question — a credible path is sourced *and* recurs.
 
 **Phase 4 — ergonomics and docs.** `normalize_flow_map`, README,
 `docs/change_log/` entry.

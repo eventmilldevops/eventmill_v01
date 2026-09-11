@@ -1594,25 +1594,35 @@ def _build_scenario_seeds(
     One scenario per path keeps each sequence honest.
     """
     controls: list[dict[str, Any]] = []
-    control_ids: dict[tuple[str, str], str] = {}
+
+    def _add_control(control: dict[str, Any], default_description: str) -> None:
+        controls.append({
+            "control_id": f"SC-{len(controls) + 1:04d}",
+            "name": control["name"],
+            "control_type": control["control_type"] or "application",
+            "description": control["description"] or default_description,
+            "implementation_status": control["implementation_status"],
+            "bypass_difficulty": control["bypass_difficulty"],
+            "bypass_requirements": control["bypass_requirements"],
+            "detection_capability": control["detection_capability"],
+        })
+
+    # Every control the map declares, not only per-component ones: gap analysis
+    # answers "is there a control at all", and a dropped estate-wide control
+    # would read as absent.
     for component in flow_map["components"].values():
         for control in component["controls"]:
-            key = (component["id"], control["name"])
-            control_id = f"SC-{len(controls) + 1:04d}"
-            control_ids[key] = control_id
-            controls.append({
-                "control_id": control_id,
-                "name": control["name"],
-                "control_type": control["control_type"] or "application",
-                "description": (
-                    control["description"]
-                    or f"Protects {component['name']} ({component['id']})."
-                ),
-                "implementation_status": control["implementation_status"],
-                "bypass_difficulty": control["bypass_difficulty"],
-                "bypass_requirements": control["bypass_requirements"],
-                "detection_capability": control["detection_capability"],
-            })
+            _add_control(
+                control, f"Protects {component['name']} ({component['id']})."
+            )
+    for flow in flow_map.get("flows", []):
+        for control in flow["controls"]:
+            _add_control(
+                control,
+                f"Protects flow {flow['id']} ({flow['from']} -> {flow['to']}).",
+            )
+    for control in flow_map.get("controls", []):
+        _add_control(control, "Estate-wide control, not tied to one component.")
 
     seeds = []
     for path in attack_graph["paths"]:
@@ -1643,6 +1653,8 @@ def _build_scenario_seeds(
                 "target_asset": component["name"],
                 "attack_technique": step["technique_name"],
                 "technique_id": step["technique_id"],
+                "tactic": step["tactic"],
+                "evidence": step["evidence"],
                 "required_access": required,
                 "resulting_access": resulting,
                 "blocking_controls": blocking,

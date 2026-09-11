@@ -11,7 +11,9 @@
         "add_event",
         "list_scenarios",
         "gap_analysis",
-        "export"
+        "export",
+        "export_scenario",
+        "import_scenario"
       ],
       "description": "Action to perform."
     },
@@ -21,10 +23,11 @@
     },
     "source_type": {
       "type": "string",
-      "enum": ["threat_model", "tabletop_exercise", "security_assessment", "red_team_report", "incident_review"],
-      "default": "threat_model"
+      "enum": ["threat_model", "tabletop_exercise", "security_assessment", "red_team_report", "incident_review", "actor_projection"],
+      "default": "threat_model",
+      "description": "Where the scenario came from. 'actor_projection' marks a scenario imported from adversary_path_projector, so projected scenarios stay distinguishable from analyst-built ones."
     },
-    "scenario_id": { "type": "string", "description": "Scenario ID for add_control, add_event, gap_analysis, export." },
+    "scenario_id": { "type": "string", "description": "Scenario ID for add_control, add_event, gap_analysis, export, export_scenario. Omit for export_scenario to export every scenario." },
     "name": { "type": "string" },
     "description": { "type": "string" },
     "threat_actor": { "type": "string" },
@@ -54,11 +57,23 @@
     "sequence_order": { "type": "integer", "minimum": 1 },
     "technique_name": { "type": "string", "description": "MITRE ATT&CK technique name." },
     "technique_id": { "type": "string", "description": "MITRE ATT&CK ID (e.g. T1566)." },
+    "tactic": { "type": "string", "description": "ATT&CK tactic the event claims (add_event). Optional." },
+    "evidence": { "type": "string", "description": "How strongly the actor-to-technique claim is sourced, e.g. 'documented' or 'via_software' as adversary_path_projector sets it (add_event). Optional." },
     "required_access": { "type": "string", "default": "none" },
     "resulting_access": { "type": "string", "default": "none" },
     "blocking_controls": { "type": "array", "items": { "type": "string" } },
     "detecting_controls": { "type": "array", "items": { "type": "string" } },
-    "output_path": { "type": "string", "description": "File path for export action." }
+    "output_path": { "type": "string", "description": "File path for export action." },
+    "artifact_id": { "type": "string", "description": "json_events artifact to import (import_scenario): an adversary_path_projector scenario seed, or a saved export_scenario result." },
+    "file_path": { "type": "string", "description": "Path to a scenario document to import (import_scenario). Injected by the shell when 'artifact_id' is given." },
+    "path_id": { "type": "string", "description": "Import only this projected path (import_scenario). Omit to import each path, up to 'max_paths'." },
+    "max_paths": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "default": 6,
+      "description": "Most scenarios one import creates (import_scenario). Each path becomes a scenario an analyst has to review; paths over the limit are reported by id, not imported."
+    }
   },
   "required": ["action"]
 }

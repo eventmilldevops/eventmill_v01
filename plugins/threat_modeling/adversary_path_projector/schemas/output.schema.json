@@ -502,7 +502,7 @@
     },
     "scenario_seeds": {
       "type": "array",
-      "description": "One scenario per path, shaped for threat_model_analyzer's SecurityControl and AttackEvent dataclasses. One per path because sequence_order is linear and a projection is a graph.",
+      "description": "One scenario per path, shaped for threat_model_analyzer's SecurityControl and AttackEvent dataclasses and loaded by its import_scenario action. One per path because sequence_order is linear and a projection is a graph. security_controls carries every control the flow map declares — per-component, per-flow and estate-wide. Each attack_sequence event carries the step's tactic and evidence so the scenario is auditable on its own.",
       "items": {
         "type": "object",
         "properties": {

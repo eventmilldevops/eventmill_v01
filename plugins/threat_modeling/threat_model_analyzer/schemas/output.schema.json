@@ -28,6 +28,19 @@
       }
     },
     "markdown": { "type": "string" },
+    "scenario_count": { "type": "integer" },
+    "imported_count": { "type": "integer" },
+    "imported": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Scenarios created by import_scenario, in list_scenarios form."
+    },
+    "skipped_path_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Paths not imported because they exceeded max_paths."
+    },
+    "source": { "type": "string" },
     "control_id": { "type": "string" },
     "event_id": { "type": "string" }
   }

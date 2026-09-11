@@ -1288,6 +1288,72 @@ class TestScenarioSeed:
         first = result.result["scenario_seeds"][0]["attack_sequence"][0]
         assert "WAF" not in first["blocking_controls"]
 
+    def test_events_carry_tactic_and_evidence(self, plugin_instance, sample_flow_map):
+        """Without these a seed cannot be audited on its own — that is how a
+        bad tactic went unnoticed for four events."""
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        steps = result.result["attack_graph"]["paths"][0]["steps"]
+        events = result.result["scenario_seeds"][0]["attack_sequence"]
+        assert [e["tactic"] for e in events] == [s["tactic"] for s in steps]
+        assert [e["evidence"] for e in events] == [s["evidence"] for s in steps]
+        assert all(e["evidence"] in ("documented", "via_software") for e in events)
+
+    def test_every_declared_control_is_in_the_seed(self, plugin_instance,
+                                                   sample_flow_map):
+        """Estate-wide and flow controls used to be dropped, so gap analysis
+        reported them as absent."""
+        sample_flow_map["controls"] = [{
+            "name": "Central SIEM", "control_type": "monitoring",
+            "implementation_status": "implemented",
+        }]
+        sample_flow_map["flows"][1]["controls"] = [{
+            "name": "mTLS on the DB link", "control_type": "network",
+            "implementation_status": "planned",
+        }]
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        controls = result.result["scenario_seeds"][0]["security_controls"]
+        by_name = {c["name"]: c for c in controls}
+        assert {"WAF", "Database firewall", "Central SIEM",
+                "mTLS on the DB link"} <= set(by_name)
+        assert "Estate-wide" in by_name["Central SIEM"]["description"]
+        assert "f2" in by_name["mTLS on the DB link"]["description"]
+        ids = [c["control_id"] for c in controls]
+        assert ids == [f"SC-{i:04d}" for i in range(1, len(ids) + 1)]
+
+    def test_seed_imports_into_threat_model_analyzer(self, plugin_instance,
+                                                     sample_flow_map, tmp_path):
+        """The seed exists for this hand-off; prove it lands without translation."""
+        tma_dir = PLUGIN_DIR.parent / "threat_model_analyzer"
+        spec = importlib.util.spec_from_file_location("tma_tool", tma_dir / "tool.py")
+        tma = importlib.util.module_from_spec(spec)
+        sys.modules["tma_tool"] = tma
+        spec.loader.exec_module(tma)
+
+        result, _ = _project(plugin_instance, sample_flow_map, _good_projection())
+        seed_file = tmp_path / "seed.json"
+        seed_file.write_text(json.dumps({
+            "source_tool": "adversary_path_projector",
+            "scenarios": result.result["scenario_seeds"],
+        }), encoding="utf-8")
+
+        analyzer = tma.ThreatModelAnalyzer()
+        ctx = FakeContext(
+            artifacts=[FakeArtifact("art_seed", "json_events", str(seed_file))])
+        imported = analyzer.execute(
+            {"action": "import_scenario", "artifact_id": "art_seed"}, ctx)
+        assert imported.ok, imported.message
+        scenario = imported.result["imported"][0]
+        assert scenario["source_type"] == "actor_projection"
+        assert scenario["path_id"] == "portal-to-db"
+
+        gap = analyzer.execute(
+            {"action": "gap_analysis", "scenario_id": scenario["scenario_id"]}, None)
+        assert gap.ok, gap.message
+        md = analyzer.execute(
+            {"action": "export", "scenario_id": scenario["scenario_id"]},
+            None).result["markdown"]
+        assert "**Tactic:** Initial Access" in md
+
 
 class TestProjectionSummary:
     def test_summary_under_cap_and_honest(self, plugin_instance, sample_flow_map):
