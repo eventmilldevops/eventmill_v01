@@ -11,6 +11,8 @@
 `plugins/threat_modeling/threat_model_analyzer/tests/test_contract.py`
 **Supporting Files:**
 `plugins/threat_modeling/threat_model_analyzer/README.md`,
+`plugins/threat_modeling/adversary_path_projector/examples/README.md`,
+`framework/llm/client.py` (timeout only),
 `docs/specs/adversary_path_projector_step_state.md`,
 `docs/specs/adversary_path_projector.md`
 
@@ -229,3 +231,32 @@ through the editable install; that checkout predates `TACTIC_ORDER` and fails
 on import. From the repo root the local package shadows it, which is why
 `pytest` is unaffected. Worth fixing with `pip install -e .` from this checkout
 before anyone runs a script from a subdirectory and gets silently stale code.
+
+## Next
+
+In order:
+
+1. **Live run of the step-state build** — the first time a real model sees the
+   STEP STATE prompt section. On the claims portal and telemetry SaaS maps, at
+   `medium`, three runs each with `--runs 3 --run_group stepstate-medium`, then
+   import a seed into `threat_model_analyzer` and read the report. Questions it
+   answers: does the model supply the state fields; does it add bridging steps
+   or leave `STATE_GAP`s; what do wall time and completion/thinking tokens cost
+   compared with the pre-3c records.
+2. **Confirm the server deadline moved.** A `high`-thinking run on the
+   telemetry map: completing past 120 s, or a 504 near 180 s, means
+   `X-Server-Timeout` is honoured; a 504 still near 110–120 s means Google caps
+   it.
+3. **Phase 3b** — run-group summary, keyed on (component, technique), one
+   representative variant per recurring path, now able to report the
+   assumptions each recurring path rests on.
+4. **Phase 4** — `normalize_flow_map` (unstated control status → `partial`,
+   flagged), the plugin README, a deliberately malformed example map, and the
+   first live run on the OT map.
+
+Open, not scheduled: streaming with `include_thoughts` (for idle-connection
+drops, not the deadline); the 727 s worst-case retry time against the 600 s
+`long` timeout class; `pip install -e .` from this checkout; the projector
+manifest still reads 0.2.0 across Phases 2–3c (run records carry the git SHA);
+the visualizer does not show the projection notice; the seed's `entry_vectors`
+holds a component id where `target_assets` holds names.

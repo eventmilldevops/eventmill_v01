@@ -274,8 +274,9 @@ think it says:
 - **Declaring flows in one direction when traffic goes both ways.** If a
   response channel is usable, set `bidirectional: true`.
 - **Too many components.** Prompt size grows with the map, and a large map at a
-  high `thinking_level` will find the provider's gateway deadline. Shrink the
-  map before reducing reasoning depth.
+  high `thinking_level` can run into the request deadline — 180 s, set by the
+  client timeout in `framework/llm/client.py`, which the SDK also sends to Google
+  as the server deadline. Shrink the map before reducing reasoning depth.
 
 ## Notes on mitigation ids
 
@@ -320,6 +321,25 @@ print('valid')
 "
 ```
 
+## What a projection's assumptions say about your map
+
+Every projected step lists up to three **assumptions** — things that must be
+true for the step to work and that the map does not state. Read them as
+feedback on the map as much as on the estate:
+
+- An assumption the map *could* have answered — "the API accepts tokens from
+  the web tier", "the database credential is stored on the API host" — is a
+  missing flow attribute, authentication method or control. Add it and the next
+  projection either stops assuming it or routes elsewhere.
+- An assumption only the real system can answer — "the exploited route is not
+  filtered by the WAF" — is a test to run. The analyzer's report collects these
+  under **Assumptions to Test**.
+
+A **`STATE_GAP`** — a step that needs access no earlier step provided — is
+usually the model skipping a bridge, but it can also mean the map omits the
+flow or credential store that would supply it. Check the map before blaming the
+model.
+
 ---
 
 # Recording runs
@@ -348,7 +368,7 @@ is ever overwritten. In a `--runs` loop the attack graph and scenario seed are
 written once, for the first successful run; every run still gets its own record.
 
 A run that fails is recorded too, with no `sampled` block. That is deliberate —
-a map that reliably hits the gateway deadline at a given reasoning depth is a
+a map that reliably hits the request deadline at a given reasoning depth is a
 finding about the map, and it vanishes if only successes are kept. Inside a loop
 a dead run does not stop the ones after it.
 
@@ -366,8 +386,12 @@ Five blocks. The split between `deterministic` and `sampled` is the whole point:
 - **`deterministic`** — entry ranking, routes, unreachable crown jewels,
   validation warnings. Fixed by the flow map hash. If two records share a hash
   and differ here, something is wrong with the tool, not the model.
-- **`sampled`** — the model's paths and nothing else. `technique_id` is a
-  first-class field, so a one-off is something you spot by scanning a column.
+- **`sampled`** — the model's paths. `technique_id` is a first-class field, so a
+  one-off is something you spot by scanning a column. Since record schema
+  version 2 each step also carries its state — access before and after,
+  precondition, result, assumptions — and the continuity check's verdict, so two
+  runs can be compared on *why* a path works, not only *which* techniques it
+  uses.
 - **`outcome`** — status, the provider's verbatim stop reason, token usage
   including thinking tokens, and wall time.
 
