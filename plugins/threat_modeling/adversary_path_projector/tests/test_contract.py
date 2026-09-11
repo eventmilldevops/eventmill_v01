@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1125,6 +1126,12 @@ class TestProjectPathsHappyPath:
             {"artifact_id": "art_graph", "format": "mermaid"}, ctx)
         assert rendered.ok, rendered.message
         assert "T1190" in rendered.result["visualization"]
+
+        # The visualizer once hardcoded ./workspace and wrote this test's
+        # diagrams into the operator's real artifact directory.
+        workspace = os.environ["EVENTMILL_WORKSPACE"]
+        written = [a["file_path"] for a in rendered.output_artifacts or []]
+        assert written and all(p.startswith(workspace) for p in written)
 
 
 class TestPhaseCRejection:

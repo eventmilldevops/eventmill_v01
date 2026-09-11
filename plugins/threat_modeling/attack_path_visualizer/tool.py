@@ -985,7 +985,11 @@ class AttackPathVisualizer:
             if dag:
                 # Multi-path DAG rendering
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                art_dir = Path("workspace") / "artifacts"
+                # Same resolution as every other plugin: a hardcoded relative
+                # path ignored EVENTMILL_WORKSPACE and wrote wherever the
+                # process happened to start.
+                workspace = Path(os.environ.get("EVENTMILL_WORKSPACE", "./workspace"))
+                art_dir = workspace / "artifacts"
                 art_dir.mkdir(parents=True, exist_ok=True)
 
                 if fmt in ("ascii", "both"):

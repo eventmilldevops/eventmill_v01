@@ -34,6 +34,12 @@ Follows `2026-09-10-projection-run-records.md`.
 6. Relabelled every projected output so no reader can take it for a confirmed
    attack or a likelihood assessment: "Projected from threat intelligence, not
    a confirmed attack path."
+7. Stopped the test suite writing fixture output into the real
+   `workspace/artifacts`, and fixed the `attack_path_visualizer` bug that made
+   one of those leaks impossible to redirect.
+8. Proposed Phase 3c — step state — in response to a review criticism that
+   paths lack the attack state connecting their steps. Design only; awaiting
+   approval.
 
 ## Scope, as agreed
 
@@ -264,6 +270,84 @@ implemented preventive control sits on the component; saying so starts the
 control-quality conversation instead of implying it is settled. The JSON field
 keeps its name, `blocking_controls`. `DETECT ONLY`, `UNPROTECTED` and
 *Detecting Controls* are unchanged.
+
+## Changes — test output no longer leaks into the real workspace
+
+A review criticism cited `workspace/artifacts/adversary_path_graph_20260911_125838.json`
+as "the latest artifact". It was not model output: its steps are the projector
+test suite's scripted `_good_projection()` reply, word for word. The tests had
+been writing into the operator's real artifact directory, where fixture output
+is indistinguishable from a genuine projection by filename.
+
+At the time of the fix, of the files in `workspace/artifacts`:
+
+| Kind | Test output | Real |
+|---|---|---|
+| `adversary_path_graph_*` | 37 | 7 |
+| `adversary_scenario_seed_*` | 37 | 7 |
+| `attack_path_mermaid_*` (`.md` + `.mmd`) | 66 | 2 |
+
+Two more diagrams were written by the first verification run, below — 142 test
+files in all. The folder is gitignored, so none of it reached the repository.
+All 142 were deleted, selected by filename pattern **and** fixture content
+(the `portal-to-db` path or its scripted rationale). The 18 files left are the
+genuine 2026-09-09 runs — Scattered Spider, Fox Kitten and APT29 graphs and
+seeds, two auto-persisted `adversary_path_projector_*` results, one Mermaid
+pair — plus nothing else from the tools.
+
+Two causes:
+
+- **No workspace isolation.** Plugins and the shell resolve
+  `$EVENTMILL_WORKSPACE`, falling back to `./workspace`. Only a handful of tests
+  redirected it; the rest wrote to the real directory. A new repo-root
+  `conftest.py` gives every test — in `tests/` and `plugins/` alike — a throwaway
+  workspace through an autouse fixture. A test that sets its own still wins.
+  The existing `tests/conftest.py` could not do this: it only applies beneath
+  `tests/`. Every workspace read in the codebase happens at call time, not at
+  import, so the fixture reaches all of them.
+- **`attack_path_visualizer` ignored `EVENTMILL_WORKSPACE` entirely.** It wrote
+  to a hardcoded `Path("workspace") / "artifacts"`, relative to wherever the
+  process started. After the fixture landed, one run still wrote two diagrams —
+  from the projector's end-to-end test that renders through the visualizer. This
+  is a production bug, not only a test one: the visualizer's output landed in
+  the right place on the container only because `/app` happens to be the
+  working directory. It now resolves the workspace the same way as every other
+  plugin. The end-to-end test asserts the rendered files land in the test
+  workspace, so the regression cannot return silently.
+
+Verified: a full run (888 passed) wrote **zero** files to `workspace/artifacts`,
+checked by timestamp against a marker taken before the run.
+
+## Proposed — Phase 3c: step state
+
+A review of the output criticised the path format as **under-specified, not
+excessively speculative**: it records technique → component → technique →
+component, but not the attack state connecting the steps, so a path can jump
+from exploiting a frontend to reusing an API token without saying how the token
+was obtained. The criticism is correct in principle — the live Volt Typhoon run
+did supply the bridging step (`portal:T1552`), but nothing asks for it, requires
+it or checks it.
+
+The design is in `docs/specs/adversary_path_projector_step_state.md`. In short:
+
+- The model supplies what cannot be computed: `precondition`,
+  `exploited_condition`, `result`, 1–3 `assumptions` (the test plan), and
+  `access_before` / `access_after` from a **fixed seven-state vocabulary**.
+- The tool computes what it already holds: the `transition` flow, the
+  `controls_in_play`, and `actor_support` — refined to procedure level from
+  ATT&CK's procedure examples, with a `procedure_excerpt`. The review's own
+  proposal had the model supply these; they moved to the tool side for the same
+  reason `evidence` is never read from the reply.
+- A deterministic continuity check flags **`STATE_GAP`** when a step needs
+  access no earlier step provided — as a warning, like the kill-chain checks.
+- Path mapping — closed set, component and hop checks, tactic correction — is
+  unchanged.
+
+The procedure excerpt was checked against the lookup: ATT&CK's G1017/T1552
+example reads "obtained credentials insecurely stored on targeted network
+appliances", while the projection placed T1552 on a Django host — the kind of
+documented-versus-adapted gap the excerpt makes visible at a glance. Six
+decisions are listed at the end of the design for approval.
 
 ## Deliberately not changed
 
