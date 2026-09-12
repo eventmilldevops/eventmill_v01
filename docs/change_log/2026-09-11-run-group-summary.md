@@ -61,9 +61,16 @@ assumptions is the test plan for that route.
   counting across them would be meaningless. The message names the maps and
   actors it found.
 - **Automatically at the end of a `--runs` loop**, as `run_group_summary` on
-  the result. The loop already holds every record it wrote, so it answers its
-  own question without a second command and without depending on the records
-  still being registered.
+  the result *and* in the terminal output. The loop already holds every record
+  it wrote, so it answers its own question without a second command and without
+  depending on the records still being registered.
+
+  The loop's rendering is deliberately shorter than the group action's — three
+  routes rather than four, and no variance or assumption lines — because it
+  shares one 2000-character budget with the per-run lines above it. Both call
+  the same `_render_route_lines`, so the two readers get the same words for the
+  same thing; a three-run group renders in about 700 characters. It closes with
+  a pointer to `summarize_run_group` for the full breakdown.
 
 Records are found through registered artifact metadata rather than by scanning
 the workspace: the registry is the session's own account of what was written,
@@ -89,6 +96,72 @@ were asserting against a corpus that never existed. The fixture now uses
 `_assert_corpus_intact` helper fails any test whose fixture is silently
 rejected on the way in. The closed set was working exactly as designed; the
 test was wrong.
+
+## A group is built from batches, and that exposed a counting bug
+
+A run takes 40–75 s at `medium`, and the plugin's `long` timeout class caps one
+invocation at **600 s**, so three runs is comfortable and six in a single
+invocation is not. The intended way to a larger group is therefore several
+`--runs 3` invocations sharing a `--run_group` label — they accumulate, because
+records are selected by that label rather than by invocation.
+
+That did not work. `run_index` restarts at 1 in every invocation, and route
+counting deduplicated on it, so two batches of three read as runs 1,2,3,1,2,3
+and collapsed to three. Measured on a corpus where one route appeared in **four
+of six** runs:
+
+```
+before:  runs listed [1, 2]        run_count 2   recurring False
+after:   runs listed [1, 2, 4, 5]  run_count 4   recurring True
+```
+
+A false negative, and precisely in the workflow that exists to stay inside the
+timeout — the longer the group, the more likely it is to hide a recurring
+route.
+
+Runs are now numbered **within the group**, 1..N in the order they happened,
+and records are sorted by `created_at` so batches interleave correctly rather
+than by an index that means nothing across invocations. Each route's
+representative also carries the `record_file` it came from, so a reader can get
+from the summary back to the run without counting. The schema says why the
+group ordinal is not the record's own `run_index`.
+
+Two consequences worth knowing: the ordinals are group-relative, so run 4 in a
+summary is the first run of the second batch, not a record whose `run_index` is
+4; and each invocation still writes its own attack graph and scenario seed, so
+a two-batch group leaves two pairs of those.
+
+## What the first live six-run group changed
+
+Volt Typhoon against the claims portal, two batches of three, all six
+successful. It found two faults.
+
+**Reconnaissance was splitting a route in two.** The group reported three
+routes, the third being `cdn -> portal -> claims_api -> doc_store`. That is the
+second route with a Reconnaissance step against the CDN in front of it —
+nothing is compromised at the CDN and the attacker moves nowhere, so counting
+it as part of the route diluted a recurring finding into a recurring one plus a
+one-off.
+
+Route identity now skips **pre-intrusion tactics** — Reconnaissance and
+Resource Development — which are work done before or without a foothold. They
+remain in the representative variant's steps, where a reader can see them; they
+just no longer decide which route a path is. On the live shape:
+
+```
+before:  3 routes — db 6 variants, doc 4 variants, cdn+doc 1 variant
+after:   2 routes — portal -> claims_api -> claims_db  6 of 6 runs
+                    portal -> doc_store                5 of 6 runs
+```
+
+**Every state gap in the group was one labelling mistake.** All three routes
+carried exactly one, and each was a step naming what the attacker held on the
+*previous* component: the clearest was the API exploit claiming it needed
+`code_execution` on the API in order to gain code execution there. The check was
+right to flag a self-contradictory step; the prompt had never said which
+component `access_before` refers to. It now does, and says that the first time a
+path touches a component the answer is normally `network_reach`, because
+execution is what the step produces rather than what it needs.
 
 ## Tests
 

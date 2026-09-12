@@ -643,7 +643,7 @@
         "type": "object",
         "properties": {
           "route": { "type": "array", "items": { "type": "string" }, "description": "Component ids in order." },
-          "runs": { "type": "array", "items": { "type": "integer" }, "description": "run_index values that found this route." },
+          "runs": { "type": "array", "items": { "type": "integer" }, "description": "Which runs of the group found this route, numbered 1..N across the whole group in the order the runs happened. Deliberately not the record's own run_index, which restarts at 1 in each invocation: a group assembled from several batches — the way to cover many runs without one invocation hitting the timeout — would otherwise count repeated indices as one run." },
           "run_count": { "type": "integer" },
           "variant_count": { "type": "integer", "description": "Paths that walked this route, across all runs. More than one means near-duplicates were collapsed." },
           "recurring": { "type": "boolean", "description": "Found in at least half the successful runs, in a group of three or more. Says the route came back, not that it is likely or confirmed." },

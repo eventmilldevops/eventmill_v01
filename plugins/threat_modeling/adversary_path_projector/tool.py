@@ -1105,6 +1105,12 @@ STEP STATE — make every step reviewable by someone who will test it:
   network_reach, code_execution, privileged and data_access are held ON a
   component; credentials travel with the attacker. At the start the attacker
   holds only network_reach on the externally exposed components.
+- `access_before` means what they hold **on THIS step's component** — except
+  credentials, which they carry. The first time a path touches a component,
+  that is normally `network_reach`: you do not need code execution on a
+  component in order to exploit it, because code execution is what the step
+  produces. Saying otherwise describes what you hold somewhere else, and the
+  step will be flagged as unexplained.
 - `access_before` must be something an earlier step in the same path gave the
   attacker. If you cannot say how they came to hold it, add the step that gives
   it to them, using a technique from the set. If the set has no technique for
@@ -2246,16 +2252,31 @@ def _build_scenario_seeds(
 MIN_RUNS_FOR_RECURRENCE = 3
 
 
+# Pre-intrusion tactics: work done before, or without, a foothold. A step like
+# Reconnaissance against a CDN compromises nothing and moves the attacker
+# nowhere, so counting the component as part of the route splits one recurring
+# route in two — which is what a live six-run group did, reporting
+# cdn -> portal -> claims_api -> doc_store as distinct from
+# portal -> claims_api -> doc_store.
+PRE_INTRUSION_TACTICS = frozenset({"Reconnaissance", "Resource Development"})
+
+
 def _route_signature(path: dict[str, Any]) -> tuple[str, ...]:
-    """The components a path visits, consecutive repeats collapsed.
+    """The components a path takes a foothold on, consecutive repeats collapsed.
 
     Route identity is the way through the architecture, not the prose and not
     the exact technique list: two runs that enter at the portal, work through
     the API and read the document store found the same way in, even when they
     choose different techniques along it.
+
+    Pre-intrusion steps are skipped — see PRE_INTRUSION_TACTICS. They stay in
+    the representative variant's steps, where a reader can see them; they just
+    do not decide which route a path is.
     """
     route: list[str] = []
     for step in path.get("steps", []):
+        if str(step.get("tactic", "") or "") in PRE_INTRUSION_TACTICS:
+            continue
         component = str(step.get("component_id", "") or "")
         if component and (not route or route[-1] != component):
             route.append(component)
@@ -2310,18 +2331,23 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
     successful = [r for r in records if r.get("sampled")]
     run_total = len(records)
 
+    # Runs are numbered within the group, never by the run_index a record
+    # carries: that restarts at 1 in every invocation, so a group built from two
+    # batches of three would read 1,2,3,1,2,3 and count six runs as three —
+    # under-counting recurrence exactly when a long group is split to stay
+    # inside the timeout. The ordinal is for the reader; identity is the record.
     routes: dict[tuple[str, ...], list[dict[str, Any]]] = {}
-    for record in successful:
-        run_index = record["run"].get("run_index", 0)
-        seen_here: set[tuple[str, ...]] = set()
+    for ordinal, record in enumerate(successful, start=1):
         for path in record["sampled"].get("paths", []):
             signature = _route_signature(path)
             if not signature:
                 continue
-            routes.setdefault(signature, []).append(
-                {"run_index": run_index, "path": path}
-            )
-            seen_here.add(signature)
+            routes.setdefault(signature, []).append({
+                "run_index": ordinal,
+                "run_id": record["run"].get("run_id", ""),
+                "record_file": record["run"].get("record_file", ""),
+                "path": path,
+            })
 
     # Half the successful runs, rounded up: a route in two of three recurs.
     threshold = (len(successful) + 1) // 2
@@ -2352,6 +2378,7 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
             "recurring": countable and len(runs_with_route) >= threshold,
             "representative": {
                 "run_index": chosen["run_index"],
+                "record_file": chosen.get("record_file", ""),
                 "path_id": chosen["path"].get("path_id", ""),
                 "description": chosen["path"].get("description", ""),
                 "steps": steps,
@@ -2382,6 +2409,54 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
         "recurring_route_count": sum(1 for s in summaries if s["recurring"]),
         "routes": summaries,
     }
+
+
+def _render_route_lines(
+    group: dict[str, Any], limit: int, detail: bool
+) -> list[str]:
+    """Route lines for a summary, shared by the group action and the loop.
+
+    Both readers need the same words for the same thing, and every count says
+    what it is out of: "recurring" on its own is what gets mistaken for a
+    verdict.
+    """
+    routes = group.get("routes", [])
+    succeeded = group.get("succeeded", 0)
+    lines: list[str] = []
+    if routes and not group.get("recurrence_countable"):
+        lines.append(
+            f"Fewer than {MIN_RUNS_FOR_RECURRENCE} successful runs, so nothing "
+            f"is called recurring — the counts are all there is."
+        )
+    for route in routes[:limit]:
+        representative = route["representative"]
+        hops = " -> ".join(
+            f"{s['component_id']}:{s['technique_id']}"
+            for s in representative.get("steps", [])
+        )
+        label = "recurring" if route["recurring"] else "one-off"
+        lines.append(
+            f"  [{label}, {route['run_count']}/{succeeded} run(s), "
+            f"{route['variant_count']} variant(s)] "
+            f"{' -> '.join(route['route'])}"
+        )
+        lines.append(
+            f"    representative (run {representative['run_index']}): {hops}"
+        )
+        if detail and route["varying_pairs"]:
+            lines.append(
+                f"    {len(route['stable_pairs'])} step(s) in most variants, "
+                f"{len(route['varying_pairs'])} varied between runs"
+            )
+        if detail and (route["state_gaps"] or route["assumptions"]):
+            lines.append(
+                f"    {len(route['assumptions'])} assumption(s) to test; "
+                f"{route['state_gaps']} state gap(s) on this variant"
+            )
+    remaining = len(routes) - limit
+    if remaining > 0:
+        lines.append(f"  ... {remaining} more route(s).")
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -3434,7 +3509,12 @@ class AdversaryPathProjector:
                 ),
             )
 
-        records.sort(key=lambda r: r["run"].get("run_index", 0))
+        # By when they ran, so batches added to a group over several
+        # invocations number in the order they happened rather than
+        # interleaving on a per-invocation index.
+        records.sort(key=lambda r: (
+            r["run"].get("created_at", ""), r["run"].get("run_index", 0)
+        ))
         return records, None
 
     def _summarize_run_group_action(
@@ -3763,6 +3843,22 @@ class AdversaryPathProjector:
                 + ", ".join(f"{c} x{n}" for c, n in sorted(failures.items()))
                 + "."
             )
+        # The loop already counted its own routes, so the terminal shows what
+        # the group found rather than only what it wrote. Fewer routes and less
+        # detail than the group action: this has per-run lines above it and one
+        # 2000-character budget to share.
+        group = data.get("run_group_summary") or {}
+        if group.get("routes"):
+            lines.append(
+                f"{group.get('route_count', 0)} distinct route(s), "
+                f"{group.get('recurring_route_count', 0)} recurring:"
+            )
+            lines.extend(_render_route_lines(group, limit=3, detail=False))
+            lines.append(
+                f"Full breakdown: summarize_run_group --run_group "
+                f"{data.get('run_group', '?')}."
+            )
+
         lines.append(
             f"Records written per run; compare them directly. {PROJECTION_NOTICE}"
         )
@@ -3777,7 +3873,6 @@ class AdversaryPathProjector:
         out of, because "recurring" on its own is the kind of word a reader
         can take for a verdict.
         """
-        routes = data.get("routes", [])
         succeeded = data.get("succeeded", 0)
         lines = [
             f"{data.get('actor', '?')} vs {data.get('application', '?')}, group "
@@ -3787,40 +3882,7 @@ class AdversaryPathProjector:
             f"{data.get('route_count', 0)} distinct route(s), "
             f"{data.get('recurring_route_count', 0)} recurring."
         ]
-        if not data.get("recurrence_countable"):
-            lines.append(
-                f"Fewer than {MIN_RUNS_FOR_RECURRENCE} successful runs, so "
-                f"nothing is called recurring — the counts below are all there "
-                f"is."
-            )
-
-        for route in routes[:4]:
-            representative = route["representative"]
-            hops = " -> ".join(
-                f"{s['component_id']}:{s['technique_id']}"
-                for s in representative.get("steps", [])
-            )
-            label = "recurring" if route["recurring"] else "one-off"
-            lines.append(
-                f"  [{label}, {route['run_count']}/{succeeded} run(s), "
-                f"{route['variant_count']} variant(s)] "
-                f"{' -> '.join(route['route'])}"
-            )
-            lines.append(f"    representative (run {representative['run_index']}): {hops}")
-            if route["varying_pairs"]:
-                lines.append(
-                    f"    {len(route['stable_pairs'])} step(s) in most variants, "
-                    f"{len(route['varying_pairs'])} varied between runs"
-                )
-            if route["state_gaps"] or route["assumptions"]:
-                lines.append(
-                    f"    {len(route['assumptions'])} assumption(s) to test; "
-                    f"{route['state_gaps']} state gap(s) on this variant"
-                )
-        remaining = len(routes) - 4
-        if remaining > 0:
-            lines.append(f"  ... {remaining} more route(s) in the full result.")
-
+        lines.extend(_render_route_lines(data, limit=4, detail=True))
         lines.append(PROJECTION_NOTICE)
         return "\n".join(lines)
 

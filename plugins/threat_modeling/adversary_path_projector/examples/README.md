@@ -425,13 +425,22 @@ run adversary_path_projector --action summarize_run_group --run_group stepstate-
 ```
 
 No LLM. It counts how often each **route** recurs across the group's records
-and shows one variant of each. A `--runs` loop also summarises itself, as
-`run_group_summary` on the result, so a single invocation answers its own
-question.
+and shows one variant of each.
 
-- A **route** is the components a path visits, consecutive repeats collapsed:
-  `portal -> claims_api -> doc_store`. Two runs that came the same way with
-  different techniques found one route, not two.
+A `--runs` loop already prints the same thing for the runs it just made, and
+carries it on the result as `run_group_summary`, so a single invocation answers
+its own question. The loop's version is shorter — three routes, no variance or
+assumption lines — because it shares one summary with the per-run detail above
+it, and it ends with the command below for the full breakdown. Run that command
+when you want every route, or when a group spans several invocations.
+
+- A **route** is the components a path takes a foothold on, consecutive repeats
+  collapsed: `portal -> claims_api -> doc_store`. Two runs that came the same
+  way with different techniques found one route, not two. Reconnaissance and
+  Resource Development steps are skipped, because scanning a CDN compromises
+  nothing and moves the attacker nowhere — a path that looks around first is
+  the same route as one that does not. Those steps still appear in the
+  representative variant.
 - **Recurring** means found in at least half the *successful* runs, in a group
   of three or more. Fewer than three and nothing is called recurring — the
   counts are still there, and the summary says why. Every count is reported out
@@ -444,10 +453,28 @@ question.
 - Each route carries the representative's **assumptions** and its state-gap
   count — the test plan for that route.
 
-Two things to know. Records are found through the artifacts registered in **this
-session**, so a group written before the last `new`, or in another session, is
-not visible. And a group that mixes flow maps or actors is refused rather than
-counted: the same route against two estates is not the same finding.
+**Build a big group from small batches.** A run takes roughly 40–75 s at
+`medium`, and one invocation is capped at 600 s by the `long` timeout class, so
+three runs at a time is comfortable and six in one go is not. Run `--runs 3`
+several times with the same `--run_group` and the records accumulate: a second
+batch of three gives a six-run group, counted as six.
+
+```
+run adversary_path_projector --action project_paths --threat_actor "Volt Typhoon" --file_path plugins/threat_modeling/adversary_path_projector/examples/claims_portal_flow_map.json --runs 3 --run_group phase3b-claims
+# ...again, same label...
+run adversary_path_projector --action summarize_run_group --run_group phase3b-claims
+```
+
+Runs are numbered across the whole group in the order they happened, so run 4
+of a six-run summary is the first run of the second batch. Each invocation
+writes its own attack graph and scenario seed, so expect a pair of those per
+batch.
+
+Two more things to know. Records are found through the artifacts registered in
+**this session**, so a group written before the last `new`, or in another
+session, is not visible. And a group that mixes flow maps or actors is refused
+rather than counted: the same route against two estates is not the same
+finding.
 
 For anything the summary does not answer, comparison is still by eye: open two
 records from the same `run_group` and read the `sampled` blocks against each

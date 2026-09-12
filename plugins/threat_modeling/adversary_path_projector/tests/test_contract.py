@@ -2362,6 +2362,101 @@ class TestRunGroupSummary:
             _summarize_group(plugin_instance, context))
         assert f"Fewer than {_tool_mod.MIN_RUNS_FOR_RECURRENCE}" in summary
 
+    def test_reconnaissance_does_not_make_a_separate_route(self):
+        """A live six-run group reported cdn -> portal -> claims_api ->
+        doc_store as distinct from portal -> claims_api -> doc_store, because
+        one variant opened with Reconnaissance against the CDN. Nothing is
+        compromised at the CDN, so that is the same route with a look around
+        first."""
+        recon_first = {"steps": [
+            {"tactic": "Reconnaissance", "component_id": "cdn",
+             "technique_id": "T1590.006"},
+            {"tactic": "Initial Access", "component_id": "portal",
+             "technique_id": "T1190"},
+            {"tactic": "Collection", "component_id": "doc_store",
+             "technique_id": "T1005"},
+        ]}
+        straight_in = {"steps": [
+            {"tactic": "Initial Access", "component_id": "portal",
+             "technique_id": "T1190"},
+            {"tactic": "Collection", "component_id": "doc_store",
+             "technique_id": "T1005"},
+        ]}
+        assert _tool_mod._route_signature(recon_first) == ("portal", "doc_store")
+        assert (_tool_mod._route_signature(recon_first)
+                == _tool_mod._route_signature(straight_in))
+
+        def record(index, path):
+            return {
+                "run": {"run_index": index, "run_id": f"r{index}",
+                        "run_group": "g", "flow_map_sha256": "h",
+                        "application": "App", "created_at": f"2026-09-12T00:0{index}:00",
+                        "actor_resolved": {"name": "VT"},
+                        "record_file": f"rec{index}.json"},
+                "outcome": {"status": "ok"},
+                "sampled": {"paths": [path]},
+            }
+
+        out = _tool_mod._summarize_run_group([
+            record(1, straight_in), record(2, recon_first),
+            record(3, straight_in),
+        ])
+        assert out["route_count"] == 1
+        route = out["routes"][0]
+        assert route["run_count"] == 3 and route["variant_count"] == 3
+        assert route["recurring"] is True
+        # The recon step is still visible on whichever variant carried it.
+        assert ["cdn", "T1590.006"] in (
+            route["stable_pairs"] + route["varying_pairs"])
+
+    def test_prompt_says_access_before_is_on_this_component(
+            self, plugin_instance, sample_flow_map):
+        """Every state gap in the live groups was the model naming what it held
+        on the previous component."""
+        _, llm = _project(plugin_instance, sample_flow_map, _stateful_projection())
+        prompt = llm.prompts[0]
+        assert "on THIS step's component" in prompt
+        assert "code execution is what the step" in prompt
+
+    def test_two_batches_build_one_group(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """Runs accumulate in a group across invocations.
+
+        Three runs at a time is what fits comfortably inside the plugin
+        timeout, so a six-run group is two batches. Each invocation numbers its
+        own runs from 1, and counting on that index would see six runs as three
+        and call a route found in four of them a one-off.
+        """
+        context = FakeContext()
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        for _ in range(2):
+            context.llm_query = _SequencedLLM(
+                [_DB_ROUTE_A, _DB_ROUTE_A, _WEB_ONLY]
+            )
+            result = plugin_instance.execute({
+                "action": "project_paths", "threat_actor": "APT29",
+                "flow_map": sample_flow_map, "runs": 3, "run_group": "grp",
+            }, context)
+            assert result.ok, result.message
+        _assert_corpus_intact(context)
+
+        data = _summarize_group(plugin_instance, context).result
+        assert data["run_count"] == 6 and data["succeeded"] == 6
+        assert data["recurrence_threshold"] == 3
+
+        by_route = {tuple(r["route"]): r for r in data["routes"]}
+        db_route = by_route[("web", "api", "customer_db")]
+        # Two runs per batch found it: group runs 1, 2, 4 and 5.
+        assert db_route["runs"] == [1, 2, 4, 5]
+        assert db_route["run_count"] == 4
+        assert db_route["recurring"] is True
+        # Once per batch, so two of six — under the threshold.
+        assert by_route[("web",)]["run_count"] == 2
+        assert by_route[("web",)]["recurring"] is False
+        # The representative stays traceable to the record it came from.
+        assert db_route["representative"]["record_file"].startswith(
+            "adversary_projection_run_")
+
     def test_a_group_mixing_maps_is_refused(
             self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
         """The same route against two estates is not the same finding."""
@@ -2896,6 +2991,22 @@ class TestRunSummary:
         )
         summary = plugin_instance.summarize_for_llm(result)
         assert len(summary) < 2000
+
+    def test_the_loop_shows_its_routes_in_the_terminal(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """The loop counts its own group, so the operator should not have to
+        run a second command to see what it found."""
+        result, _ = _project_exporting(
+            plugin_instance, sample_flow_map,
+            [_DB_ROUTE_A, _DB_ROUTE_B, _WEB_ONLY], tmp_path, monkeypatch,
+            runs=3, run_group="grp",
+        )
+        summary = plugin_instance.summarize_for_llm(result)
+        assert "2 distinct route(s), 1 recurring" in summary
+        assert "web -> api -> customer_db" in summary
+        assert "[recurring, 2/3 run(s)" in summary
+        assert "summarize_run_group --run_group grp" in summary
+        assert len(summary) <= 2000
 
     def test_summary_reports_failures_by_code(self, plugin_instance,
                                               sample_flow_map, tmp_path,
