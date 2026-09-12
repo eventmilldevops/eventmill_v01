@@ -209,6 +209,7 @@ re-paying for it.
 | `normalize_flow_map` | light | Markdown / Mermaid / prose → canonical flow map JSON, saved as an artifact. |
 | `validate_flow_map` | none | Lint: dangling flow endpoints, unzoned components, no internet-exposed entry point, orphaned crown jewels. |
 | `project_paths` | heavy | The main action. Phases A → B → C. |
+| `summarize_run_group` | none | Count how often each route recurs across a group of recorded runs, and show one representative variant per route. Reads the records registered in this session. |
 
 ---
 
@@ -373,11 +374,16 @@ unchanged. Design: `docs/specs/adversary_path_projector_step_state.md`;
 change log `docs/change_log/2026-09-11-projection-step-state.md`. Landed before
 3b.
 
-**Phase 3b — run-group summary (agreed, not started).** For one `run_group`,
-count how often each path recurs across runs and show one representative
-variant per recurring path, not every near-duplicate. Recurring means present in
-at least half the runs of a group of three or more. Answers triage's second
-question — a credible path is sourced *and* recurs.
+**Phase 3b — run-group summary. DONE (2026-09-11).** `summarize_run_group`
+counts how often each route recurs across a group and shows one representative
+variant per route, not every near-duplicate; a `--runs` loop also summarises
+itself as `run_group_summary`. A route is the components a path visits with
+consecutive repeats collapsed, and recurrence is keyed on (component,
+technique) pairs, never on prose. Recurring means found in at least half the
+successful runs of a group of three or more; a smaller group counts routes and
+calls nothing recurring. Answers triage's second question — a credible path is
+sourced *and* recurs. Change log:
+`docs/change_log/2026-09-11-run-group-summary.md`.
 
 **Phase 4 — ergonomics and docs.** `normalize_flow_map`, README,
 `docs/change_log/` entry.

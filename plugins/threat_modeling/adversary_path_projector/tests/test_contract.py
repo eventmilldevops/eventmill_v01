@@ -34,11 +34,28 @@ class FakeArtifact:
     artifact_id: str
     artifact_type: str
     file_path: str
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
 class FakeContext:
     artifacts: list = field(default_factory=list)
+
+    def register_artifact(self, artifact_type, file_path, source_tool, metadata):
+        """Register as the shell does, so metadata reaches context.artifacts.
+
+        summarize_run_group finds a group's records through that metadata, so a
+        fake that drops it would let the action pass a test it cannot pass in
+        the shell.
+        """
+        artifact = FakeArtifact(
+            artifact_id=f"art_{Path(file_path).stem}",
+            artifact_type=artifact_type,
+            file_path=str(file_path),
+            metadata=dict(metadata or {}),
+        )
+        self.artifacts.append(artifact)
+        return artifact
 
 
 @pytest.fixture
@@ -1193,6 +1210,59 @@ class TestPhaseCRejection:
         assert result.ok
         assert "HOP_NOT_DECLARED" in {w["code"] for w in result.result["warnings"]}
 
+    def test_returning_the_way_it_came_is_not_an_undeclared_hop(
+            self, plugin_instance, sample_flow_map):
+        """Staging data back on a host the path already came from: the live
+        group-1 shape. The connection was opened in the declared direction, so
+        the return is defensible and the transition says how."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"] = [
+            {"technique_id": "T1190", "tactic": "Initial Access",
+             "component_id": "web", "rationale": "entry", "leads_to": ["T1078"]},
+            {"technique_id": "T1078", "tactic": "Persistence",
+             "component_id": "api", "rationale": "token reuse on the API",
+             "leads_to": ["T1005"]},
+            {"technique_id": "T1005", "tactic": "Collection",
+             "component_id": "web", "rationale": "stage the data back on the web host",
+             "leads_to": []},
+        ]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok, result.message
+        assert "HOP_NOT_DECLARED" not in {
+            w["code"] for w in result.result["warnings"]}
+        transition = _steps(result)[2]["transition"]
+        assert transition["return"] is True
+        assert transition["flow"] == "f1"
+        event = result.result["scenario_seeds"][0]["attack_sequence"][2]
+        assert event["transition"] == "back over flow f1: api -> web (https, authenticated)"
+
+    def test_a_jump_past_an_intermediate_component_is_still_flagged(
+            self, plugin_instance, sample_flow_map):
+        """The live group-2 shape: collecting on the database and appearing on
+        the web host, skipping the API the data would have to return through.
+        A path must not get from one node to another by skipping a hop."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"] = [
+            {"technique_id": "T1190", "tactic": "Initial Access",
+             "component_id": "web", "rationale": "entry", "leads_to": ["T1078"]},
+            {"technique_id": "T1078", "tactic": "Persistence",
+             "component_id": "api", "rationale": "token reuse on the API",
+             "leads_to": ["T1005"]},
+            {"technique_id": "T1005", "tactic": "Collection",
+             "component_id": "customer_db", "rationale": "read the records",
+             "leads_to": ["T1074.001"]},
+            {"technique_id": "T1005", "tactic": "Collection",
+             "component_id": "web", "rationale": "stage on the web host",
+             "leads_to": []},
+        ]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok, result.message
+        hops = [w for w in result.result["warnings"]
+                if w["code"] == "HOP_NOT_DECLARED"]
+        assert len(hops) == 1
+        assert "'customer_db' to 'web'" in hops[0]["message"]
+        assert _steps(result)[3]["transition"] is None
+
     def test_non_exposed_entry_is_flagged(self, plugin_instance, sample_flow_map):
         reply = _good_projection()
         reply["paths"][0]["steps"][0]["component_id"] = "customer_db"
@@ -1878,6 +1948,53 @@ class TestKillChainSequence:
         codes = {w["code"] for w in result.result["warnings"]}
         assert "LATE_INITIAL_ACCESS" in codes
 
+    def test_regression_on_a_new_component_is_not_flagged(self, plugin_instance,
+                                                          sample_flow_map):
+        """The live Volt Typhoon shape: a proxy on the entry host (Command and
+        Control, position 14) and then the stolen token on the next component
+        (Stealth, 7). A kill chain restarts per host, so arriving somewhere new
+        and doing early-stage work there is not backwards motion."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"] = [
+            {"technique_id": "T1190", "tactic": "Initial Access",
+             "component_id": "web", "rationale": "entry",
+             "leads_to": ["T1090.002"]},
+            {"technique_id": "T1090.002", "tactic": "Command and Control",
+             "component_id": "web", "rationale": "proxy on the entry host",
+             "leads_to": ["T1078"]},
+            {"technique_id": "T1078", "tactic": "Stealth",
+             "component_id": "api", "rationale": "stolen token on the API",
+             "leads_to": []},
+        ]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok, result.message
+        assert result.result["step_count"] == 3, result.result["rejections"]
+        codes = {w["code"] for w in result.result["warnings"]}
+        assert "KILL_CHAIN_REGRESSION" not in codes
+
+    def test_the_same_regression_on_one_component_still_flags(
+            self, plugin_instance, sample_flow_map):
+        """Scoped to the component, not switched off: the identical tactic pair
+        without the hop is still a late-stage action before its enabler."""
+        reply = _good_projection()
+        reply["paths"][0]["steps"] = [
+            {"technique_id": "T1190", "tactic": "Initial Access",
+             "component_id": "web", "rationale": "entry",
+             "leads_to": ["T1090.002"]},
+            {"technique_id": "T1090.002", "tactic": "Command and Control",
+             "component_id": "web", "rationale": "proxy on the entry host",
+             "leads_to": ["T1078"]},
+            {"technique_id": "T1078", "tactic": "Stealth",
+             "component_id": "web", "rationale": "token reuse on the same host",
+             "leads_to": []},
+        ]
+        result, _ = _project(plugin_instance, sample_flow_map, reply)
+        assert result.ok, result.message
+        regressions = [w for w in result.result["warnings"]
+                       if w["code"] == "KILL_CHAIN_REGRESSION"]
+        assert len(regressions) == 1
+        assert "on web" in regressions[0]["message"]
+
     def test_sequence_problems_reach_the_summary(self, plugin_instance,
                                                  sample_flow_map):
         """A warning nobody reads is not a warning."""
@@ -2078,6 +2195,265 @@ def _project_exporting(plugin, flow_map, replies, workspace, monkeypatch,
         "flow_map": flow_map, **payload,
     }, context)
     return result, llm
+
+
+def _route_reply(path_id: str, steps: list[tuple[str, str, str]]) -> dict[str, Any]:
+    """A reply of one path: (technique_id, tactic, component_id) per step."""
+    return {
+        "paths": [{
+            "path_id": path_id,
+            "description": f"Path {path_id}.",
+            "objective": "Reach the data.",
+            "steps": [
+                {"technique_id": technique, "tactic": tactic,
+                 "component_id": component,
+                 "rationale": f"{technique} on {component}.",
+                 "leads_to": []}
+                for technique, tactic, component in steps
+            ],
+        }],
+        "convergence_points": [],
+        "branch_points": [],
+    }
+
+
+# The same way in — web, api, customer_db — reached with slightly different
+# techniques each run, which is what a recurring route looks like in practice.
+_DB_ROUTE_A = _route_reply("db-a", [
+    ("T1190", "Initial Access", "web"),
+    ("T1078", "Persistence", "api"),
+    ("T1005", "Collection", "customer_db"),
+])
+# T1016.001 rather than a livelier-looking Discovery technique because it is in
+# APT29's documented set. T1083 is not, so Phase C rejected it and this variant
+# silently collapsed into the one above — a corpus that proved nothing.
+_DB_ROUTE_B = _route_reply("db-b", [
+    ("T1190", "Initial Access", "web"),
+    ("T1078", "Persistence", "api"),
+    ("T1016.001", "Discovery", "customer_db"),
+    ("T1005", "Collection", "customer_db"),
+])
+_WEB_ONLY = _route_reply("web-only", [
+    ("T1190", "Initial Access", "web"),
+    ("T1505.003", "Persistence", "web"),
+])
+
+
+def _summarize_group(plugin, context, run_group="grp"):
+    return plugin.execute(
+        {"action": "summarize_run_group", "run_group": run_group}, context
+    )
+
+
+def _assert_corpus_intact(context):
+    """No fixture step was rejected on the way in.
+
+    Phase C drops a technique outside the actor's set, so a fixture naming one
+    produces a corpus quietly missing the step under test — which is how two
+    tests here came to assert on variants that had collapsed into each other.
+    """
+    for artifact in context.artifacts:
+        if artifact.metadata.get("kind") != "projection_run":
+            continue
+        with open(artifact.file_path, encoding="utf-8") as handle:
+            record = json.load(handle)
+        rejections = (record.get("sampled") or {}).get("rejections", [])
+        assert not rejections, rejections
+
+
+class TestRunGroupSummary:
+    def _corpus(self, plugin, flow_map, replies, workspace, monkeypatch,
+                run_group="grp"):
+        result, _ = _project_exporting(
+            plugin, flow_map, replies, workspace, monkeypatch,
+            runs=len(replies), run_group=run_group,
+        )
+        assert result.ok, result.message
+        return result
+
+    def test_recurring_route_is_counted_and_shown_once(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """Two runs find the same way in with different techniques; one goes
+        elsewhere. That is one recurring route, not three findings."""
+        context = FakeContext()
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        llm = _SequencedLLM([_DB_ROUTE_A, _DB_ROUTE_B, _WEB_ONLY])
+        context.llm_query = llm
+        run = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "runs": 3, "run_group": "grp",
+        }, context)
+        assert run.ok, run.message
+        _assert_corpus_intact(context)
+
+        result = _summarize_group(plugin_instance, context)
+        assert result.ok, result.message
+        data = result.result
+        assert data["run_count"] == 3 and data["succeeded"] == 3
+        assert data["recurrence_threshold"] == 2
+        assert data["route_count"] == 2
+        assert data["recurring_route_count"] == 1
+
+        recurring, one_off = data["routes"]
+        assert recurring["route"] == ["web", "api", "customer_db"]
+        assert recurring["recurring"] is True
+        assert recurring["runs"] == [1, 2]
+        assert recurring["variant_count"] == 2
+        # The way in is stable; the extra step at the database is not.
+        assert ["web", "T1190"] in recurring["stable_pairs"]
+        assert ["api", "T1078"] in recurring["stable_pairs"]
+        assert ["customer_db", "T1016.001"] in recurring["varying_pairs"]
+        assert one_off["recurring"] is False and one_off["run_count"] == 1
+
+    def test_a_step_in_half_the_variants_is_not_stable(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """Two variants is the commonest shape, and a pair in one of them is
+        the variance the split exists to show — a strict majority, not half."""
+        context = FakeContext()
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        context.llm_query = _SequencedLLM([_DB_ROUTE_A, _DB_ROUTE_B])
+        plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "runs": 2, "run_group": "grp",
+        }, context)
+        _assert_corpus_intact(context)
+        route = _summarize_group(plugin_instance, context).result["routes"][0]
+        assert route["variant_count"] == 2
+        # In both variants:
+        assert ["web", "T1190"] in route["stable_pairs"]
+        assert ["customer_db", "T1005"] in route["stable_pairs"]
+        # In one of the two:
+        assert ["customer_db", "T1016.001"] in route["varying_pairs"]
+        assert ["customer_db", "T1016.001"] not in route["stable_pairs"]
+
+    def test_representative_is_one_variant_with_its_assumptions(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """A tie goes to the earliest run, so the same corpus always names the
+        same variant."""
+        context = FakeContext()
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        context.llm_query = _SequencedLLM([_DB_ROUTE_A, _DB_ROUTE_B])
+        plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "runs": 2, "run_group": "grp",
+        }, context)
+        route = _summarize_group(plugin_instance, context).result["routes"][0]
+        representative = route["representative"]
+        assert representative["run_index"] == 1
+        assert representative["path_id"] == "db-a"
+        assert len(representative["steps"]) == 3
+
+    def test_a_small_group_counts_but_calls_nothing_recurring(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """Two runs cannot establish recurrence, and must not imply they do."""
+        context = FakeContext()
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        context.llm_query = _SequencedLLM([_DB_ROUTE_A, _DB_ROUTE_B])
+        plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "runs": 2, "run_group": "grp",
+        }, context)
+        data = _summarize_group(plugin_instance, context).result
+        assert data["recurrence_countable"] is False
+        assert data["recurrence_threshold"] is None
+        assert data["recurring_route_count"] == 0
+        assert data["routes"][0]["run_count"] == 2
+        summary = plugin_instance.summarize_for_llm(
+            _summarize_group(plugin_instance, context))
+        assert f"Fewer than {_tool_mod.MIN_RUNS_FOR_RECURRENCE}" in summary
+
+    def test_a_group_mixing_maps_is_refused(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """The same route against two estates is not the same finding."""
+        context = FakeContext()
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        context.llm_query = _SequencedLLM([_DB_ROUTE_A])
+        plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "runs": 1, "export": True,
+            "run_group": "grp",
+        }, context)
+        other = json.loads(json.dumps(sample_flow_map))
+        other["application"] = "A different estate"
+        context.llm_query = _SequencedLLM([_DB_ROUTE_A])
+        plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": other, "runs": 1, "export": True, "run_group": "grp",
+        }, context)
+
+        result = _summarize_group(plugin_instance, context)
+        assert not result.ok
+        assert result.error_code == "INPUT_VALIDATION_FAILED"
+        assert "flow map" in result.message
+
+    def test_an_unknown_group_says_where_records_come_from(
+            self, plugin_instance):
+        result = _summarize_group(plugin_instance, FakeContext(), "never-ran")
+        assert not result.ok
+        assert result.error_code == "ARTIFACT_NOT_FOUND"
+        assert "--export" in result.message or "export" in result.message
+
+    def test_run_group_is_required(self, plugin_instance):
+        assert not plugin_instance.validate_inputs(
+            {"action": "summarize_run_group"}).ok
+        assert plugin_instance.validate_inputs(
+            {"action": "summarize_run_group", "run_group": "grp"}).ok
+
+    def test_the_loop_summarises_its_own_group(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """A --runs invocation answers its own question without a second call."""
+        context = FakeContext()
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        context.llm_query = _SequencedLLM([_DB_ROUTE_A, _DB_ROUTE_B, _WEB_ONLY])
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "runs": 3, "run_group": "grp",
+        }, context)
+        group = result.result["run_group_summary"]
+        assert group["recurring_route_count"] == 1
+        assert group["routes"][0]["route"] == ["web", "api", "customer_db"]
+
+    def test_a_failed_run_counts_toward_the_group_not_its_findings(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """A dead run is part of what the group cost, not what it found.
+
+        It also costs the group its recurrence claim: only a successful run can
+        find a route, so three runs with one failure leave two, and two cannot
+        establish that anything recurs.
+        """
+        context = FakeContext()
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        context.llm_query = _SequencedLLM([_DB_ROUTE_A, "not json at all",
+                                           _DB_ROUTE_B])
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "runs": 3, "run_group": "grp",
+        }, context)
+        assert result.ok
+        group = result.result["run_group_summary"]
+        assert group["run_count"] == 3
+        assert group["succeeded"] == 2 and group["failed"] == 1
+        assert group["recurrence_countable"] is False
+        assert group["recurrence_threshold"] is None
+        assert group["recurring_route_count"] == 0
+
+    def test_summary_is_under_the_cap_and_says_what_was_counted(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        context = FakeContext()
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        context.llm_query = _SequencedLLM([_DB_ROUTE_A, _DB_ROUTE_B, _WEB_ONLY])
+        plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "runs": 3, "run_group": "grp",
+        }, context)
+        summary = plugin_instance.summarize_for_llm(
+            _summarize_group(plugin_instance, context))
+        assert 0 < len(summary) <= 2000
+        assert "2 distinct route(s), 1 recurring" in summary
+        assert "web -> api -> customer_db" in summary
+        # Counts say what they are out of, so "recurring" cannot read as a verdict.
+        assert "2/3 run(s)" in summary
+        assert _tool_mod.PROJECTION_NOTICE in summary
 
 
 class TestCanonicalFlowMapHash:

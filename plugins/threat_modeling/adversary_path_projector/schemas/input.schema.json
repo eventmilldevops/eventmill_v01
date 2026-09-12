@@ -7,7 +7,8 @@
       "enum": [
         "profile_actor",
         "validate_flow_map",
-        "project_paths"
+        "project_paths",
+        "summarize_run_group"
       ],
       "description": "Action to perform. 'normalize_flow_map' is planned but not yet implemented."
     },
@@ -78,7 +79,7 @@
     "run_group": {
       "type": "string",
       "maxLength": 64,
-      "description": "Operator label tying a comparison set of runs together (project_paths). Free text; non-alphanumeric characters are replaced. Recorded in each run record and in artifact metadata, not used as a directory. Defaults to 'ungrouped'."
+      "description": "Operator label tying a comparison set of runs together (project_paths; required for summarize_run_group, where it selects the records to count). Free text; non-alphanumeric characters are replaced. Recorded in each run record and in artifact metadata, not used as a directory. Defaults to 'ungrouped' for project_paths. summarize_run_group reads the records registered in this session, so a group written before the last 'new', or in another session, is not visible."
     },
     "runs": {
       "type": "integer",

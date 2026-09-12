@@ -192,7 +192,14 @@ Breadth-first over the declared flows only. Nothing is inferred from zones,
 naming or component type — **if you did not declare the flow, it does not
 exist.**
 
-- Flows are directed. `bidirectional: true` opens the reverse edge.
+- Flows are directed. `bidirectional: true` opens the reverse edge, and is a
+  claim that the far end can initiate — see the common mistakes below.
+- A projected step may go **back** to a component the path already travelled
+  from, over the flow it arrived on, without a reverse flow being declared:
+  the attacker holds that component and the data returns over a connection
+  they opened. Such a step is marked `"return": true` and reads *"back over
+  flow f1: api -> web"*. A step landing anywhere else with no declared flow is
+  still flagged `HOP_NOT_DECLARED` — a path must not skip a hop point.
 - Routes are computed from every externally exposed component (`internet` or
   `partner`) to every crown jewel, shortest first.
 - Each route reports `hops`, `boundary_crossings` and `unauthenticated_hops`.
@@ -271,8 +278,14 @@ think it says:
 - **Marking everything `implemented`.** The projector reads control status
   closely and will route around your defences; a map that claims perfection just
   produces a projection that ignores it.
-- **Declaring flows in one direction when traffic goes both ways.** If a
-  response channel is usable, set `bidirectional: true`.
+- **Reaching for `bidirectional: true` to describe a response channel.** It
+  opens a full reverse edge, so it claims the far end can *initiate* back — an
+  attacker holding your database could then "reach" the API that queries it,
+  which adds reverse routes to every projection. An HTTP or S3 response is not
+  that. Set it only where the far end genuinely opens connections (an SSH or
+  management channel, a callback, a message bus consumer that connects out).
+  You do not need it for data coming back: a step returning to a component the
+  path already travelled from is allowed on its own, and says so.
 - **Too many components.** Prompt size grows with the map, and a large map at a
   high `thinking_level` can run into the request deadline — 180 s, set by the
   client timeout in `framework/llm/client.py`, which the SDK also sends to Google
@@ -405,9 +418,40 @@ Five blocks. The split between `deterministic` and `sampled` is the whole point:
 - **`outcome`** — status, the provider's verbatim stop reason, token usage
   including thinking tokens, and wall time.
 
-Comparison is by eye for now: open two records from the same `run_group` and
-read the `sampled` blocks against each other. When they disagree, the raw reply
-beside each record is what shows why.
+## Summarising a group
+
+```
+run adversary_path_projector --action summarize_run_group --run_group stepstate-medium
+```
+
+No LLM. It counts how often each **route** recurs across the group's records
+and shows one variant of each. A `--runs` loop also summarises itself, as
+`run_group_summary` on the result, so a single invocation answers its own
+question.
+
+- A **route** is the components a path visits, consecutive repeats collapsed:
+  `portal -> claims_api -> doc_store`. Two runs that came the same way with
+  different techniques found one route, not two.
+- **Recurring** means found in at least half the *successful* runs, in a group
+  of three or more. Fewer than three and nothing is called recurring — the
+  counts are still there, and the summary says why. Every count is reported out
+  of the runs it was found in ("2/3 run(s)"), because recurrence is evidence,
+  not a verdict.
+- The **representative** is the variant sharing the most (component, technique)
+  pairs with the others, ties going to the earliest run. `stable_pairs` are the
+  steps in a strict majority of that route's variants; `varying_pairs` are the
+  rest, which is sampling variance rather than a settled step.
+- Each route carries the representative's **assumptions** and its state-gap
+  count — the test plan for that route.
+
+Two things to know. Records are found through the artifacts registered in **this
+session**, so a group written before the last `new`, or in another session, is
+not visible. And a group that mixes flow maps or actors is refused rather than
+counted: the same route against two estates is not the same finding.
+
+For anything the summary does not answer, comparison is still by eye: open two
+records from the same `run_group` and read the `sampled` blocks against each
+other. When they disagree, the raw reply beside each record shows why.
 
 **One limitation worth knowing.** `model.model_configured` is the id the client
 was configured with, not the id the API response reports — the framework does
@@ -430,6 +474,7 @@ appropriate for your estate, keep `EVENTMILL_WORKSPACE` somewhere that is.
 |---|---|
 | Full schema, every field and enum | `../schemas/flow_map.schema.json` |
 | Run record schema | `../schemas/projection_run.schema.json` |
+| How routes are counted and a representative chosen | `../../../../docs/change_log/2026-09-11-run-group-summary.md` |
 | Design and the three projection phases | `../../../../docs/specs/adversary_path_projector.md` |
 | Plugin contract | `../../../../docs/specs/tool_plugin_spec.md` |
 | Control vocabulary this borrows | `threat_model_analyzer`'s `SecurityControl` |

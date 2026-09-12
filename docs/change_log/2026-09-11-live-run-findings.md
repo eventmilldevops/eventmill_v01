@@ -155,25 +155,174 @@ credential, and the late-Initial-Access fixture.
 `ruff` and `black` are still not installed in this environment; style was
 matched by hand.
 
-## Not verified
+## Measured: `stepstate-medium-2`
 
-**Every one of these four changes is unmeasured against a live model.** The
-next run is a repeat of the same three-run group on the **unchanged** map, so
-`flow_map_sha256` still matches and the comparison holds: does the model return
-more than one path, do the sequence warnings drop, and do the gap notes read
-better.
+The same three-run group, same actor, same map hash `03dbb641ee79`, run after
+the four changes. Three runs, three `STOP`, no truncation, no rejections.
 
-## Open, not changed
+| | Before (`stepstate-medium`) | After (`stepstate-medium-2`) |
+|---|---|---|
+| Paths per run | 1, 1, 1 | 2, 2, 1 |
+| Steps, total | 20 | 29 |
+| Crown jewels covered | `doc_store` only | both, in 2 of 3 runs |
+| Prompt tokens | 3,834 | 3,909 |
+| Completion, mean | 1,515 | 2,232 |
+| Thinking, mean | 4,790 | 4,226 |
+| Total tokens, mean | 10,139 | 10,368 |
+| Wall time, mean | 50.4 s | 52.7 s (37.8–74.1) |
 
-- **`git_sha` is empty in all three records.** It exists to tell code versions
-  apart, since the manifest has read 0.2.0 since Phase 2, and it is blank on
-  the container — most likely no `.git` in the image. Needs baking in at build
+**Breadth was nearly free.** Completion rose 47% and thinking fell 12%, so mean
+total tokens moved 2% and mean wall time 2.3 s. Completion per step is
+unchanged — 227 tokens before, 231 after — which confirms the single-path runs
+were never constrained by budget. The longest run, 74 s, is the most expensive
+this map has produced, and still well inside the 180 s deadline.
+
+**The route to `claims_db` is back.** It had not appeared in any of the four
+post-3c runs; it appears in 2 of 3 here, and one run reached it by a different
+entry — stolen SAML credentials at the portal rather than exploitation. Route
+recurrence across the group: `portal → claims_api → doc_store` in 3 of 3,
+`portal → claims_api → claims_db` in 2 of 3. Both recur under the Phase 3b
+rule, which now has a group worth summarising.
+
+**The gap classification works and is the most useful line the tool prints.**
+Six gaps: four *delegated access*, all naming `claims_api`, and two
+*reach-without-control*. The held-state list is now two items instead of six,
+with no `cdn` or `idp` noise. Four of six gaps say the same thing — **every
+route to a crown jewel in this estate depends on the API acting for the
+attacker** — which is a finding about the architecture, not about the model.
+
+**The Initial Access correction did not fire.** The model labelled the
+mid-chain T1078 steps `Stealth` itself in all three runs, so no step reached
+the new branch and there were no `LATE_INITIAL_ACCESS` warnings at all, against
+two runs carrying them before. The improvement is the model's, not
+demonstrably the correction's; **the new branch remains unexercised live.** The
+older correction path did fire once, on a reply that put the technique *name*
+in the tactic field ("tactic 'Valid Accounts' is not one this technique
+carries; using 'Stealth'").
+
+## Fix 5, after the measurement: the regression check is scoped to one component
+
+Run 3 produced the one warning this change log predicted and hoped not to see:
+
+```
+KILL_CHAIN_REGRESSION: Stealth regresses 7 kill-chain positions from the
+previous step
+```
+
+The tool corrected the tactic to `Stealth`, then warned about its own choice.
+
+The check compares kill-chain positions from `TACTIC_ORDER` and warns when a
+step falls more than six positions behind the one before it. `Command and
+Control` sits at position 14, so a step after C2 warns only when its tactic is
+at position 7 or lower — Stealth, Privilege Escalation, Persistence, Execution,
+Initial Access, Resource Development, Reconnaissance. Credential Access,
+Discovery, Lateral Movement and Collection after C2 are all inside the
+threshold and pass silently; run 1 shows it, with C2 followed by Credential
+Access and then Stealth and no warning at all. **An earlier draft of this entry
+claimed every step after C2 except Exfiltration and Impact would warn. That was
+wrong.**
+
+Volt Typhoon establishes the proxy early and works through it, so C2 followed
+by credential reuse — Stealth, at 7 — is this actor's normal shape, and that is
+the pairing that trips the check.
+
+**The first proposal — that a C2 step should not advance the kill-chain
+position — was rejected, and rightly.** C2 *is* a stage: an established channel
+persists and the attacker keeps acting through it, unlike a shell that dies
+with its parent. Treating it as concurrent background activity would have
+contradicted that.
+
+What was wrong is narrower. A regression only means something **within one
+foothold**. A kill chain restarts per host, so arriving at the next component
+and doing early-stage work there — presenting a stolen token at the API — is
+ordinary, not a late-stage action placed before the work that enables it, which
+is what the warning claims. The check now fires only when the step stays on the
+same component, and the message names it: "regresses 7 kill-chain positions
+from the previous step on portal".
+
+Two alternatives were dropped. Narrowing the warning to tactics that cannot
+recur collapses to nearly this same rule once Execution and Privilege
+Escalation are excluded as legitimately repeating per host. Raising
+`TACTIC_REGRESSION_THRESHOLD` is the bluntest option: it would hide real
+regressions, and would have to pass exactly the value in question.
+`LATE_INITIAL_ACCESS` still catches a second entry point and ignores components
+entirely, so a path that re-enters somewhere new is not lost.
+
+Tests: **918 passed**, two added — the live Volt Typhoon shape (proxy on the
+entry host, then the token on the API) no longer warning, and the identical
+tactic pair without the hop still warning exactly once. The three existing
+same-component regression tests are unchanged and still pass.
+
+## Fix 6: a path may come back the way it came, and nothing else
+
+The plan here was to edit the claims portal map — make f3 and f5 bidirectional
+so the staging steps stopped earning `HOP_NOT_DECLARED`. Looking at what
+`bidirectional` actually does changed that.
+
+`_build_adjacency` expands a bidirectional flow into a full reverse edge, which
+feeds reachability, the crown-jewel routes, the REACHABLE ROUTES block in the
+prompt, and the reach the continuity check derives. So `bidirectional: true` on
+f3 asserts that an attacker holding `claims_api` can **initiate** to `portal`,
+and on f5 that one holding `doc_store` can initiate to `claims_api`. An HTTP
+response channel grants no such thing. Applied consistently — "a response
+channel is usable" is true of f1, f3, f4 and f5 — the graph becomes nearly
+symmetric and direction stops meaning anything.
+
+It also would not have fixed the case that prompted it. Group 2's warning was
+`no declared flow from 'claims_db' to 'portal'`: two hops apart, with the API
+in between. No bidirectionality on f3 or f5 makes that hop declared, and it
+should stay flagged.
+
+The principle, from the user: **a claimed path must never get from one node to
+another by skipping a hop point — there should always be a path that can be
+explained or defended.** The miss was in the check, not the map. The hop check
+only ever compared consecutive steps, so a step returning to a component the
+path had come from read as an arrival somewhere new.
+
+Each path now records the hops it makes over declared flows. A step going back
+to the component it arrived from is allowed when **that exact edge was
+travelled by this path** — the attacker holds the component they left and the
+data returns over a connection they opened. The step's `transition` carries the
+flow it arrived on plus `"return": true`, and the report says so: *"back over
+flow f1: api -> web (https, authenticated)"*. A reader sees which connection is
+being used rather than silence.
+
+Everything else still warns. In particular, "a component the path already
+holds" was rejected as the rule: it would also excuse group 2's
+`claims_db → portal`, which is exactly the skipped hop the principle forbids —
+that data would have to return through the API, and the path does not say so.
+
+**The example map is unchanged.** Its flow directions are correct as written.
+
+Tests: **920 passed**, two added — the group-1 return-hop shape, asserting both
+the `return` marker and the rendered transition text; and the group-2 shape,
+asserting one `HOP_NOT_DECLARED` naming `customer_db` to `web` with a null
+transition. `test_undeclared_hop_is_flagged` still passes unchanged, because
+its first hop was never declared and so was never recorded as travelled.
+
+## Still open
+
+- **`git_sha` is empty in all six records** written on the container. It exists
+  to tell code versions apart, since the manifest has read 0.2.0 since Phase 2,
+  so while it is blank the records cannot separate a pre-fix run from a
+  post-fix one. Most likely no `.git` in the image; needs baking in at build
   time rather than reading at runtime.
+- **Whether a response channel should ever be modelled as a flow** is still
+  open in the abstract. Fix 6 handles the attacker returning along an edge they
+  travelled, which covers the cases seen live, but nothing models data flowing
+  back through an intermediate component the attacker never held — group 2's
+  `claims_db → portal` is correctly flagged and a reader still has to reason
+  out the return path themselves.
 - **The model's prose still contradicts the map**, calling the IAM-protected
   document store "unauthenticated" when it is flow f5 that is unauthenticated.
-  Prose is not validated by design; a `description` on f5 would likely stop it.
-- **The claims portal map declares f3 and f5 one-way.** Run 2 staged data back
-  on the portal and earned `HOP_NOT_DECLARED`; in reality both are
-  request/response. Editing the map changes its hash and starts a new baseline,
-  so it waits until after the re-measurement.
-- `TACTIC_REGRESSION_THRESHOLD`, as above.
+  Prose is not validated, by design; a `description` on f5 would likely stop
+  it.
+- **The wording fix is unobservable in a run record** — it lives in the graph
+  and seed artifacts and in the analyzer report. Covered by tests; not yet seen
+  in a live artifact. Importing a group-2 seed into `threat_model_analyzer`
+  would confirm it.
+- **The Initial Access correction is unexercised live**, as above.
+- **A forgiven gap flatters what follows.** In run 2 the last step of
+  `doc-store-unauth-access` reads `ok` only because the gap before it was
+  recorded and then treated as held. That is the report-once rule working as
+  designed, and worth knowing when reading a path end to end.

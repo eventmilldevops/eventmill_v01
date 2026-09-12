@@ -487,7 +487,7 @@
                     "access_after": { "enum": ["none", "network_reach", "code_execution", "user_credential", "service_credential", "privileged", "data_access", null], "description": "Model: what the attacker holds once the step succeeds." },
                     "assumptions": { "type": "array", "items": { "type": "string" }, "maxItems": 3, "description": "Model: what must be true that the flow map does not state — the things to test. Not validated." },
                     "control_note": { "type": "string", "description": "Model, optional: how the step contends with this component's controls." },
-                    "transition": { "type": ["object", "null"], "description": "From the flow map, never the reply: {entry, exposure} on the first step, the declared flow for a hop, null when the step stays on one component or the hop is undeclared." },
+                    "transition": { "type": ["object", "null"], "description": "From the flow map, never the reply: {entry, exposure} on the first step, the declared flow for a hop, null when the step stays on one component or the hop is undeclared. A step going back to a component this path already travelled from carries the flow it arrived on plus \"return\": true — the data returns over a connection the attacker opened, which is why it is not flagged as an undeclared hop." },
                     "controls_in_play": { "type": "array", "items": { "type": "object" }, "description": "From the flow map: controls on the component and on the arriving flow, with status." },
                     "actor_support": { "enum": ["procedure_documented", "technique_documented", "via_software"], "description": "Derived from ATT&CK, never the reply. procedure_documented = ATT&CK has a procedure example of this actor using the technique." },
                     "procedure_excerpt": { "type": "string", "description": "ATT&CK procedure example for this actor (or its tooling) and technique, trimmed; empty when none exists." },
@@ -615,6 +615,63 @@
     "thinking_level": {
       "type": "string",
       "description": "Reasoning depth the projection call actually used."
+    },
+    "run_group": {
+      "type": "string",
+      "description": "Operator label tying a comparison set of runs together."
+    },
+    "recurrence_threshold": {
+      "type": ["integer", "null"],
+      "description": "Runs a route must appear in to be called recurring — half the successful runs, rounded up. Null when the group has fewer than three successful runs, where recurrence means nothing."
+    },
+    "recurrence_countable": {
+      "type": "boolean",
+      "description": "False when the group is too small to call anything recurring; routes are still counted."
+    },
+    "route_count": {
+      "type": "integer",
+      "description": "Distinct routes across the group (summarize_run_group)."
+    },
+    "recurring_route_count": {
+      "type": "integer",
+      "description": "How many of those met the recurrence threshold."
+    },
+    "routes": {
+      "type": "array",
+      "description": "One entry per distinct route through the estate, recurring first (summarize_run_group). A route is the components a path visits with consecutive repeats collapsed, so two runs choosing different techniques along the same way in count as one route. Recurrence is keyed on (component, technique) pairs and never on prose, which varies between runs by design.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "route": { "type": "array", "items": { "type": "string" }, "description": "Component ids in order." },
+          "runs": { "type": "array", "items": { "type": "integer" }, "description": "run_index values that found this route." },
+          "run_count": { "type": "integer" },
+          "variant_count": { "type": "integer", "description": "Paths that walked this route, across all runs. More than one means near-duplicates were collapsed." },
+          "recurring": { "type": "boolean", "description": "Found in at least half the successful runs, in a group of three or more. Says the route came back, not that it is likely or confirmed." },
+          "representative": {
+            "type": "object",
+            "description": "The single variant shown for this route: the one with the most (component, technique) pairs in common with the others, ties going to the earliest run. Triage needs the distinct choices, not every near-duplicate.",
+            "properties": {
+              "run_index": { "type": "integer" },
+              "path_id": { "type": "string" },
+              "description": { "type": "string" },
+              "steps": { "type": "array", "items": { "type": "object" } }
+            }
+          },
+          "stable_pairs": { "type": "array", "items": { "type": "array", "items": { "type": "string" } }, "description": "[component, technique] pairs present in at least half this route's variants." },
+          "varying_pairs": { "type": "array", "items": { "type": "array", "items": { "type": "string" } }, "description": "Pairs that appeared in fewer — sampling variance rather than a settled step." },
+          "assumptions": { "type": "array", "items": { "type": "object" }, "description": "Assumptions carried by the representative variant, with the step each belongs to — the test plan for this route." },
+          "state_gaps": { "type": "integer", "description": "Steps of the representative variant whose continuity check reported a gap." }
+        }
+      }
+    },
+    "run_group_summary": {
+      "type": "object",
+      "description": "The same route summary, computed in-loop for a --runs invocation from the records it just wrote (project_paths). Same shape as the summarize_run_group result minus the identity fields."
+    },
+    "records": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Record filenames the summary was computed from (summarize_run_group)."
     }
   }
 }

@@ -48,7 +48,9 @@ from framework.reference_data.mitre_attack import (
 
 logger = logging.getLogger("eventmill.plugin.adversary_path_projector")
 
-ACTIONS = ("profile_actor", "validate_flow_map", "project_paths")
+ACTIONS = (
+    "profile_actor", "validate_flow_map", "project_paths", "summarize_run_group",
+)
 
 # Planned but not yet implemented; named so validate_inputs can say so.
 PLANNED_ACTIONS = ("normalize_flow_map",)
@@ -1613,13 +1615,19 @@ def _step_transition(
     component_id: str,
     flow: dict[str, Any] | None,
     components: dict[str, dict[str, Any]],
+    return_hop: bool = False,
 ) -> dict[str, Any] | None:
-    """How the attacker arrived at this step, from the map — never the reply."""
+    """How the attacker arrived at this step, from the map — never the reply.
+
+    A return hop names the flow the path arrived on, read backwards, and says
+    so: the reader should see that the step came back over a connection this
+    path opened rather than over a flow declared in that direction.
+    """
     if not previous:
         return {"entry": True, "exposure": components[component_id]["exposure"]}
     if flow is None:
         return None
-    return {
+    transition = {
         "flow": flow["id"],
         "from": previous,
         "to": component_id,
@@ -1627,6 +1635,9 @@ def _step_transition(
         "authenticated": flow["authenticated"],
         "crosses_boundary": flow["crosses_boundary"],
     }
+    if return_hop:
+        transition["return"] = True
+    return transition
 
 
 def _controls_in_play(
@@ -1698,9 +1709,10 @@ def _describe_transition(transition: dict[str, Any] | None) -> str:
         return f"entry point ({transition['exposure']}-exposed)"
     auth = "authenticated" if transition["authenticated"] else "unauthenticated"
     protocol = f"{transition['protocol']}, " if transition.get("protocol") else ""
+    direction = "back over flow" if transition.get("return") else "flow"
     return (
-        f"flow {transition['flow']}: {transition['from']} -> {transition['to']} "
-        f"({protocol}{auth})"
+        f"{direction} {transition['flow']}: {transition['from']} -> "
+        f"{transition['to']} ({protocol}{auth})"
     )
 
 
@@ -1805,6 +1817,10 @@ def _validate_projection(
         previous_component = ""
         previous_ordinal = 0
         held = _HeldState(entry_ids, adjacency)
+        # Hops this path actually made over declared flows. Going back the way
+        # it came is a connection the attacker opened and can defend; landing
+        # somewhere the path never travelled from is a jump, and stays flagged.
+        traversed: set[tuple[str, str]] = set()
         # Once a step omits what it yields, later gaps may be artefacts of the
         # omission rather than real — so later steps go unchecked, not flagged.
         chain_known = True
@@ -1856,11 +1872,22 @@ def _validate_projection(
             # flagged loudly and left for the analyst to judge.
             ordinal = tactic_ordinal(tactic)
             regression = previous_ordinal - ordinal
-            if previous_ordinal and regression > TACTIC_REGRESSION_THRESHOLD:
+            # Same component only. A kill chain restarts per host: arriving at
+            # the next component and doing early-stage work there is ordinary,
+            # not a late-stage action placed before its enabler. Volt Typhoon
+            # proxies from the entry host (C2, position 14) and then presents
+            # the stolen token on the next one (Stealth, 7), which read as a
+            # 7-position regression until this was scoped. A second entry point
+            # is caught by LATE_INITIAL_ACCESS, which ignores components.
+            if (
+                previous_ordinal
+                and component_id == previous_component
+                and regression > TACTIC_REGRESSION_THRESHOLD
+            ):
                 note = (
                     f"{tactic} regresses {regression} kill-chain positions from "
-                    f"the previous step — a late-stage action placed before the "
-                    f"work that enables it"
+                    f"the previous step on {component_id} — a late-stage action "
+                    f"placed before the work that enables it"
                 )
                 notes.append(note)
                 warnings.append(_issue("KILL_CHAIN_REGRESSION", note, location))
@@ -1881,17 +1908,23 @@ def _validate_projection(
                 notes.append(note)
                 warnings.append(_issue("ENTRY_NOT_EXPOSED", note, location))
 
-            if (
-                previous_component
-                and component_id != previous_component
-                and component_id not in adjacency.get(previous_component, [])
-            ):
-                note = (
-                    f"no declared flow from '{previous_component}' to "
-                    f"'{component_id}'"
-                )
-                notes.append(note)
-                warnings.append(_issue("HOP_NOT_DECLARED", note, location))
+            return_hop = False
+            if previous_component and component_id != previous_component:
+                if component_id in adjacency.get(previous_component, []):
+                    traversed.add((previous_component, component_id))
+                elif (component_id, previous_component) in traversed:
+                    # Back the way it came: the attacker holds the component it
+                    # left and the data returns over the connection they opened.
+                    # One reverse hop along an edge this path travelled, which a
+                    # reader can defend — not an arrival somewhere new.
+                    return_hop = True
+                else:
+                    note = (
+                        f"no declared flow from '{previous_component}' to "
+                        f"'{component_id}'"
+                    )
+                    notes.append(note)
+                    warnings.append(_issue("HOP_NOT_DECLARED", note, location))
 
             # Step state. The model's account of what the attacker holds is
             # checked against what earlier steps gave them. A gap is flagged,
@@ -1920,11 +1953,12 @@ def _validate_projection(
             else:
                 held.add(state["access_after"], component_id)
 
-            flow = (
-                edges.get((previous_component, component_id))
-                if previous_component and previous_component != component_id
-                else None
-            )
+            flow = None
+            if previous_component and previous_component != component_id:
+                flow = edges.get((previous_component, component_id))
+                if flow is None and return_hop:
+                    # The flow they arrived on, read backwards.
+                    flow = edges.get((component_id, previous_component))
 
             # Evidence is derived, never taken from the model — it cannot be
             # trusted to label the strength of its own source. actor_support
@@ -1975,7 +2009,8 @@ def _validate_projection(
                 "control_note": state["control_note"],
                 # From the map and ATT&CK, never from the reply:
                 "transition": _step_transition(
-                    previous_component, component_id, flow, components
+                    previous_component, component_id, flow, components,
+                    return_hop=return_hop,
                 ),
                 "controls_in_play": _controls_in_play(components[component_id], flow),
                 "actor_support": actor_support,
@@ -2197,6 +2232,159 @@ def _build_scenario_seeds(
 
 
 # ---------------------------------------------------------------------------
+# Run-group summary (Phase 3b)
+#
+# Projection is sampled, so one run cannot tell a finding from a one-off. A
+# group of runs over the same map can — but only if near-duplicates of one
+# route are collapsed: four flavours of vanilla is not four findings. Routes
+# are counted, and each recurring one is shown through the single variant most
+# typical of those seen.
+# ---------------------------------------------------------------------------
+
+# Below this, a group is too small for "recurs" to mean anything; routes are
+# still listed with their counts, and nothing is called recurring.
+MIN_RUNS_FOR_RECURRENCE = 3
+
+
+def _route_signature(path: dict[str, Any]) -> tuple[str, ...]:
+    """The components a path visits, consecutive repeats collapsed.
+
+    Route identity is the way through the architecture, not the prose and not
+    the exact technique list: two runs that enter at the portal, work through
+    the API and read the document store found the same way in, even when they
+    choose different techniques along it.
+    """
+    route: list[str] = []
+    for step in path.get("steps", []):
+        component = str(step.get("component_id", "") or "")
+        if component and (not route or route[-1] != component):
+            route.append(component)
+    return tuple(route)
+
+
+def _pair_set(path: dict[str, Any]) -> set[tuple[str, str]]:
+    """(component, technique) pairs in a path — what recurrence is keyed on.
+
+    Never prose: descriptions and rationales vary between runs by design, and
+    comparing them would make every run look unique.
+    """
+    return {
+        (str(s.get("component_id", "") or ""), str(s.get("technique_id", "") or ""))
+        for s in path.get("steps", [])
+        if s.get("technique_id")
+    }
+
+
+def _jaccard(left: set[Any], right: set[Any]) -> float:
+    union = left | right
+    return len(left & right) / len(union) if union else 1.0
+
+
+def _representative_index(variants: list[dict[str, Any]]) -> int:
+    """The variant most typical of the ones seen.
+
+    Highest mean overlap with the other variants on (component, technique)
+    pairs. Ties go to the earliest run, so the same corpus always names the
+    same representative.
+    """
+    if len(variants) == 1:
+        return 0
+    pairs = [_pair_set(v["path"]) for v in variants]
+    best_index, best_score = 0, -1.0
+    for index, own in enumerate(pairs):
+        others = [p for position, p in enumerate(pairs) if position != index]
+        score = sum(_jaccard(own, other) for other in others) / len(others)
+        if score > best_score:
+            best_index, best_score = index, score
+    return best_index
+
+
+def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Count routes across a group's records and pick one variant of each.
+
+    Records are expected to share a flow map and an actor; the caller checks
+    that, because a group that mixes them is an operator error rather than a
+    finding. Failed runs count toward the group's size but contribute no paths:
+    they are part of what the group cost, not part of what it found.
+    """
+    successful = [r for r in records if r.get("sampled")]
+    run_total = len(records)
+
+    routes: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for record in successful:
+        run_index = record["run"].get("run_index", 0)
+        seen_here: set[tuple[str, ...]] = set()
+        for path in record["sampled"].get("paths", []):
+            signature = _route_signature(path)
+            if not signature:
+                continue
+            routes.setdefault(signature, []).append(
+                {"run_index": run_index, "path": path}
+            )
+            seen_here.add(signature)
+
+    # Half the successful runs, rounded up: a route in two of three recurs.
+    threshold = (len(successful) + 1) // 2
+    countable = len(successful) >= MIN_RUNS_FOR_RECURRENCE
+
+    summaries: list[dict[str, Any]] = []
+    for signature, variants in routes.items():
+        runs_with_route = sorted({v["run_index"] for v in variants})
+        index = _representative_index(variants)
+        chosen = variants[index]
+        pairs_per_variant = [_pair_set(v["path"]) for v in variants]
+        # A strict majority, not half: with two variants a pair present in one
+        # of them is precisely the sampling variance this split exists to show,
+        # and calling it stable would leave varying_pairs permanently empty for
+        # the commonest group size.
+        stable = sorted(
+            pair for pair in set().union(*pairs_per_variant)
+            if sum(1 for pairs in pairs_per_variant if pair in pairs)
+            * 2 > len(variants)
+        )
+        varying = sorted(set().union(*pairs_per_variant) - set(stable))
+        steps = chosen["path"].get("steps", [])
+        summaries.append({
+            "route": list(signature),
+            "runs": runs_with_route,
+            "run_count": len(runs_with_route),
+            "variant_count": len(variants),
+            "recurring": countable and len(runs_with_route) >= threshold,
+            "representative": {
+                "run_index": chosen["run_index"],
+                "path_id": chosen["path"].get("path_id", ""),
+                "description": chosen["path"].get("description", ""),
+                "steps": steps,
+            },
+            "stable_pairs": [list(pair) for pair in stable],
+            "varying_pairs": [list(pair) for pair in varying],
+            "assumptions": [
+                {"technique_id": s.get("technique_id", ""),
+                 "component_id": s.get("component_id", ""),
+                 "assumption": assumption}
+                for s in steps for assumption in (s.get("assumptions") or [])
+            ],
+            "state_gaps": sum(1 for s in steps if s.get("state_check") == "gap"),
+        })
+
+    # Recurring first, then by how many runs found it, then by route, so the
+    # reader meets the findings before the one-offs and the order is stable.
+    summaries.sort(
+        key=lambda s: (not s["recurring"], -s["run_count"], s["route"])
+    )
+    return {
+        "run_count": run_total,
+        "succeeded": len(successful),
+        "failed": run_total - len(successful),
+        "recurrence_threshold": threshold if countable else None,
+        "recurrence_countable": countable,
+        "route_count": len(summaries),
+        "recurring_route_count": sum(1 for s in summaries if s["recurring"]),
+        "routes": summaries,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Tool implementation
 # ---------------------------------------------------------------------------
 
@@ -2266,6 +2454,10 @@ class AdversaryPathProjector:
             if "flow_map" in payload and not has_inline:
                 errors.append("'flow_map' must be an object")
 
+        if action == "summarize_run_group":
+            if not str(payload.get("run_group", "") or "").strip():
+                errors.append("'run_group' is required for summarize_run_group")
+
         if action == "project_paths":
             max_paths = payload.get("max_paths", 3)
             if not isinstance(max_paths, int) or isinstance(max_paths, bool):
@@ -2299,6 +2491,8 @@ class AdversaryPathProjector:
                 return self._validate_flow_map(payload, context)
             if action == "project_paths":
                 return self._project_paths(payload, context)
+            if action == "summarize_run_group":
+                return self._summarize_run_group_action(payload, context)
             return ToolResult(
                 ok=False,
                 error_code="INPUT_VALIDATION_FAILED",
@@ -2732,6 +2926,9 @@ class AdversaryPathProjector:
                 )
                 artifacts.extend(written)
                 attempt["record_file"] = record["run"]["record_file"]
+                # Kept so the loop can summarise its own group without reading
+                # the files back — see _multi_run_result.
+                attempt["record"] = record
                 if write_error:
                     export_errors.append(f"run {index}: {write_error}")
 
@@ -3005,7 +3202,14 @@ class AdversaryPathProjector:
                 continue
 
             metadata = {
-                "kind": "projection_run",
+                # The record and the raw reply are different things, and only
+                # the record is a run record. summarize_run_group selects by
+                # this kind, and a raw reply that happens to be valid JSON —
+                # which it usually is — would otherwise be counted as a record.
+                "kind": (
+                    "projection_run" if artifact_type == "json_events"
+                    else "projection_raw_response"
+                ),
                 "run_id": record["run"]["run_id"],
                 "run_group": record["run"]["run_group"],
                 "run_index": record["run"]["run_index"],
@@ -3118,11 +3322,18 @@ class AdversaryPathProjector:
             })
 
         succeeded = sum(1 for r in runs if r["status"] == "ok")
+        # The loop already holds every record it wrote, so it can answer its own
+        # question — which routes came back — without a second command and
+        # without depending on the records still being registered.
+        group = _summarize_run_group(
+            [record for record in (a.get("record") for a in outcomes) if record]
+        )
         result = {
             "action": "project_paths",
             "actor": run_context["profile"]["label"],
             "application": run_context["application"],
             "run_group": run_context["run_group"],
+            "run_group_summary": group,
             "flow_map_sha256": run_context["flow_map_sha256"],
             "thinking_level": run_context["thinking_level"],
             "software_scope": run_context["software_scope"],
@@ -3147,6 +3358,106 @@ class AdversaryPathProjector:
             result=result,
             output_artifacts=artifacts or None,
         )
+
+    # -------------------------------------------------------------------
+    # Run-group summary
+    # -------------------------------------------------------------------
+
+    @staticmethod
+    def _load_group_records(
+        run_group: str, context: Any
+    ) -> tuple[list[dict[str, Any]], ToolResult | None]:
+        """Every projection run record in this session carrying *run_group*.
+
+        Records are read through the registered artifacts rather than by
+        scanning the workspace: the registry is the session's own account of
+        what was written, and on Cloud Run a local directory is ephemeral. The
+        consequence is worth knowing — records from an earlier session, or from
+        before 'new', are not visible.
+        """
+        records: list[dict[str, Any]] = []
+        for artifact in getattr(context, "artifacts", None) or []:
+            metadata = getattr(artifact, "metadata", None) or {}
+            if metadata.get("kind") != "projection_run":
+                continue
+            if metadata.get("run_group") != run_group:
+                continue
+            try:
+                with open(artifact.file_path, "r", encoding="utf-8") as handle:
+                    document = json.load(handle)
+            except Exception as exc:
+                logger.warning(
+                    "Skipping unreadable run record %s: %s",
+                    artifact.file_path, exc,
+                )
+                continue
+            # Anything else carrying this label is skipped rather than trusted:
+            # a missing count is recoverable, a crashed action is not.
+            if isinstance(document, dict) and "run" in document:
+                records.append(document)
+            else:
+                logger.warning(
+                    "Artifact %s is labelled a run record but has no 'run' "
+                    "block; skipped.", artifact.file_path,
+                )
+
+        if not records:
+            return [], ToolResult(
+                ok=False,
+                error_code="ARTIFACT_NOT_FOUND",
+                message=(
+                    f"No projection run records for run group '{run_group}' in "
+                    f"this session. Records are registered by "
+                    f"'project_paths --export' or '--runs'; a group written "
+                    f"before the last 'new', or in another session, is not "
+                    f"visible here."
+                ),
+            )
+
+        # One estate, one actor, or the counts mean nothing: the same route
+        # found against two maps is not the same finding.
+        maps = {r["run"].get("flow_map_sha256", "") for r in records}
+        actors = {
+            (r["run"].get("actor_resolved") or {}).get("name", "") for r in records
+        }
+        if len(maps) > 1 or len(actors) > 1:
+            return [], ToolResult(
+                ok=False,
+                error_code="INPUT_VALIDATION_FAILED",
+                message=(
+                    f"Run group '{run_group}' mixes "
+                    f"{len(maps)} flow map(s) and {len(actors)} actor(s), so "
+                    f"counting how often a route recurs would be meaningless. "
+                    f"Maps: {', '.join(sorted(m[:12] for m in maps))}. "
+                    f"Actors: {', '.join(sorted(a or '?' for a in actors))}. "
+                    f"Re-run with a group label per map and actor."
+                ),
+            )
+
+        records.sort(key=lambda r: r["run"].get("run_index", 0))
+        return records, None
+
+    def _summarize_run_group_action(
+        self, payload: dict[str, Any], context: Any
+    ) -> ToolResult:
+        """Count recurring routes across a group of runs. No LLM."""
+        run_group = _slug(str(payload.get("run_group", "") or ""), DEFAULT_RUN_GROUP)
+        records, error = self._load_group_records(run_group, context)
+        if error is not None:
+            return error
+
+        first = records[0]["run"]
+        summary = _summarize_run_group(records)
+        result = {
+            "action": "summarize_run_group",
+            "run_group": run_group,
+            "application": first.get("application", ""),
+            "actor": (first.get("actor_resolved") or {}).get("name", ""),
+            "flow_map_sha256": first.get("flow_map_sha256", ""),
+            "records": [r["run"].get("record_file", "") for r in records],
+            **summary,
+        }
+        return ToolResult(ok=True, result=result)
 
     @staticmethod
     def _write_projection_artifacts(
@@ -3247,6 +3558,8 @@ class AdversaryPathProjector:
             summary = self._summarize_flow_map(data)
         elif action == "project_paths":
             summary = self._summarize_projection(data)
+        elif action == "summarize_run_group":
+            summary = self._summarize_group(data)
         else:
             summary = f"adversary_path_projector completed action '{action}'."
 
@@ -3453,6 +3766,62 @@ class AdversaryPathProjector:
         lines.append(
             f"Records written per run; compare them directly. {PROJECTION_NOTICE}"
         )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _summarize_group(data: dict[str, Any]) -> str:
+        """Compress a run group: which routes recur, and on what evidence.
+
+        The point of a group is the routes that come back, so they lead; the
+        one-offs are counted, not listed. Every count says how many runs it is
+        out of, because "recurring" on its own is the kind of word a reader
+        can take for a verdict.
+        """
+        routes = data.get("routes", [])
+        succeeded = data.get("succeeded", 0)
+        lines = [
+            f"{data.get('actor', '?')} vs {data.get('application', '?')}, group "
+            f"'{data.get('run_group', '?')}': {data.get('run_count', 0)} run(s), "
+            f"{succeeded} ok, {data.get('failed', 0)} failed, "
+            f"map {str(data.get('flow_map_sha256', ''))[:12]}. "
+            f"{data.get('route_count', 0)} distinct route(s), "
+            f"{data.get('recurring_route_count', 0)} recurring."
+        ]
+        if not data.get("recurrence_countable"):
+            lines.append(
+                f"Fewer than {MIN_RUNS_FOR_RECURRENCE} successful runs, so "
+                f"nothing is called recurring — the counts below are all there "
+                f"is."
+            )
+
+        for route in routes[:4]:
+            representative = route["representative"]
+            hops = " -> ".join(
+                f"{s['component_id']}:{s['technique_id']}"
+                for s in representative.get("steps", [])
+            )
+            label = "recurring" if route["recurring"] else "one-off"
+            lines.append(
+                f"  [{label}, {route['run_count']}/{succeeded} run(s), "
+                f"{route['variant_count']} variant(s)] "
+                f"{' -> '.join(route['route'])}"
+            )
+            lines.append(f"    representative (run {representative['run_index']}): {hops}")
+            if route["varying_pairs"]:
+                lines.append(
+                    f"    {len(route['stable_pairs'])} step(s) in most variants, "
+                    f"{len(route['varying_pairs'])} varied between runs"
+                )
+            if route["state_gaps"] or route["assumptions"]:
+                lines.append(
+                    f"    {len(route['assumptions'])} assumption(s) to test; "
+                    f"{route['state_gaps']} state gap(s) on this variant"
+                )
+        remaining = len(routes) - 4
+        if remaining > 0:
+            lines.append(f"  ... {remaining} more route(s) in the full result.")
+
+        lines.append(PROJECTION_NOTICE)
         return "\n".join(lines)
 
     @staticmethod
