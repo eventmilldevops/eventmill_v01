@@ -2208,6 +2208,13 @@ def _route_reply(path_id: str, steps: list[tuple[str, str, str]]) -> dict[str, A
                 {"technique_id": technique, "tactic": tactic,
                  "component_id": component,
                  "rationale": f"{technique} on {component}.",
+                 # Step state, so the group report has something to render:
+                 # the assumption is per component, so routes sharing a
+                 # component share an assumption and the report must ask it
+                 # once.
+                 "exploited_condition": f"{component} accepts the request",
+                 "result": f"A foothold on {component}",
+                 "assumptions": [f"{component} is reachable as the map says."],
                  "leads_to": []}
                 for technique, tactic, component in steps
             ],
@@ -2456,6 +2463,64 @@ class TestRunGroupSummary:
         # The representative stays traceable to the record it came from.
         assert db_route["representative"]["record_file"].startswith(
             "adversary_projection_run_")
+
+    def _report_for(self, plugin, projection_map, tmp_path, monkeypatch,
+                    **payload):
+        context = FakeContext()
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        context.llm_query = _SequencedLLM([_DB_ROUTE_A, _DB_ROUTE_B, _WEB_ONLY])
+        plugin.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": projection_map, "runs": 3, "run_group": "grp",
+        }, context)
+        result = plugin.execute(
+            {"action": "summarize_run_group", "run_group": "grp", **payload},
+            context,
+        )
+        assert result.ok, result.message
+        report = (tmp_path / "artifacts" / result.result["report_file"])
+        return result, report.read_text(encoding="utf-8")
+
+    def test_report_is_written_and_readable(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """The JSON is the evidence; the report is what gets read to a room."""
+        result, report = self._report_for(
+            plugin_instance, sample_flow_map, tmp_path, monkeypatch)
+        assert result.result["report_file"].endswith(".md")
+        assert report.startswith("# Projected attack paths — Customer Portal")
+        assert _tool_mod.PROJECTION_NOTICE in report
+        # Component names, not ids, in the prose.
+        assert "Portal frontend → Portal API → Customer database" in report
+        assert "2 of 3 runs" in report
+        assert "crown jewel" in report
+        # Every claim of recurrence says what it is out of.
+        assert "not a likelihood assessment" in report
+        assert "## Appendix — one representative path per route" in report
+
+    def test_report_collects_the_test_plan_without_duplicates(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """Both routes assume the portal is exploitable; ask it once."""
+        _, report = self._report_for(
+            plugin_instance, sample_flow_map, tmp_path, monkeypatch)
+        plan = report.split("## What we should check", 1)[1].split("\n## ", 1)[0]
+        assert "**How things are set up**" in plan
+        # Every route starts at web, so its assumption must be asked once.
+        assert plan.count("web is reachable as the map says.") == 1
+        assert "None has been verified" in plan
+
+    def test_report_says_when_controls_were_not_checked(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        _, without = self._report_for(
+            plugin_instance, sample_flow_map, tmp_path, monkeypatch)
+        assert "No flow map was supplied" in without
+
+        _, with_map = self._report_for(
+            plugin_instance, sample_flow_map, tmp_path, monkeypatch,
+            flow_map=sample_flow_map)
+        assert "No flow map was supplied" not in with_map
+        # The sample map declares no controls on the API, which sits on both
+        # recurring routes.
+        assert "no security controls on" in with_map
 
     def test_a_group_mixing_maps_is_refused(
             self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):

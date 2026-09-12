@@ -427,6 +427,15 @@ run adversary_path_projector --action summarize_run_group --run_group stepstate-
 No LLM. It counts how often each **route** recurs across the group's records
 and shows one variant of each.
 
+It also writes a **readable report** as an artifact —
+`adversary_projection_group_<group>_<stamp>.md`, named in the result as
+`report_file`. That is the thing to hand to someone: the routes that recurred
+and where they end, the assumptions collected into a checklist, and one
+representative path per route in an appendix. Add `--file_path` pointing at the
+flow map these runs used and the report also names the data classification at
+each destination and the components on a recurring route that have no controls
+recorded; without it, the report says plainly that controls were not checked.
+
 A `--runs` loop already prints the same thing for the runs it just made, and
 carries it on the result as `run_group_summary`, so a single invocation answers
 its own question. The loop's version is shorter — three routes, no variance or

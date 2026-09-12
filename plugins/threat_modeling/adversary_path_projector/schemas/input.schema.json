@@ -47,7 +47,7 @@
     },
     "file_path": {
       "type": "string",
-      "description": "Path to a JSON flow map file (validate_flow_map, project_paths). Injected by the shell when 'flow_map_artifact_id' is given."
+      "description": "Path to a JSON flow map file (validate_flow_map, project_paths). Injected by the shell when 'flow_map_artifact_id' is given. Optional for summarize_run_group, where it adds control context to the report: which components on a recurring route have no controls recorded, and how the target data is classified. Without it the report counts routes and says it could not check controls."
     },
     "max_paths": {
       "type": "integer",

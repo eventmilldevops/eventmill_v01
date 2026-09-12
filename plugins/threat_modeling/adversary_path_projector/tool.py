@@ -2411,6 +2411,338 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# The group report
+#
+# The JSON summary is the evidence and nobody reads it to a room. The report
+# says what recurred, where it ended, and what to go and check. Two rules hold
+# it together: every count is expressed out of the runs it came from, and
+# nothing is claimed that the records do not carry. Model-written text is
+# marked (LLM) wherever it appears.
+# ---------------------------------------------------------------------------
+
+MAX_REPORT_ROUTES = 4
+
+
+def _plural(count: int, singular: str, plural: str = "") -> str:
+    """'1 route', '2 routes'. A report handed to someone should not read
+    '1 route(s)' — the terminal summaries can, a document cannot."""
+    return f"{count} {singular if count == 1 else (plural or singular + 's')}"
+
+# Wording that makes an assumption a question about what we would *see* rather
+# than how something is set up. A heuristic for grouping only — an assumption
+# in the wrong list is still the same question, asked of the same people.
+_DETECTION_WORDS = (
+    "detect", "monitor", "alert", "alarm", "anomal", "flag", "logging",
+    "logged", "ips", "ids", "edr", "rate-limit", "rate limit", "block",
+    "notice", "visib", "scanning",
+)
+
+
+def _is_detection_question(text: str) -> bool:
+    lowered = text.lower()
+    return any(word in lowered for word in _DETECTION_WORDS)
+
+
+def _component_names(records: list[dict[str, Any]]) -> dict[str, str]:
+    """Component id to display name, from the deterministic block."""
+    names: dict[str, str] = {}
+    for record in records:
+        for entry in (record.get("deterministic") or {}).get("entry_ranking", []):
+            component_id = entry.get("component_id", "")
+            if component_id and component_id not in names:
+                names[component_id] = entry.get("name", "") or component_id
+    return names
+
+
+def _crown_jewel_ids(records: list[dict[str, Any]]) -> set[str]:
+    """Crown jewels, read from the routes the deterministic layer computed."""
+    jewels: set[str] = set()
+    for record in records:
+        for route in (record.get("deterministic") or {}).get("routes", []):
+            if route.get("target"):
+                jewels.add(str(route["target"]))
+    return jewels
+
+
+def _hinge_assumption(route: dict[str, Any]) -> str:
+    """The assumption at the end of the route — what reaching the data rests on.
+
+    Chosen by position, never by judging the text: the assumption on the last
+    step, else the last one stated. It is the model's sentence, so the report
+    marks it.
+    """
+    assumptions = route.get("assumptions") or []
+    if not assumptions:
+        return ""
+    final_component = route["route"][-1] if route.get("route") else ""
+    for entry in reversed(assumptions):
+        if entry.get("component_id") == final_component:
+            return entry.get("assumption", "")
+    return assumptions[-1].get("assumption", "")
+
+
+def _render_group_report(
+    data: dict[str, Any],
+    names: dict[str, str],
+    jewels: set[str],
+    flow_map: dict[str, Any] | None,
+    period: tuple[str, str],
+) -> str:
+    """The readable form of a run group, for someone who will not read JSON."""
+    def label(component_id: str) -> str:
+        return names.get(component_id, component_id)
+
+    def route_text(route: list[str]) -> str:
+        return " → ".join(label(c) for c in route)
+
+    succeeded = data.get("succeeded", 0)
+    routes = data.get("routes", [])
+    recurring = [r for r in routes if r.get("recurring")]
+    components = flow_map["components"] if flow_map else {}
+
+    lines = [
+        f"# Projected attack paths — {data.get('application', '?')} vs "
+        f"{data.get('actor', '?')}",
+        "",
+        f"**{PROJECTION_NOTICE}**",
+        "",
+    ]
+
+    run_line = f"{_plural(data.get('run_count', 0), 'run')}, {succeeded} completed"
+    failed = data.get("failed", 0)
+    if failed:
+        run_line += f", {failed} failed"
+    start, end = period
+    when = f" between {start} and {end}" if start and end and start != end else (
+        f" on {start}" if start else ""
+    )
+    lines += [
+        f"{run_line}{when}, against one unchanged architecture "
+        f"(map `{str(data.get('flow_map_sha256', ''))[:12]}`).",
+        "",
+        "## Bottom line",
+        "",
+    ]
+
+    if not recurring:
+        lines += [
+            "No route came back often enough to be called recurring"
+            + (
+                f", and with {succeeded} successful run(s) recurrence cannot be "
+                f"judged at all — {MIN_RUNS_FOR_RECURRENCE} are needed."
+                if not data.get("recurrence_countable") else "."
+            ),
+            "",
+        ]
+    else:
+        reached = sorted({
+            r["route"][-1] for r in recurring if r["route"][-1] in jewels
+        })
+        missed = sorted(j for j in jewels if j not in set(reached))
+        strongest = max(recurring, key=lambda r: r["run_count"])
+
+        if reached:
+            lines.append(
+                f"{_plural(len(recurring), 'route')} came back across the runs, "
+                f"ending at {', '.join(label(c) for c in reached)} — "
+                f"{'an asset' if len(reached) == 1 else 'assets'} this "
+                f"architecture names as a crown jewel."
+            )
+        else:
+            lines.append(
+                f"{_plural(len(recurring), 'route')} came back across the runs, "
+                f"none of them reaching a crown jewel."
+            )
+        if reached and missed:
+            lines.append("")
+            lines.append(
+                f"No recurring route reached "
+                f"{', '.join(label(c) for c in missed)}."
+            )
+        lines.append("")
+        lines.append(
+            f"The strongest is **{route_text(strongest['route'])}**, found in "
+            f"{strongest['run_count']} of {succeeded} runs."
+        )
+
+        shared = set(recurring[0]["route"])
+        for route in recurring[1:]:
+            shared &= set(route["route"])
+        entries = {r["route"][0] for r in recurring}
+        destinations = {r["route"][-1] for r in recurring}
+        # Worth saying only when routes converge somewhere in the middle: with
+        # one route everything on it is "shared", and its own start and end
+        # say nothing.
+        passing = sorted(shared - entries - destinations)
+        if len(recurring) > 1 and passing:
+            lines.append("")
+            lines.append(
+                f"Every recurring route passes through "
+                f"**{', '.join(label(c) for c in passing)}**."
+            )
+        bare = [
+            c for c in sorted({c for r in recurring for c in r["route"]})
+            if c in components and not components[c]["controls"]
+        ]
+        if bare:
+            lines.append("")
+            lines.append(
+                f"The flow map records no security controls on "
+                f"{', '.join(label(c) for c in bare)}."
+            )
+        lines.append("")
+
+    # --- the routes table ---
+    lines += ["## The routes", ""]
+    lines += [
+        "| Route | Found in | Ends at | What reaching the data rests on (LLM) |",
+        "|---|---|---|---|",
+    ]
+    for route in routes[:MAX_REPORT_ROUTES]:
+        destination = route["route"][-1]
+        ends = label(destination)
+        if destination in jewels:
+            ends += " — crown jewel"
+        classification = (
+            components.get(destination, {}).get("data_classification", "")
+            if components else ""
+        )
+        if classification:
+            ends += f" ({classification})"
+        found = f"{route['run_count']} of {succeeded} runs"
+        if not route["recurring"]:
+            found += " — one-off"
+        lines.append(
+            f"| {route_text(route['route'])} | {found} | {ends} | "
+            f"{_hinge_assumption(route) or '—'} |"
+        )
+    if len(routes) > MAX_REPORT_ROUTES:
+        lines.append("")
+        lines.append(
+            f"{_plural(len(routes) - MAX_REPORT_ROUTES, 'further route')} "
+            f"in the full result."
+        )
+    lines.append("")
+
+    # --- the test plan ---
+    seen: set[str] = set()
+    configuration: list[str] = []
+    detection: list[str] = []
+    for route in routes:
+        for entry in route.get("assumptions") or []:
+            text = entry.get("assumption", "").strip()
+            if not text or text.lower() in seen:
+                continue
+            seen.add(text.lower())
+            where = label(entry.get("component_id", ""))
+            bucket = detection if _is_detection_question(text) else configuration
+            bucket.append(f"{text} — *{where}*")
+
+    if configuration or detection:
+        lines += [
+            "## What we should check",
+            "",
+            "Each line is something the projection depends on and the flow map "
+            "does not state. None has been verified.",
+            "",
+        ]
+        if configuration:
+            lines += ["**How things are set up**", ""]
+            lines += [f"{i}. {t}" for i, t in enumerate(configuration, start=1)]
+            lines.append("")
+        if detection:
+            lines += ["**What we would see**", ""]
+            lines += [f"{i}. {t}" for i, t in enumerate(detection, start=1)]
+            lines.append("")
+
+    # --- framing ---
+    lines += [
+        "## What this is, and is not",
+        "",
+        f"An LLM placed techniques MITRE ATT&CK documents "
+        f"{data.get('actor', 'this actor')} using onto this organization's own "
+        f"flow map, {data.get('run_count', 0)} times independently. Technique "
+        f"ids, technique names and the architecture are sourced; the routes and "
+        f"the step rationales are the model's projection.",
+        "",
+        f"Repetition is the evidence. A route found once is a suggestion; a "
+        f"route found in {data.get('recurrence_threshold') or 'most'} or more "
+        f"of {succeeded} runs is a pattern worth testing. This is not an "
+        f"observation, not a likelihood assessment, and not a complete list of "
+        f"the ways in.",
+        "",
+    ]
+    if not flow_map:
+        lines += [
+            "No flow map was supplied with this summary, so the report does not "
+            "say which controls sit on these routes. Re-run with `--file_path` "
+            "to include that.",
+            "",
+        ]
+
+    # --- appendix ---
+    lines += ["## Appendix — one representative path per route", ""]
+    for route in routes[:MAX_REPORT_ROUTES]:
+        representative = route["representative"]
+        lines += [
+            f"### {route_text(route['route'])}",
+            "",
+            f"Found in {route['run_count']} of {succeeded} runs, "
+            f"{_plural(route['variant_count'], 'variant')}. Shown: run "
+            f"{representative['run_index']}, path `{representative['path_id']}`"
+            + (
+                f", record `{representative['record_file']}`."
+                if representative.get("record_file") else "."
+            ),
+            "",
+        ]
+        if representative.get("description"):
+            lines += [
+                f"*Path summary written by the LLM (projection):* "
+                f"{representative['description']}",
+                "",
+            ]
+        lines += [
+            "| # | Technique | On | What it relies on (LLM) | Result (LLM) | Continuity |",
+            "|---|---|---|---|---|---|",
+        ]
+        for index, step in enumerate(representative.get("steps", []), start=1):
+            check = step.get("state_check", "") or "—"
+            lines.append(
+                f"| {index} | {step.get('technique_name', '')} "
+                f"({step.get('technique_id', '')}) | "
+                f"{label(step.get('component_id', ''))} | "
+                f"{step.get('exploited_condition', '') or '—'} | "
+                f"{step.get('result', '') or '—'} | {check} |"
+            )
+        lines.append("")
+        if route.get("state_gaps"):
+            lines += [
+                f"{_plural(route['state_gaps'], 'step')} of this variant needed "
+                f"access no earlier step provided — see the run record for what "
+                f"was missing.",
+                "",
+            ]
+        if route.get("varying_pairs"):
+            lines += [
+                f"{_plural(len(route['stable_pairs']), 'step')} appeared in most "
+                f"variants of this route; {len(route['varying_pairs'])} varied "
+                f"between runs.",
+                "",
+            ]
+
+    lines += [
+        "## Records",
+        "",
+        "This report was built from:",
+        "",
+    ]
+    lines += [f"- `{name}`" for name in data.get("records", [])]
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _render_route_lines(
     group: dict[str, Any], limit: int, detail: bool
 ) -> list[str]:
@@ -3537,7 +3869,90 @@ class AdversaryPathProjector:
             "records": [r["run"].get("record_file", "") for r in records],
             **summary,
         }
-        return ToolResult(ok=True, result=result)
+
+        # The flow map is optional here: without it the report still counts
+        # routes, it just cannot say which controls sit on them, and says so.
+        flow_map: dict[str, Any] | None = None
+        raw, load_error = self._load_flow_map_source(payload, context)
+        if load_error is not None:
+            return load_error
+        if raw is not None:
+            flow_map, map_errors, _ = _normalize_flow_map(raw)
+            if map_errors:
+                flow_map = None
+                result["report_warnings"] = [
+                    f"Flow map has {len(map_errors)} blocking error(s), so the "
+                    f"report was written without control context."
+                ]
+            elif _canonical_flow_map_hash(raw) != result["flow_map_sha256"]:
+                result.setdefault("report_warnings", []).append(
+                    "The supplied flow map is not the one these runs were "
+                    "projected against; component names and controls in the "
+                    "report may not match the records."
+                )
+
+        stamps = sorted(
+            r["run"].get("created_at", "")[:10] for r in records
+            if r["run"].get("created_at")
+        )
+        report = _render_group_report(
+            result,
+            _component_names(records),
+            _crown_jewel_ids(records),
+            flow_map,
+            (stamps[0] if stamps else "", stamps[-1] if stamps else ""),
+        )
+        artifacts, report_file, write_error = self._write_group_report(
+            report, run_group, context
+        )
+        if report_file:
+            result["report_file"] = report_file
+        if write_error:
+            result.setdefault("report_warnings", []).append(write_error)
+
+        return ToolResult(
+            ok=True, result=result, output_artifacts=artifacts or None
+        )
+
+    @staticmethod
+    def _write_group_report(
+        markdown: str, run_group: str, context: Any
+    ) -> tuple[list[dict[str, Any]], str, str | None]:
+        """Write and register the report. A failure never costs the summary."""
+        workspace = Path(os.environ.get("EVENTMILL_WORKSPACE", "./workspace"))
+        art_dir = workspace / "artifacts"
+        try:
+            art_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            return [], "", f"could not create artifact directory: {exc}"
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"adversary_projection_group_{run_group}_{stamp}.md"
+        path = art_dir / filename
+        try:
+            path.write_text(markdown, encoding="utf-8")
+        except Exception as exc:
+            return [], "", f"could not write {filename}: {exc}"
+
+        # Its own kind: a report labelled 'projection_run' would be loaded as a
+        # record by the next summary, which is a bug this plugin has had once.
+        metadata = {"kind": "projection_group_report", "run_group": run_group}
+        register = getattr(context, "register_artifact", None)
+        if callable(register):
+            try:
+                register("text", str(path), "adversary_path_projector", metadata)
+                return [], filename, None
+            except Exception as exc:
+                logger.warning("register_artifact failed for %s: %s", path, exc)
+        return (
+            [{
+                "artifact_id": f"art_{path.stem}",
+                "artifact_type": "text",
+                "file_path": str(path),
+            }],
+            filename,
+            None,
+        )
 
     @staticmethod
     def _write_projection_artifacts(
