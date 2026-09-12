@@ -1,0 +1,123 @@
+{
+  "application": "Claims Portal",
+  "description": "Example flow map: an internet-facing claims portal with an app tier, a restricted data tier, and an admin jump host. Deliberately contains findings — a partial WAF, an unauthenticated jump host, and an unauthenticated flow to the document store.",
+  "zones": [
+    {"id": "edge", "name": "Internet edge", "trust_level": "untrusted"},
+    {"id": "app", "name": "Application tier", "trust_level": "semi_trusted"},
+    {"id": "data", "name": "Data tier", "trust_level": "restricted"},
+    {"id": "corp", "name": "Corporate", "trust_level": "trusted"}
+  ],
+  "components": [
+    {
+      "id": "cdn",
+      "name": "CDN",
+      "type": "cdn",
+      "zone": "edge",
+      "exposure": "internet",
+      "authentication": "none",
+      "controls": [
+        {
+          "name": "DDoS protection",
+          "control_type": "perimeter",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "high"
+        }
+      ]
+    },
+    {
+      "id": "portal",
+      "name": "Claims portal",
+      "type": "web_app",
+      "zone": "edge",
+      "exposure": "internet",
+      "technologies": ["nginx", "django"],
+      "authentication": "saml_sso",
+      "data_classification": "pii",
+      "controls": [
+        {
+          "name": "WAF",
+          "control_type": "perimeter",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "medium",
+          "mitre_mitigation_id": "M1050"
+        }
+      ]
+    },
+    {
+      "id": "idp",
+      "name": "Identity provider",
+      "type": "identity_provider",
+      "zone": "app",
+      "exposure": "internet",
+      "authentication": "mfa",
+      "controls": [
+        {
+          "name": "Conditional access",
+          "control_type": "identity",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "high"
+        }
+      ]
+    },
+    {
+      "id": "claims_api",
+      "name": "Claims API",
+      "type": "api",
+      "zone": "app",
+      "exposure": "internal",
+      "technologies": ["python", "fastapi"],
+      "authentication": "oauth2",
+      "controls": []
+    },
+    {
+      "id": "jump",
+      "name": "Admin jump host",
+      "type": "server",
+      "zone": "corp",
+      "exposure": "management",
+      "authentication": "none",
+      "controls": []
+    },
+    {
+      "id": "claims_db",
+      "name": "Claims database",
+      "type": "database",
+      "zone": "data",
+      "exposure": "internal",
+      "authentication": "mtls",
+      "data_classification": "regulated",
+      "controls": [
+        {
+          "name": "Database firewall",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "doc_store",
+      "name": "Document store",
+      "type": "file_store",
+      "zone": "data",
+      "exposure": "internal",
+      "authentication": "iam",
+      "data_classification": "pii",
+      "controls": []
+    }
+  ],
+  "flows": [
+    {"id": "f1", "from": "cdn", "to": "portal", "protocol": "https", "authenticated": false},
+    {"id": "f2", "from": "portal", "to": "idp", "protocol": "https", "authenticated": true},
+    {"id": "f3", "from": "portal", "to": "claims_api", "protocol": "https", "authenticated": true},
+    {"id": "f4", "from": "claims_api", "to": "claims_db", "protocol": "postgres", "port": 5432, "authenticated": true},
+    {"id": "f5", "from": "claims_api", "to": "doc_store", "protocol": "s3", "authenticated": false},
+    {"id": "f6", "from": "jump", "to": "claims_db", "protocol": "ssh", "port": 22, "authenticated": true},
+    {"id": "f7", "from": "jump", "to": "claims_api", "protocol": "ssh", "port": 22, "authenticated": true}
+  ],
+  "crown_jewels": ["claims_db", "doc_store"]
+}

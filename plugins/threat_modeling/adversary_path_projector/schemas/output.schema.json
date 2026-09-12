@@ -1,0 +1,677 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "actor": {
+      "type": "object",
+      "description": "Resolved actor identity (profile_actor).",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "What the analyst typed."
+        },
+        "resolved": {
+          "type": "boolean"
+        },
+        "attck_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "group",
+            "campaign",
+            "software"
+          ]
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "software": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "attack_version": {
+          "type": "string"
+        }
+      }
+    },
+    "technique_count": {
+      "type": "integer"
+    },
+    "software_scope": {
+      "type": "string",
+      "enum": [
+        "none",
+        "delivery",
+        "all"
+      ],
+      "description": "Which software-derived techniques were included."
+    },
+    "software_source": {
+      "type": "string",
+      "description": "Where the software block came from. 'attck_lookup' is the local ATT&CK software-to-technique mapping; the block is kept separate from the actor's own techniques so another source can supply it."
+    },
+    "software_technique_count": {
+      "type": "integer"
+    },
+    "software_techniques": {
+      "type": "array",
+      "description": "Techniques reached only through the actor's associated software — a weaker claim than direct attribution, and disjoint from 'techniques'.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "technique_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tactics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "band": {
+            "type": "string",
+            "enum": [
+              "delivery",
+              "operational"
+            ],
+            "description": "'delivery' where the actor's tooling determines the technique (the dropper, loader, implant and its channel); 'operational' where an actor typically uses what is already on the host."
+          },
+          "source": {
+            "type": "string"
+          },
+          "software": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "in_lookup": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "allowed_technique_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Union of 'techniques' and 'software_techniques' ids. Path projection may not use anything outside this set."
+    },
+    "techniques": {
+      "type": "array",
+      "description": "Techniques ATT&CK attributes to the actor directly, or that the supplied intel report maps to it.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "technique_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tactics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "provenance": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "attck_group",
+                "attck_campaign",
+                "attck_software",
+                "intel_report"
+              ]
+            },
+            "description": "Where the claim that this actor uses this technique came from."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Specific ATT&CK ids or artifact ids backing the provenance."
+          },
+          "in_lookup": {
+            "type": "boolean",
+            "description": "False when the id is not present in the local ATT&CK technique database."
+          }
+        }
+      }
+    },
+    "tactic_coverage": {
+      "type": "array",
+      "description": "Kill-chain tactics covered, in ATT&CK order. Computed over 'techniques' (direct attribution) only — the software block is deliberately excluded so the stronger claim stays visible. Take the union with 'software_techniques' if you need coverage across the whole allowed set.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "tactic": {
+            "type": "string"
+          },
+          "ordinal": {
+            "type": "integer"
+          },
+          "technique_count": {
+            "type": "integer"
+          },
+          "technique_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "uncovered_tactics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Tactics with nothing attributed to the actor directly. Software-derived techniques are not counted, so a tactic listed here may still be represented in 'allowed_technique_ids' when software_scope is 'all'."
+    },
+    "procedures": {
+      "type": "array",
+      "description": "Procedure examples describing how this actor has used a technique.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "technique_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "unknown_techniques": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Technique ids in the set that the local lookup does not recognise."
+    },
+    "application": {
+      "type": "string"
+    },
+    "valid": {
+      "type": "boolean",
+      "description": "False when the flow map has blocking errors (validate_flow_map)."
+    },
+    "errors": {
+      "type": "array",
+      "description": "Problems that make the flow map unusable for projection.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Problems that degrade projection quality but do not block it.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "properties": {
+        "components": {
+          "type": "integer"
+        },
+        "zones": {
+          "type": "integer"
+        },
+        "flows": {
+          "type": "integer"
+        },
+        "crown_jewels": {
+          "type": "integer"
+        },
+        "controls": {
+          "type": "integer"
+        }
+      }
+    },
+    "entry_surface": {
+      "type": "array",
+      "description": "Components ranked as entry candidates, highest score first.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "component_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "score": {
+            "type": "integer"
+          },
+          "exposure": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "crown_jewel_routes": {
+      "type": "array",
+      "description": "Shortest reachable component routes from an entry candidate to a crown jewel, computed over the declared flows.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "entry": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "hops": {
+            "type": "integer"
+          },
+          "route": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "boundary_crossings": {
+            "type": "integer"
+          },
+          "unauthenticated_hops": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "unreachable_crown_jewels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Crown jewels no entry candidate can reach over the declared flows. Usually means the flow map is incomplete."
+    },
+    "isolated_components": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Components with no inbound or outbound flow."
+    },
+    "path_count": {
+      "type": "integer"
+    },
+    "step_count": {
+      "type": "integer"
+    },
+    "allowed_technique_count": {
+      "type": "integer",
+      "description": "Size of the closed set the model was constrained to."
+    },
+    "techniques_offered_to_model": {
+      "type": "integer",
+      "description": "How many of them fitted in the prompt (see MAX_TECHNIQUES_IN_PROMPT)."
+    },
+    "evidence_counts": {
+      "type": "object",
+      "properties": {
+        "documented": {
+          "type": "integer"
+        },
+        "via_software": {
+          "type": "integer"
+        }
+      },
+      "description": "Steps by strength of the actor-to-technique claim. Derived from the closed set, never from the model."
+    },
+    "model_used": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attack_graph": {
+      "type": "object",
+      "description": "Attack graph in the shape attack_path_visualizer consumes. Steps carry extra keys (component_id, asset, evidence, rationale, mitigations, uncovered_mitigations, notes) that the renderer ignores.",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path_id": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "objective": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "technique_id": {
+                      "type": "string"
+                    },
+                    "technique_name": {
+                      "type": "string"
+                    },
+                    "tactic": {
+                      "type": "string"
+                    },
+                    "component_id": {
+                      "type": "string"
+                    },
+                    "asset": {
+                      "type": "string"
+                    },
+                    "evidence": {
+                      "type": "string",
+                      "enum": [
+                        "documented",
+                        "via_software"
+                      ],
+                      "description": "'documented' = ATT&CK attributes the technique to the actor; 'via_software' = only its tooling implements it. The PLACEMENT is always a model inference either way."
+                    },
+                    "rationale": {
+                      "type": "string"
+                    },
+                    "leads_to": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "mitigations": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "uncovered_mitigations": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "ATT&CK mitigations for this technique that no control on this component declares."
+                    },
+                    "notes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "precondition": { "type": "string", "description": "Model: what must already be true." },
+                    "access_before": { "enum": ["none", "network_reach", "code_execution", "user_credential", "service_credential", "privileged", "data_access", null], "description": "Model: what the attacker must hold for this step. Null when omitted or unrecognised." },
+                    "exploited_condition": { "type": "string", "description": "Model: the property of this component the technique relies on." },
+                    "result": { "type": "string", "description": "Model: what the attacker holds afterwards." },
+                    "access_after": { "enum": ["none", "network_reach", "code_execution", "user_credential", "service_credential", "privileged", "data_access", null], "description": "Model: what the attacker holds once the step succeeds." },
+                    "assumptions": { "type": "array", "items": { "type": "string" }, "maxItems": 3, "description": "Model: what must be true that the flow map does not state — the things to test. Not validated." },
+                    "control_note": { "type": "string", "description": "Model, optional: how the step contends with this component's controls." },
+                    "transition": { "type": ["object", "null"], "description": "From the flow map, never the reply: {entry, exposure} on the first step, the declared flow for a hop, null when the step stays on one component or the hop is undeclared. A step going back to a component this path already travelled from carries the flow it arrived on plus \"return\": true — the data returns over a connection the attacker opened, which is why it is not flagged as an undeclared hop." },
+                    "controls_in_play": { "type": "array", "items": { "type": "object" }, "description": "From the flow map: controls on the component and on the arriving flow, with status." },
+                    "actor_support": { "enum": ["procedure_documented", "technique_documented", "via_software"], "description": "Derived from ATT&CK, never the reply. procedure_documented = ATT&CK has a procedure example of this actor using the technique." },
+                    "procedure_excerpt": { "type": "string", "description": "ATT&CK procedure example for this actor (or its tooling) and technique, trimmed; empty when none exists." },
+                    "state_check": { "enum": ["ok", "gap", "unchecked"], "description": "Continuity check: does an earlier step (or the entry point) provide access_before? Proves consistency, not truth." },
+                    "state_note": { "type": "string", "description": "Why a gap or unchecked result." }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "convergence_points": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "branch_points": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "control_tagging": {
+      "type": "object",
+      "description": "How far the steps' uncovered_mitigations can be trusted (project_paths). Uncovered mitigations are compared only against mitre_mitigation_id values on the step's own component, so a control without an id can never cover anything, and estate-wide and flow controls are not counted.",
+      "properties": {
+        "targeted_components": { "type": "array", "items": { "type": "string" } },
+        "control_count": { "type": "integer", "description": "Controls declared on the targeted components." },
+        "tagged_control_count": { "type": "integer", "description": "Of those, how many declare a mitre_mitigation_id." },
+        "components_without_controls": { "type": "array", "items": { "type": "string" }, "description": "Targeted components with no control declared at all." }
+      }
+    },
+    "scenario_seeds": {
+      "type": "array",
+      "description": "One scenario per path, shaped for threat_model_analyzer's SecurityControl and AttackEvent dataclasses and loaded by its import_scenario action. One per path because sequence_order is linear and a projection is a graph. security_controls carries every control the flow map declares — per-component, per-flow and estate-wide. Each attack_sequence event carries the step's tactic and evidence so the scenario is auditable on its own.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source_type": {
+            "type": "string"
+          },
+          "threat_actor_profile": {
+            "type": "string"
+          },
+          "attack_objective": {
+            "type": "string"
+          },
+          "target_assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "entry_vectors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "security_controls": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "attack_sequence": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "rejections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "Placements discarded because the technique was outside the closed set or the component outside the flow map."
+    },
+    "mitre_mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "technique_id": {
+            "type": "string"
+          },
+          "technique_name": {
+            "type": "string"
+          },
+          "tactic": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "thinking_level": {
+      "type": "string",
+      "description": "Reasoning depth the projection call actually used."
+    },
+    "run_group": {
+      "type": "string",
+      "description": "Operator label tying a comparison set of runs together."
+    },
+    "recurrence_threshold": {
+      "type": ["integer", "null"],
+      "description": "Runs a route must appear in to be called recurring — half the successful runs, rounded up. Null when the group has fewer than three successful runs, where recurrence means nothing."
+    },
+    "recurrence_countable": {
+      "type": "boolean",
+      "description": "False when the group is too small to call anything recurring; routes are still counted."
+    },
+    "route_count": {
+      "type": "integer",
+      "description": "Distinct routes across the group (summarize_run_group)."
+    },
+    "recurring_route_count": {
+      "type": "integer",
+      "description": "How many of those met the recurrence threshold."
+    },
+    "routes": {
+      "type": "array",
+      "description": "One entry per distinct route through the estate, recurring first (summarize_run_group). A route is the components a path visits with consecutive repeats collapsed, so two runs choosing different techniques along the same way in count as one route. Recurrence is keyed on (component, technique) pairs and never on prose, which varies between runs by design.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "route": { "type": "array", "items": { "type": "string" }, "description": "Component ids in order." },
+          "runs": { "type": "array", "items": { "type": "integer" }, "description": "Which runs of the group found this route, numbered 1..N across the whole group in the order the runs happened. Deliberately not the record's own run_index, which restarts at 1 in each invocation: a group assembled from several batches — the way to cover many runs without one invocation hitting the timeout — would otherwise count repeated indices as one run." },
+          "run_count": { "type": "integer" },
+          "variant_count": { "type": "integer", "description": "Paths that walked this route, across all runs. More than one means near-duplicates were collapsed." },
+          "recurring": { "type": "boolean", "description": "Found in at least half the successful runs, in a group of three or more. Says the route came back, not that it is likely or confirmed." },
+          "representative": {
+            "type": "object",
+            "description": "The single variant shown for this route: the one with the most (component, technique) pairs in common with the others, ties going to the earliest run. Triage needs the distinct choices, not every near-duplicate.",
+            "properties": {
+              "run_index": { "type": "integer" },
+              "path_id": { "type": "string" },
+              "description": { "type": "string" },
+              "steps": { "type": "array", "items": { "type": "object" } }
+            }
+          },
+          "stable_pairs": { "type": "array", "items": { "type": "array", "items": { "type": "string" } }, "description": "[component, technique] pairs present in at least half this route's variants." },
+          "varying_pairs": { "type": "array", "items": { "type": "array", "items": { "type": "string" } }, "description": "Pairs that appeared in fewer — sampling variance rather than a settled step." },
+          "assumptions": { "type": "array", "items": { "type": "object" }, "description": "Assumptions carried by the representative variant, with the step each belongs to — the test plan for this route." },
+          "state_gaps": { "type": "integer", "description": "Steps of the representative variant whose continuity check reported a gap." }
+        }
+      }
+    },
+    "run_group_summary": {
+      "type": "object",
+      "description": "The same route summary, computed in-loop for a --runs invocation from the records it just wrote (project_paths). Same shape as the summarize_run_group result minus the identity fields."
+    },
+    "records": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Record filenames the summary was computed from (summarize_run_group)."
+    }
+  }
+}

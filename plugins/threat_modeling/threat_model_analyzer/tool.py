@@ -9,10 +9,12 @@ Ported from Event Mill v1.0 threat_modeling.py with improvements:
 - Defense-in-depth gap analysis
 - Markdown export
 - summarize_for_llm() for context-optimized output
+- Full scenario export and import, including adversary_path_projector seeds
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -58,6 +60,47 @@ DEFENSE_LAYER_MAP: dict[str, DefenseLayerType] = {
     t.value: t for t in DefenseLayerType
 }
 
+ACTIONS = (
+    "analyze_document", "create_scenario", "add_control", "add_event",
+    "list_scenarios", "gap_analysis", "export", "export_scenario",
+    "import_scenario",
+)
+
+SOURCE_TYPES = (
+    "threat_model", "tabletop_exercise", "security_assessment",
+    "red_team_report", "incident_review", "actor_projection",
+)
+IMPLEMENTATION_STATUSES = ("implemented", "partial", "planned", "missing")
+BYPASS_DIFFICULTIES = ("trivial", "low", "medium", "high", "very_high")
+DETECTION_CAPABILITIES = ("none", "low", "medium", "high")
+
+# Each imported path becomes a scenario an analyst has to read and a gap
+# analysis someone has to act on, so a seed is not imported wholesale.
+DEFAULT_IMPORT_MAX_PATHS = 6
+MAX_IMPORT_PATHS = 10
+
+# A projected scenario is not a confirmed attack, and readers struggle with
+# ambiguity, so every projected output carries the same sentence.
+# adversary_path_projector uses identical wording. "Projected", not
+# "estimated": nothing here scores likelihood.
+PROJECTION_NOTICE = "Projected from threat intelligence, not a confirmed attack path."
+
+EVIDENCE_MEANING = {
+    "documented": "ATT&CK attributes this technique to the actor directly",
+    "via_software": "in ATT&CK only the actor's tooling implements this technique",
+}
+
+ACTOR_SUPPORT_MEANING = {
+    "procedure_documented": (
+        "ATT&CK has a procedure example of this actor using this technique"
+    ),
+    "technique_documented": (
+        "ATT&CK attributes the technique to the actor, with no procedure "
+        "example describing how"
+    ),
+    "via_software": "in ATT&CK only the actor's tooling implements this technique",
+}
+
 
 # ---------------------------------------------------------------------------
 # Scenario Data Models
@@ -101,6 +144,24 @@ class AttackEvent:
     blocking_controls: list[str] = field(default_factory=list)
     detecting_controls: list[str] = field(default_factory=list)
     success_indicators: list[str] = field(default_factory=list)
+    # Both optional. A projected step carries them so the scenario can be
+    # audited on its own: the tactic the step claims, and whether ATT&CK
+    # attributes the technique to the actor ("documented") or only to its
+    # tooling ("via_software").
+    tactic: str = ""
+    evidence: str = ""
+    # Step state from a projection: what had to be true, what the step relies
+    # on, the assumptions a person can test, and whether the chain of access
+    # is continuous. All optional; analyst-built events leave them empty.
+    precondition: str = ""
+    exploited_condition: str = ""
+    assumptions: list[str] = field(default_factory=list)
+    transition: str = ""
+    actor_support: str = ""
+    procedure_excerpt: str = ""
+    control_note: str = ""
+    state_check: str = ""
+    access_source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,10 +172,22 @@ class AttackEvent:
             "target_asset": self.target_asset,
             "attack_technique": self.attack_technique,
             "technique_id": self.technique_id,
+            "tactic": self.tactic,
+            "evidence": self.evidence,
             "required_access": self.required_access,
             "resulting_access": self.resulting_access,
             "blocking_controls": self.blocking_controls,
             "detecting_controls": self.detecting_controls,
+            "success_indicators": self.success_indicators,
+            "precondition": self.precondition,
+            "exploited_condition": self.exploited_condition,
+            "assumptions": self.assumptions,
+            "transition": self.transition,
+            "actor_support": self.actor_support,
+            "procedure_excerpt": self.procedure_excerpt,
+            "control_note": self.control_note,
+            "state_check": self.state_check,
+            "access_source": self.access_source,
         }
 
 
@@ -132,6 +205,8 @@ class ThreatScenario:
     security_controls: list[SecurityControl] = field(default_factory=list)
     attack_sequence: list[AttackEvent] = field(default_factory=list)
     created_at: str = ""
+    # The projected path this scenario was imported from, if any.
+    path_id: str = ""
 
     def __post_init__(self):
         if not self.created_at:
@@ -166,6 +241,7 @@ class ThreatScenario:
             "name": self.name,
             "description": self.description,
             "source_type": self.source_type,
+            "path_id": self.path_id,
             "threat_actor_profile": self.threat_actor_profile,
             "attack_objective": self.attack_objective,
             "target_assets": self.target_assets,
@@ -173,6 +249,24 @@ class ThreatScenario:
             "controls_count": len(self.security_controls),
             "events_count": len(self.attack_sequence),
             "unprotected_count": len([e for e in self.attack_sequence if not e.blocking_controls]),
+            "created_at": self.created_at,
+        }
+
+    def to_full_dict(self) -> dict[str, Any]:
+        """Everything needed to rebuild the scenario — what import_scenario reads."""
+        return {
+            "scenario_id": self.scenario_id,
+            "path_id": self.path_id,
+            "name": self.name,
+            "description": self.description,
+            "source_type": self.source_type,
+            "source_document": self.source_document,
+            "threat_actor_profile": self.threat_actor_profile,
+            "attack_objective": self.attack_objective,
+            "target_assets": self.target_assets,
+            "entry_vectors": self.entry_vectors,
+            "security_controls": [c.to_dict() for c in self.security_controls],
+            "attack_sequence": [e.to_dict() for e in self.attack_sequence],
             "created_at": self.created_at,
         }
 
@@ -226,28 +320,116 @@ class ScenarioTracker:
 
 
 # ---------------------------------------------------------------------------
+# Scenario document validation
+# ---------------------------------------------------------------------------
+
+def _is_string_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _scenario_problems(raw: Any, where: str) -> list[str]:
+    """Everything wrong with one scenario in an import document.
+
+    Checked before anything is created, so a bad document imports nothing
+    rather than leaving half a scenario in the tracker.
+    """
+    if not isinstance(raw, dict):
+        return [f"{where}: scenario is not an object"]
+
+    problems: list[str] = []
+    if not str(raw.get("name", "") or "").strip():
+        problems.append(f"{where}: 'name' is required")
+
+    source_type = raw.get("source_type")
+    if source_type is not None and source_type not in SOURCE_TYPES:
+        problems.append(
+            f"{where}: source_type {source_type!r} must be one of: "
+            f"{', '.join(SOURCE_TYPES)}"
+        )
+
+    for key in ("target_assets", "entry_vectors"):
+        if key in raw and not _is_string_list(raw[key]):
+            problems.append(f"{where}: '{key}' must be a list of strings")
+
+    controls = raw.get("security_controls")
+    events = raw.get("attack_sequence")
+    if not isinstance(controls, list) or not isinstance(events, list):
+        problems.append(
+            f"{where}: needs 'security_controls' and 'attack_sequence' lists. "
+            f"A list_scenarios result carries counts only — save scenarios "
+            f"with export_scenario."
+        )
+        return problems
+
+    for index, control in enumerate(controls):
+        at = f"{where}.security_controls[{index}]"
+        if not isinstance(control, dict):
+            problems.append(f"{at}: control is not an object")
+            continue
+        if not str(control.get("name", "") or "").strip():
+            problems.append(f"{at}: 'name' is required")
+        if control.get("control_type") not in DEFENSE_LAYER_MAP:
+            problems.append(
+                f"{at}: control_type {control.get('control_type')!r} must be one "
+                f"of: {', '.join(DEFENSE_LAYER_MAP)}"
+            )
+        for key, allowed in (
+            ("implementation_status", IMPLEMENTATION_STATUSES),
+            ("bypass_difficulty", BYPASS_DIFFICULTIES),
+            ("detection_capability", DETECTION_CAPABILITIES),
+        ):
+            if key in control and control[key] not in allowed:
+                problems.append(
+                    f"{at}: {key} {control[key]!r} must be one of: "
+                    f"{', '.join(allowed)}"
+                )
+        if "bypass_requirements" in control and not _is_string_list(
+            control["bypass_requirements"]
+        ):
+            problems.append(f"{at}: 'bypass_requirements' must be a list of strings")
+
+    for index, event in enumerate(events):
+        at = f"{where}.attack_sequence[{index}]"
+        if not isinstance(event, dict):
+            problems.append(f"{at}: event is not an object")
+            continue
+        if not str(event.get("name", "") or "").strip():
+            problems.append(f"{at}: 'name' is required")
+        order = event.get("sequence_order")
+        if not isinstance(order, int) or isinstance(order, bool) or order < 1:
+            problems.append(f"{at}: 'sequence_order' must be an integer of 1 or more")
+        for key in (
+            "blocking_controls", "detecting_controls", "success_indicators",
+            "assumptions",
+        ):
+            if key in event and not _is_string_list(event[key]):
+                problems.append(f"{at}: '{key}' must be a list of strings")
+
+    return problems
+
+
+# ---------------------------------------------------------------------------
 # LLM Prompt Templates
 # ---------------------------------------------------------------------------
 
-THREAT_MODEL_PROMPT = """You are a Senior Security Architect analyzing a threat model document.
+THREAT_MODEL_PROMPT = """You are a Senior Security Architect summarizing a threat model document.
 
 DOCUMENT TYPE: {source_type}
 DOCUMENT CONTENT:
 {document_content}
 
-Provide a structured analysis with:
+Summarize what the document itself states, under these headings:
 
-1. **Attack Surface Summary**: Key assets and entry points identified
-2. **Threat Actors**: Likely adversaries and their capabilities
-3. **Attack Paths**: Step-by-step attack sequences with MITRE ATT&CK mapping
-4. **Security Controls**: Existing controls and their effectiveness
-5. **Defense Gaps**: Unprotected attack steps and weak controls
-6. **Recommendations**: Prioritized remediation actions
+1. **Scope and Assets**: The system described, its key assets and entry points
+2. **Threats Named**: Threats and threat actors the document identifies
+3. **Controls Documented**: Security controls it describes and their stated status
+4. **Gaps Stated**: Weaknesses and open risks the document records
+5. **Recommendations**: Remediation it proposes, or that follows directly from the gaps above
 
-For each attack path step, note:
-- Required access level
-- Relevant MITRE ATT&CK technique (ID + name)
-- Whether blocking or detection controls exist
+Report only what the document supports. Do not construct attack paths, and do
+not assign MITRE ATT&CK technique IDs the document does not cite — where it
+cites them, list them as cited. If the document is silent on a heading, say so
+rather than filling it in.
 
 Keep response under 1000 words. Use structured formatting."""
 
@@ -281,7 +463,7 @@ class ThreatModelAnalyzer:
     def metadata(self) -> dict[str, Any]:
         return {
             "tool_name": "threat_model_analyzer",
-            "version": "1.0.0",
+            "version": "1.1.0",
             "pillar": "threat_modeling",
         }
 
@@ -291,10 +473,7 @@ class ThreatModelAnalyzer:
 
         if not action:
             errors.append("'action' is required")
-        elif action not in (
-            "analyze_document", "create_scenario", "add_control",
-            "add_event", "list_scenarios", "gap_analysis", "export",
-        ):
+        elif action not in ACTIONS:
             errors.append(f"Invalid action '{action}'.")
 
         if action == "analyze_document" and not payload.get("document_content"):
@@ -328,6 +507,19 @@ class ThreatModelAnalyzer:
             if not payload.get("scenario_id"):
                 errors.append(f"'scenario_id' is required for {action}")
 
+        if action == "import_scenario":
+            has_source = bool(
+                str(payload.get("artifact_id", "") or "").strip()
+                or str(payload.get("file_path", "") or "").strip()
+            )
+            if not has_source:
+                errors.append("import_scenario needs 'artifact_id' or 'file_path'")
+            max_paths = payload.get("max_paths", DEFAULT_IMPORT_MAX_PATHS)
+            if not isinstance(max_paths, int) or isinstance(max_paths, bool):
+                errors.append("'max_paths' must be an integer")
+            elif not 1 <= max_paths <= MAX_IMPORT_PATHS:
+                errors.append(f"'max_paths' must be between 1 and {MAX_IMPORT_PATHS}")
+
         if errors:
             return ValidationResult(ok=False, errors=errors)
         return ValidationResult(ok=True)
@@ -355,6 +547,10 @@ class ThreatModelAnalyzer:
                 return self._gap_analysis(payload)
             elif action == "export":
                 return self._export(payload)
+            elif action == "export_scenario":
+                return self._export_scenario(payload)
+            elif action == "import_scenario":
+                return self._import_scenario(payload, context)
             else:
                 return ToolResult(ok=False, error_code="INPUT_VALIDATION_FAILED", message=f"Unknown action: {action}")
         except Exception as e:
@@ -395,11 +591,58 @@ class ThreatModelAnalyzer:
         elif action == "gap_analysis":
             gap = data.get("gap_analysis", {})
             total = gap.get("total_issues", 0)
-            return f"Gap analysis for {data.get('scenario_id')}: {total} issues found."
+            # total_issues adds unlike things, so say what it is made of.
+            summary = (
+                f"Gap analysis for {data.get('scenario_id')}: {total} issues found — "
+                f"{len(gap.get('unprotected_events', []))} step(s) with no "
+                f"implemented preventive control, "
+                f"{len(gap.get('weak_controls', []))} incomplete control(s), "
+                f"{len(gap.get('easy_bypass', []))} easy-bypass control(s). "
+                f"One control can count as both incomplete and easy to bypass."
+            )
+            assumptions = gap.get("assumptions_to_test", 0)
+            state_gaps = gap.get("state_gaps", [])
+            if assumptions or state_gaps:
+                summary += (
+                    f" Step state: {assumptions} assumption(s) to test, "
+                    f"{len(state_gaps)} state gap(s)."
+                )
+            if data.get("source_type") == "actor_projection":
+                summary += f" {PROJECTION_NOTICE}"
+            return summary
 
         elif action == "export":
             md = data.get("markdown", "")
             return md[:1800] if md else "Scenario exported."
+
+        elif action == "export_scenario":
+            ids = [s["scenario_id"] for s in data.get("scenarios", [])]
+            return (
+                f"Exported {len(ids)} scenario(s) in full: {', '.join(ids)}. "
+                f"Saved as an artifact; reload with import_scenario --artifact_id <id>."
+            )[:1800]
+
+        elif action == "import_scenario":
+            imported = data.get("imported", [])
+            parts = [f"Imported {len(imported)} scenario(s) from {data.get('source')}:"]
+            for s in imported:
+                label = f" [{s['path_id']}]" if s.get("path_id") else ""
+                parts.append(
+                    f"  {s['scenario_id']}{label}: {s['name']} "
+                    f"({s['controls_count']}C/{s['events_count']}E, "
+                    f"{s['unprotected_count']} step(s) with no implemented "
+                    f"preventive control)"
+                )
+            skipped = data.get("skipped_path_ids", [])
+            if skipped:
+                parts.append(
+                    f"Skipped {len(skipped)} over max_paths={data.get('max_paths')}: "
+                    f"{', '.join(skipped)}"
+                )
+            if any(s.get("source_type") == "actor_projection" for s in imported):
+                parts.append(PROJECTION_NOTICE)
+            parts.append("Next: gap_analysis --scenario_id <id>.")
+            return "\n".join(parts)[:1800]
 
         return f"threat_model_analyzer completed action '{action}'."
 
@@ -408,7 +651,7 @@ class ThreatModelAnalyzer:
     # -------------------------------------------------------------------
 
     def _analyze_document(self, payload: dict[str, Any], context: Any) -> ToolResult:
-        """Analyze a threat model or tabletop document with LLM."""
+        """Summarize a threat model or tabletop document with LLM."""
         content = payload["document_content"]
         source_type = payload.get("source_type", "threat_model")
 
@@ -511,6 +754,8 @@ class ThreatModelAnalyzer:
             blocking_controls=payload.get("blocking_controls", []),
             detecting_controls=payload.get("detecting_controls", []),
             success_indicators=payload.get("success_indicators", []),
+            tactic=payload.get("tactic", ""),
+            evidence=payload.get("evidence", ""),
         )
 
         if event is None:
@@ -570,6 +815,17 @@ class ThreatModelAnalyzer:
             if c.bypass_difficulty in ("trivial", "low")
         ]
 
+        # Step state from a projection. Kept out of total_issues: an assumption
+        # is something to test, not a defect, and a state gap is a question
+        # about the projection rather than about the defences.
+        assumptions_to_test = sum(len(e.assumptions) for e in scenario.attack_sequence)
+        state_gaps = [
+            {"event_id": e.event_id, "name": e.name,
+             "sequence_order": e.sequence_order, "state_check": e.state_check}
+            for e in scenario.attack_sequence
+            if e.state_check.startswith("gap")
+        ]
+
         weakest = scenario.get_weakest_point()
         coverage = scenario.get_defense_coverage()
 
@@ -581,6 +837,7 @@ class ThreatModelAnalyzer:
                 "action": "gap_analysis",
                 "scenario_id": scenario_id,
                 "scenario_name": scenario.name,
+                "source_type": scenario.source_type,
                 "gap_analysis": {
                     "unprotected_events": unprotected,
                     "weak_controls": weak_controls,
@@ -591,6 +848,8 @@ class ThreatModelAnalyzer:
                         "name": weakest.name,
                     } if weakest else None,
                     "defense_coverage": coverage,
+                    "assumptions_to_test": assumptions_to_test,
+                    "state_gaps": state_gaps,
                 },
             },
         )
@@ -624,20 +883,246 @@ class ThreatModelAnalyzer:
             },
         )
 
+    def _export_scenario(self, payload: dict[str, Any]) -> ToolResult:
+        """Serialize scenarios in full so they can be saved and re-imported.
+
+        The tracker lives only as long as the process, so this is the manual
+        path to persistence. The shell auto-persists the result, and the saved
+        artifact is exactly the document import_scenario reads back.
+        """
+        scenario_id = payload.get("scenario_id")
+        if scenario_id:
+            scenario = self._tracker.get_scenario(scenario_id)
+            if not scenario:
+                return ToolResult(
+                    ok=False,
+                    error_code="ARTIFACT_NOT_FOUND",
+                    message=f"Scenario '{scenario_id}' not found.",
+                )
+            scenarios = [scenario]
+        else:
+            scenarios = self._tracker.get_all_scenarios()
+            if not scenarios:
+                return ToolResult(
+                    ok=False,
+                    error_code="ARTIFACT_NOT_FOUND",
+                    message="No scenarios to export.",
+                )
+
+        return ToolResult(
+            ok=True,
+            result={
+                "action": "export_scenario",
+                "source_tool": "threat_model_analyzer",
+                "scenario_count": len(scenarios),
+                "scenarios": [s.to_full_dict() for s in scenarios],
+            },
+        )
+
+    def _import_scenario(self, payload: dict[str, Any], context: Any) -> ToolResult:
+        """Load an adversary_path_projector seed or an export_scenario document.
+
+        Each path becomes its own scenario, up to max_paths. Ids are reissued by
+        the tracker — a document's own SC-/AE- ids would collide with scenarios
+        already loaded — and control references that used the old ids follow.
+        """
+        data, source, error = self._read_scenario_document(payload, context)
+        if error is not None:
+            return error
+
+        scenarios = data.get("scenarios") if isinstance(data, dict) else None
+        if not isinstance(scenarios, list) or not scenarios:
+            return ToolResult(
+                ok=False,
+                error_code="INPUT_VALIDATION_FAILED",
+                message=(
+                    f"'{source}' holds no 'scenarios' list. Expected an "
+                    f"adversary_path_projector scenario seed (not its attack "
+                    f"graph) or an export_scenario result."
+                ),
+            )
+
+        path_id = str(payload.get("path_id", "") or "").strip()
+        if path_id:
+            selected = [
+                s for s in scenarios
+                if isinstance(s, dict) and s.get("path_id") == path_id
+            ]
+            if not selected:
+                available = [
+                    s["path_id"] for s in scenarios
+                    if isinstance(s, dict) and s.get("path_id")
+                ]
+                return ToolResult(
+                    ok=False,
+                    error_code="ARTIFACT_NOT_FOUND",
+                    message=(
+                        f"Path '{path_id}' is not in '{source}'. Available: "
+                        f"{', '.join(available) or 'none'}."
+                    ),
+                )
+        else:
+            selected = scenarios
+
+        max_paths = payload.get("max_paths", DEFAULT_IMPORT_MAX_PATHS)
+        skipped = selected[max_paths:]
+        selected = selected[:max_paths]
+
+        problems: list[str] = []
+        for index, raw in enumerate(selected):
+            where = (
+                raw.get("path_id") if isinstance(raw, dict) and raw.get("path_id")
+                else f"scenarios[{index}]"
+            )
+            problems.extend(_scenario_problems(raw, where))
+        if problems:
+            return ToolResult(
+                ok=False,
+                error_code="INPUT_VALIDATION_FAILED",
+                message=f"{len(problems)} problem(s) in '{source}'; nothing was imported.",
+                details={"problems": problems},
+            )
+
+        imported = [self._import_one(raw, source) for raw in selected]
+        return ToolResult(
+            ok=True,
+            result={
+                "action": "import_scenario",
+                "source": source,
+                "imported_count": len(imported),
+                "imported": [s.to_dict() for s in imported],
+                "max_paths": max_paths,
+                "skipped_path_ids": [
+                    (s.get("path_id") or s.get("name") or "?")
+                    if isinstance(s, dict) else "?"
+                    for s in skipped
+                ],
+            },
+        )
+
+    def _import_one(self, raw: dict[str, Any], source: str) -> ThreatScenario:
+        """Create one validated scenario, its controls, then its events."""
+        scenario = self._tracker.create_scenario(
+            name=str(raw["name"]).strip(),
+            description=str(raw.get("description", "") or ""),
+            source_type=raw.get("source_type") or "threat_model",
+            # Keep an exported scenario's original provenance on re-import.
+            source_document=str(raw.get("source_document") or source),
+            threat_actor_profile=str(raw.get("threat_actor_profile", "") or ""),
+            attack_objective=str(raw.get("attack_objective", "") or ""),
+            target_assets=list(raw.get("target_assets") or []),
+            entry_vectors=list(raw.get("entry_vectors") or []),
+            path_id=str(raw.get("path_id", "") or ""),
+        )
+
+        reissued: dict[str, str] = {}
+        for control in raw["security_controls"]:
+            added = self._tracker.add_control(
+                scenario.scenario_id,
+                name=str(control["name"]).strip(),
+                control_type=DEFENSE_LAYER_MAP[control["control_type"]],
+                description=str(control.get("description", "") or ""),
+                implementation_status=control.get("implementation_status", "implemented"),
+                bypass_difficulty=control.get("bypass_difficulty", "medium"),
+                bypass_requirements=list(control.get("bypass_requirements") or []),
+                detection_capability=control.get("detection_capability", "medium"),
+            )
+            old_id = str(control.get("control_id", "") or "")
+            if added is not None and old_id:
+                reissued[old_id] = added.control_id
+
+        for event in raw["attack_sequence"]:
+            self._tracker.add_event(
+                scenario.scenario_id,
+                name=str(event["name"]).strip(),
+                description=str(event.get("description", "") or ""),
+                sequence_order=event["sequence_order"],
+                target_asset=str(event.get("target_asset", "") or ""),
+                attack_technique=str(event.get("attack_technique", "") or ""),
+                technique_id=str(event.get("technique_id", "") or ""),
+                required_access=str(event.get("required_access", "none") or "none"),
+                resulting_access=str(event.get("resulting_access", "none") or "none"),
+                blocking_controls=[
+                    reissued.get(ref, ref) for ref in event.get("blocking_controls") or []
+                ],
+                detecting_controls=[
+                    reissued.get(ref, ref) for ref in event.get("detecting_controls") or []
+                ],
+                success_indicators=list(event.get("success_indicators") or []),
+                tactic=str(event.get("tactic", "") or ""),
+                evidence=str(event.get("evidence", "") or ""),
+                precondition=str(event.get("precondition", "") or ""),
+                exploited_condition=str(event.get("exploited_condition", "") or ""),
+                assumptions=list(event.get("assumptions") or []),
+                transition=str(event.get("transition", "") or ""),
+                actor_support=str(event.get("actor_support", "") or ""),
+                procedure_excerpt=str(event.get("procedure_excerpt", "") or ""),
+                control_note=str(event.get("control_note", "") or ""),
+                state_check=str(event.get("state_check", "") or ""),
+                access_source=str(event.get("access_source", "") or ""),
+            )
+        return scenario
+
+    @staticmethod
+    def _read_scenario_document(
+        payload: dict[str, Any], context: Any
+    ) -> tuple[Any, str, ToolResult | None]:
+        """Resolve the import source to parsed JSON, or the error to surface."""
+        artifact_id = str(payload.get("artifact_id", "") or "").strip()
+        file_path = str(payload.get("file_path", "") or "").strip()
+
+        if artifact_id:
+            artifacts = getattr(context, "artifacts", None) or []
+            artifact = next(
+                (a for a in artifacts if a.artifact_id == artifact_id), None
+            )
+            if artifact is not None:
+                file_path = artifact.file_path
+            elif not file_path:
+                return None, artifact_id, ToolResult(
+                    ok=False,
+                    error_code="ARTIFACT_NOT_FOUND",
+                    message=(
+                        f"Artifact '{artifact_id}' not found in session. "
+                        "Use 'artifacts' to list loaded artifacts."
+                    ),
+                )
+
+        source = artifact_id or file_path
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                return json.load(handle), source, None
+        except Exception as exc:
+            return None, source, ToolResult(
+                ok=False,
+                error_code="ARTIFACT_UNREADABLE",
+                message=f"Failed to read '{source}': {exc}",
+            )
+
     # -------------------------------------------------------------------
     # Markdown generation
     # -------------------------------------------------------------------
 
     def _generate_markdown(self, scenario: ThreatScenario) -> str:
         """Generate a markdown report for a scenario."""
+        # A projected scenario is not a confirmed attack. Every place a reader
+        # could take it for one says otherwise.
+        projected = scenario.source_type == "actor_projection"
+        actor = scenario.threat_actor_profile or "the actor"
+
         lines = [
-            f"# Threat Scenario: {scenario.name}",
+            f"# {'Projected ' if projected else ''}Threat Scenario: {scenario.name}",
             "",
             f"**ID:** {scenario.scenario_id}",
-            f"**Source:** {scenario.source_type}",
+            (
+                f"**Source:** {scenario.source_type} (projected from threat intelligence)"
+                if projected else f"**Source:** {scenario.source_type}"
+            ),
             f"**Created:** {scenario.created_at}",
         ]
 
+        if scenario.path_id:
+            lines.append(f"**Projected Path:** {scenario.path_id}")
         if scenario.threat_actor_profile:
             lines.append(f"**Threat Actor:** {scenario.threat_actor_profile}")
         if scenario.attack_objective:
@@ -648,8 +1133,38 @@ class ThreatModelAnalyzer:
             lines.append(f"**Entry Vectors:** {', '.join(scenario.entry_vectors)}")
 
         lines.append("")
-        lines.append(f"> {scenario.description}")
+        if projected:
+            lines.append(
+                f"> *Path summary written by the LLM (projection):* {scenario.description}"
+            )
+        else:
+            lines.append(f"> {scenario.description}")
         lines.append("")
+
+        if projected:
+            # The access line changes with where the values came from, so the
+            # paragraph must not claim they are tactic defaults when the model
+            # stated them and the projector checked the chain.
+            access_clause = (
+                "the access levels are the model's too, checked for continuity "
+                "between steps but never for truth"
+                if any(
+                    e.access_source == "model" for e in scenario.attack_sequence
+                )
+                else "the access levels are typical values for each step's tactic"
+            )
+            lines.append(
+                f"**{PROJECTION_NOTICE}** An LLM generated this path the way an "
+                f"adversary would: it reasoned over the techniques MITRE ATT&CK "
+                f"documents {actor} using and placed them onto this organization's "
+                f"own flow map. The organization's inside view of its architecture "
+                f"and controls is better than an external attacker's, and an "
+                f"attacker can run the same kind of speculation. Technique ids, "
+                f"technique names and controls are sourced; the route and the step "
+                f"rationales are the model's projection, and {access_clause}. This "
+                f"is not a likelihood assessment."
+            )
+            lines.append("")
 
         # Security Controls
         lines.append("## Security Controls")
@@ -668,30 +1183,104 @@ class ThreatModelAnalyzer:
         lines.append("")
 
         # Attack Sequence
-        lines.append("## Attack Sequence")
+        lines.append("## Projected Attack Sequence" if projected else "## Attack Sequence")
         lines.append("")
         if scenario.attack_sequence:
             for e in scenario.attack_sequence:
-                protection = "PROTECTED" if e.blocking_controls else (
+                protection = "CONTROL_PRESENT" if e.blocking_controls else (
                     "DETECT ONLY" if e.detecting_controls else "UNPROTECTED"
                 )
                 lines.append(f"### Step {e.sequence_order}: {e.name} [{protection}]")
                 lines.append("")
                 if e.description:
-                    lines.append(f"{e.description}")
+                    if projected:
+                        lines.append(
+                            f"*LLM rationale (projection, not verified):* {e.description}"
+                        )
+                    else:
+                        lines.append(f"{e.description}")
                     lines.append("")
                 if e.technique_id:
                     lines.append(f"- **MITRE ATT&CK:** {e.attack_technique} ({e.technique_id})")
+                if e.tactic:
+                    lines.append(f"- **Tactic:** {e.tactic}")
+                if e.evidence:
+                    meaning = EVIDENCE_MEANING.get(e.evidence)
+                    lines.append(
+                        f"- **Evidence:** {e.evidence} — {meaning}" if meaning
+                        else f"- **Evidence:** {e.evidence}"
+                    )
+                if e.actor_support:
+                    support = ACTOR_SUPPORT_MEANING.get(e.actor_support)
+                    lines.append(
+                        f"- **ATT&CK support:** {e.actor_support} — {support}" if support
+                        else f"- **ATT&CK support:** {e.actor_support}"
+                    )
+                if e.procedure_excerpt:
+                    lines.append(f"- **ATT&CK procedure example:** {e.procedure_excerpt}")
                 if e.target_asset:
                     lines.append(f"- **Target:** {e.target_asset}")
-                lines.append(f"- **Access:** {e.required_access} -> {e.resulting_access}")
+                if e.transition:
+                    lines.append(f"- **Via:** {e.transition}")
+                if e.precondition:
+                    lines.append(f"- **Precondition (LLM):** {e.precondition}")
+                if e.exploited_condition:
+                    lines.append(f"- **Exploits (LLM):** {e.exploited_condition}")
+                if projected and e.access_source == "model":
+                    lines.append(
+                        f"- **Access (stated by the LLM, checked for continuity):** "
+                        f"{e.required_access} -> {e.resulting_access}"
+                    )
+                elif projected:
+                    lines.append(
+                        f"- **Typical access for this tactic (not tracked step to "
+                        f"step):** {e.required_access} -> {e.resulting_access}"
+                    )
+                else:
+                    lines.append(f"- **Access:** {e.required_access} -> {e.resulting_access}")
+                if projected and e.success_indicators:
+                    lines.append(f"- **Result (LLM):** {'; '.join(e.success_indicators)}")
+                if e.control_note:
+                    lines.append(f"- **Against the controls (LLM):** {e.control_note}")
+                if e.assumptions:
+                    lines.append("- **Assumptions to test:**")
+                    for assumption in e.assumptions:
+                        lines.append(f"  - {assumption}")
+                if e.state_check:
+                    lines.append(f"- **State check:** {e.state_check}")
                 if e.blocking_controls:
-                    lines.append(f"- **Blocking Controls:** {', '.join(e.blocking_controls)}")
+                    # "Blocking" read as a claim the control stops the technique.
+                    # What was checked is that an implemented preventive control
+                    # sits on the component — how good it is is a later step.
+                    lines.append(
+                        f"- **Preventive Controls Present:** {', '.join(e.blocking_controls)}"
+                    )
                 if e.detecting_controls:
                     lines.append(f"- **Detecting Controls:** {', '.join(e.detecting_controls)}")
                 lines.append("")
         else:
             lines.append("*No attack events added yet.*")
+
+        # Assumptions to Test — the scenario's test plan, collected in one place
+        assumption_rows = [
+            (e, assumption)
+            for e in scenario.attack_sequence for assumption in e.assumptions
+        ]
+        if assumption_rows:
+            lines.append("## Assumptions to Test")
+            lines.append("")
+            lines.append(
+                "Each step above depends on these. None has been verified; each is "
+                "something to check against the real system."
+            )
+            lines.append("")
+            for index, (e, assumption) in enumerate(assumption_rows, start=1):
+                label = e.technique_id or e.name
+                where = f" on {e.target_asset}" if e.target_asset else ""
+                lines.append(
+                    f"{index}. **Step {e.sequence_order}** ({label}{where}): {assumption}"
+                )
+            lines.append("")
 
         # Gap Summary
         unprotected = [e for e in scenario.attack_sequence if not e.blocking_controls]
@@ -701,8 +1290,14 @@ class ThreatModelAnalyzer:
         lines.append("")
         lines.append(f"- **Total Controls:** {len(scenario.security_controls)}")
         lines.append(f"- **Total Attack Steps:** {len(scenario.attack_sequence)}")
-        lines.append(f"- **Unprotected Steps:** {len(unprotected)}")
+        lines.append(
+            f"- **Steps With No Implemented Preventive Control:** {len(unprotected)}"
+        )
         lines.append(f"- **Incomplete Controls:** {len(weak)}")
+        if assumption_rows or any(e.state_check for e in scenario.attack_sequence):
+            gaps = [e for e in scenario.attack_sequence if e.state_check.startswith("gap")]
+            lines.append(f"- **Assumptions to Test:** {len(assumption_rows)}")
+            lines.append(f"- **State Gaps:** {len(gaps)}")
         lines.append("")
 
         return "\n".join(lines)

@@ -48,11 +48,20 @@ class QueryHints:
     Plugins pass these to guide model selection without knowing provider details.
     All fields are optional — the dispatcher uses sensible defaults.
     """
-    tier: str = "light"                    # "light" | "heavy"
+    # None means "no opinion" — the plugin's manifest model_tier (or the
+    # analyst's pinned tier) decides. Set it only to override that.
+    tier: str | None = None                # "light" | "heavy" | None
     needs_reasoning: bool = False          # biases toward deep-reasoning models
     needs_structured_output: bool = False  # ensures JSON-mode capable model
     prefers_native_file: bool = False      # prefer native file > text extraction
     max_budget_cents: float | None = None  # cost ceiling per call (safety net)
+    # Gemini 3.x controls. Both default to None meaning "provider default".
+    # media_resolution sets PDF/image token cost per page:
+    #   "low" 280 | "medium" 560 (default) | "high" 1120 — native text is free.
+    media_resolution: str | None = None
+    # thinking_level trades reasoning depth for latency and cost. The provider
+    # default is "medium"; bulk extraction should ask for "low" or "minimal".
+    thinking_level: str | None = None      # "minimal" | "low" | "medium" | "high"
 
 
 @dataclass
@@ -68,6 +77,10 @@ class LLMResponse:
     model_used: str | None = None          # which model actually ran
     transport_path: str | None = None      # "gs_uri", "inline_bytes", "text_fallback"
     fallback_reason: str | None = None     # why preferred path wasn't used
+    finish_reason: str | None = None       # provider stop reason, e.g. "STOP"
+    # The reply stopped at the output-token cap, so text is a partial answer:
+    # ok is still True and the content is usable, but it is not complete.
+    truncated: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -152,16 +165,18 @@ class LLMQueryInterface(Protocol):
         image_format: str,
         system_context: str | None = None,
         max_tokens: int = 4096,
+        hints: QueryHints | None = None,
     ) -> LLMResponse:
         """Send a multimodal (text + image) prompt to the connected LLM.
-        
+
         Args:
             prompt: The text prompt.
             image_data: Raw image bytes.
             image_format: Image format (jpeg, png).
             system_context: Optional system context override.
             max_tokens: Maximum tokens in response.
-        
+            hints: Optional routing hints for model selection.
+
         Returns:
             LLMResponse with text or error. If the model doesn't support
             vision, returns ok=False with error indicating capability gap.
@@ -239,6 +254,9 @@ class ExecutionContext:
     # LLM capabilities
     llm_enabled: bool = False
     llm_query: LLMQueryInterface | None = None
+    # Default tier from the plugin manifest ("light" | "heavy" | "none").
+    # Already applied to llm_query — informational for the plugin.
+    model_tier: str = "light"
     
     # Artifact registration (the one write operation plugins may perform)
     register_artifact: Callable[[str, str, str, dict], ArtifactRef] | None = None

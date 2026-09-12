@@ -163,7 +163,7 @@ The framework owns a single MCP client instance per session. Configuration is vi
 |---|---|---|
 | `EVENTMILL_MCP_TRANSPORT` | MCP transport type | `stdio`, `sse` |
 | `EVENTMILL_MCP_ENDPOINT` | Model provider endpoint | Provider-specific |
-| `EVENTMILL_MODEL_ID` | Model identifier | `gemini-2.5-flash`, `claude-sonnet-4-20250514` |
+| `EVENTMILL_MODEL_LIGHT` / `EVENTMILL_MODEL_HEAVY` | Per-tier model id override | `gemini-3.5-flash`, `gemini-3.1-pro-preview` |
 
 Additional provider-specific variables (API keys, project IDs) are documented per provider.
 
@@ -408,7 +408,7 @@ Additional network traffic formats (NetFlow, sFlow) are candidates for future pl
 
 ## 11. Current Constraints and Known Limitations
 
-- **Single active pillar**: The routing layer defaults to one active pillar at a time. Cross-pillar tool access is controlled by expansion modes (`strict`, `adjacent`, `broad`) defined in `router_design.md`. MVP ships with `strict` and `adjacent` modes only.
+- **Single active pillar**: The routing layer works one active pillar at a time. A tool reaches another pillar only by naming it in its manifest's `also_useful_in`; the pillar-level expansion modes (`strict`, `adjacent`, `broad`) originally specified in `router_design.md` were removed on 2026-09-07.
 
 - **Artifact lifecycle**: The artifact registry (section 7) provides the MVP mechanism. Future releases may add artifact versioning, provenance graphs, or integration with external evidence management systems.
 

@@ -24,8 +24,8 @@ For **PDF reports**, the plugin now supports **native PDF ingestion via the Gemi
    ```
    This downloads the Enterprise and ICS ATT&CK STIX bundles from the
    [MITRE CTI repository](https://github.com/mitre/cti) (currently pinned
-   to **ATT&CK v18.1**) and writes a compact lookup file to
-   `framework/reference_data/mitre_techniques.json` (~774 techniques).
+   to **ATT&CK v19.2**) and writes a compact lookup file to
+   `framework/reference_data/mitre_techniques.json` (~794 techniques).
    The shared MITRE module (`framework.reference_data.mitre_attack`) is
    used by this plugin and others to:
    - **Enrich** LLM output with authoritative technique names and tactics
@@ -33,9 +33,19 @@ For **PDF reports**, the plugin now supports **native PDF ingestion via the Gemi
    - **Validate** every technique ID and mark non-ATT&CK IDs with `(non-ATT&CK ID)`
      and `"mitre_validated": false` so analysts know when an ID was LLM-generated
    - **Validate tactics** against each technique's allowed tactics. Case
-     differences are auto-corrected (e.g. "Command and Control" →
-     "Command And Control"). Genuine mismatches are flagged with
-     `"tactic_mismatch": true` in the output entry (see below).
+     differences are auto-corrected to the official spelling (e.g.
+     "Command And Control" → "Command and Control"). Genuine mismatches
+     are flagged with `"tactic_mismatch": true` in the output entry (see
+     below).
+   - **Migrate retired tactics.** ATT&CK v19 replaced "Defense Evasion"
+     with "Stealth" and "Defense Impairment". When the LLM or an older
+     artifact still says "Defense Evasion", the reconciler rewrites it to
+     whichever successor the technique actually lists (T1027 → Stealth,
+     T1553 → Defense Impairment). Occurrences it cannot resolve — an ID not
+     in ATT&CK, or a technique allowing both successors — are left as-is
+     and flagged as a mismatch. The tactic vocabulary and kill-chain order
+     live in `framework.reference_data.mitre_attack` (`TACTIC_ORDER`,
+     `LEGACY_TACTIC_ALIASES`) so every plugin shares one definition.
 
    ### Multi-Role Tactic Mappings
 
@@ -56,33 +66,58 @@ For **PDF reports**, the plugin now supports **native PDF ingestion via the Gemi
    tactics, preventing the MITRE matrix from being artificially flattened by
    repeated "Initial Access" labels.
 
-   ### Tactic Mismatch Labeling
+   ### Tactic Correction and Mismatch Labeling
 
-   When the reconciler detects that an assigned tactic is **not** in the
-   technique's official ATT&CK tactic list (even after case-insensitive
-   comparison), the entry is flagged:
+   After the LLM assigns tactics, the reconciler checks every label against
+   the technique's official ATT&CK tactic list and resolves it in one of
+   three ways. Only the last one needs a person.
 
-   ```json
-   {
-     "technique_id": "T1078",
-     "tactic": "Lateral Movement",
-     "mitre_validated": true,
-     "tactic_mismatch": true
-   }
-   ```
+   1. **Corrected automatically** — the entry gets `tactic_corrected_from`
+      holding the LLM's original label. This happens when the label is
+      unambiguously wrong:
+      - a retired tactic ("Defense Evasion") whose technique lists exactly
+        one of the v19 successors (T1027 → Stealth, T1553 → Defense
+        Impairment);
+      - one of the Stealth / Defense Impairment pair where the technique
+        only allows the other (T1578.002 labelled Stealth → Defense
+        Impairment);
+      - a technique with a single valid tactic (T1490 labelled Defense
+        Impairment → Impact). 633 of 794 techniques are single-tactic.
+      Attack-graph steps are corrected the same way so nodes and mappings
+      agree.
+   2. **Case fixed** — "Command And Control" becomes "Command and Control".
+   3. **Needs analyst review** — the technique has several valid tactics and
+      the LLM chose none of them. The label is kept (it may describe the
+      role the report gives the technique), and the entry is flagged with the
+      options:
+
+      ```json
+      {
+        "technique_id": "T1078",
+        "tactic": "Lateral Movement",
+        "mitre_validated": true,
+        "tactic_mismatch": true,
+        "allowed_tactics": ["Stealth", "Persistence", "Privilege Escalation", "Initial Access"]
+      }
+      ```
+
+      The run summary prints an `ACTION:` line listing these entries with
+      their allowed tactics, `summary.tactic_mismatch_count` counts them, and
+      `attack_path_visualizer` marks the node "tactic unconfirmed". To
+      resolve one, read the report context for that step and either accept
+      the label as the role described or pick one of `allowed_tactics`.
 
    - `mitre_validated: true` — the technique ID exists in ATT&CK.
-   - `tactic_mismatch: true` — the tactic is **not** in the technique's
-     allowed list. The mapping may still describe real attacker behavior, but
-     the tactic label may be an LLM hallucination. Analysts should treat these
-     entries with extra scrutiny.
-   - **Absent** `tactic_mismatch` — tactic matches an allowed ATT&CK tactic.
+   - `mitre_validated: false` — the ID is not in ATT&CK; the name is suffixed
+     "(non-ATT&CK ID)". Treat as an LLM guess.
 
    Re-run the script after a new ATT&CK version is released to pick up new
    techniques. The plugin works without the file but skips enrichment and
    validation — a warning is logged on first use.
 
 ### Running in Event Mill
+
+Arguments are passed as `--key value` flags.
 
 ```bash
 # Start Event Mill
@@ -91,21 +126,27 @@ eventmill
 # Load an artifact (PDF, HTML, or text file)
 load /path/to/threat_report.pdf
 
-# Check loaded artifacts
+# Check loaded artifacts — this prints the artifact ID to use below
 artifacts
 
 # Run the ingester on the loaded artifact
-run threat_intel_ingester {"artifact_id": "<artifact_id>"}
+run threat_intel_ingester --artifact_id <artifact_id>
 
-# View the structured output
-result
+# With source context and a page cap
+run threat_intel_ingester --artifact_id <artifact_id> --source_context "Mandiant M-Trends 2025" --max_pages 50
+
+# Restrict the IOC types extracted (comma-separated list)
+run threat_intel_ingester --artifact_id <artifact_id> --ioc_types ip,domain,cve
 
 # Chain to attack_path_visualizer using the output artifact
-run attack_path_visualizer {"artifact_id": "<output_artifact_id>"}
+run attack_path_visualizer --artifact_id <output_artifact_id> --format mermaid
 
 # Export the JSON output to cloud storage
 export <output_artifact_id>
 ```
+
+The run summary prints the output artifact ID and the path it was written to.
+`artifacts` lists them again at any time.
 
 ### Input Parameters
 
@@ -119,14 +160,14 @@ export <output_artifact_id>
 
 ### Example Request
 
-```json
-{
-  "artifact_id": "art_0001",
-  "source_context": "Mandiant M-Trends 2025 Report",
-  "ioc_types": ["ip", "domain", "hash_sha256", "url", "cve", "mitre_technique"],
-  "confidence_threshold": "low",
-  "max_pages": 50
-}
+```
+run threat_intel_ingester --artifact_id art_0001 --source_context "Mandiant M-Trends 2025 Report" --ioc_types ip,domain,hash_sha256,url,cve,mitre_technique --confidence_threshold low --max_pages 50
+```
+
+**JSON alternative.** Every tool also accepts a JSON payload. It is only
+needed for list or object arguments that a flag cannot express:
+```
+run threat_intel_ingester {"artifact_id": "art_0001", "source_context": "Mandiant M-Trends 2025 Report", "ioc_types": ["ip", "domain", "hash_sha256", "url", "cve", "mitre_technique"], "confidence_threshold": "low", "max_pages": 50}
 ```
 
 ## Supported Artifact Types
@@ -156,6 +197,33 @@ The native path uses `QueryHints(tier="heavy", prefers_native_file=True)` and a 
 LLM call with `max_tokens=8192`, eliminating the context loss from chunking.
 
 The `LLMResponse.transport_path` field records which ingestion method was used.
+
+### Page-range batching (dense documents)
+
+Before any model call the plugin measures the document: pages, regex
+candidates per page, and an estimate of the output tokens the model will
+have to write (about 70 per candidate). The reply grows with the candidate
+count, not the page count, so a 20-page IOC appendix costs more than a
+100-page narrative report. `framework.documents.plan_ingestion` turns
+those numbers into one of three strategies, logged as `[PLAN]` and stored
+in `summary.ingestion_plan`:
+
+| Strategy | When | What happens |
+|---|---|---|
+| `native` | whole document fits one call's output cap and request deadline (with headroom) | single `query_with_document()` call, as before |
+| `native_batched` | it does not | the PDF is cut into page-range sub-PDFs with pypdf (splits only on page boundaries), each sent natively with only that range's candidates; results are merged |
+| `chunked_text` | native ingestion unavailable | Path 2 below |
+
+A batch that fails (deadline, parse error) sends **only its pages** to the
+chunked text path; the other batches' native results are kept. Sub-PDFs are
+written under `workspace/artifacts/<artifact_id>_batches_*/` and deleted
+when the run ends.
+
+Batch sizing uses a latency model calibrated on the heavy tier (~10 s base,
+~12 s per page, ~0.2 s per candidate). Override per deployment with
+`EVENTMILL_NATIVE_BASE_S`, `EVENTMILL_NATIVE_S_PER_PAGE`,
+`EVENTMILL_NATIVE_S_PER_CANDIDATE`. If batches are still hitting 504s, the
+`[NATIVE]` log line reports the observed seconds per page to set them from.
 
 ### Path 2: Chunked Text Extraction (fallback)
 
@@ -205,19 +273,39 @@ If the LLM connection is unavailable, the plugin falls back to regex-only extrac
 ## Example summarize_for_llm() Output
 
 ```
-Ingested pdf_report (12 pages): APT29 Campaign Analysis. Attributed to APT29 (high confidence), campaign: SolarWinds Follow-on. Extracted 47 IOCs: 23 ips, 12 domains, 8 hash_sha256s, 4 cves. 3 IOCs flagged as high-priority. Mapped to 5 unique techniques across 7 tactical roles: T1566.001 (Spearphishing Attachment), T1059.001 (PowerShell), T1078 (Initial Access, Persistence), T1486 (Data Encrypted for Impact), T1048.003 (Exfiltration Over Unencrypted Protocol). Attack graph: 2 path(s) identified, converging at T1059.001. Output artifact: art_0002 (json_events). Quick chart: run attack_path_visualizer {"artifact_id": "art_0002", "format": "mermaid"}
+Ingested pdf_report (12 pages): APT29 Campaign Analysis. Attributed to APT29 (high confidence), campaign: SolarWinds Follow-on. Extracted 47 IOCs: 23 ips, 12 domains, 8 hash_sha256s, 4 cves. 3 IOCs flagged as high-priority. Mapped to 5 unique techniques across 7 tactical roles: T1566.001 (Spearphishing Attachment), T1059.001 (PowerShell), T1078 (Initial Access, Persistence), T1486 (Data Encrypted for Impact), T1048.003 (Exfiltration Over Unencrypted Protocol). Attack graph: 2 path(s) identified, converging at T1059.001. Output artifact: art_0002 (json_events). Quick chart: run attack_path_visualizer --artifact_id art_0002 --format mermaid
 ```
 
 The **Quick chart** command at the end lets an analyst immediately generate a
 Mermaid attack path diagram from the ingester output. Copy the command, adjust
 the artifact ID if needed, and paste it into the Event Mill shell.
 
+## Reading the Logs
+
+Every run writes a small set of tagged lines (local log file, or Cloud
+Logging on Cloud Run). Grep for the tag:
+
+| Tag | When | What it tells you |
+|---|---|---|
+| `[PROFILE]` | before any LLM call | pages, text size, regex candidates by type and per page, estimated output tokens, and `narrative` vs `ioc_dense`. An `ioc_dense` warning means the model's reply will grow with the candidate count, not the page count. |
+| `[PLAN]` | after the profile | chosen strategy, page-range batches with candidate counts, estimated seconds, and why. |
+| `[BATCH]` | batched runs | the sub-PDFs written, or why splitting failed. |
+| `[NATIVE]` | each native call start / end | batch label, candidates sent, elapsed seconds, model, transport, response size, token usage. On a 504 it reports the observed seconds-per-page for recalibrating the latency model. |
+| `[CHUNK]` | each fallback call | elapsed seconds, candidates in, response size, token usage. |
+| `[TRUNCATED]` | a reply hit the output-token limit | how many records were recovered by bracket repair; anything after the cut is lost. |
+| `[TACTIC-FIX]` / `[RECONCILE]` | post-processing | tactic corrections, backfills, and entries needing analyst review. |
+| `[TIMING]` | end of run | seconds per phase: `extract_s`, `native_s`, `chunks_s`, `reconcile_s`, `total_s`. |
+
+The same profile and timings are stored in the result under
+`summary.document_profile` and `summary.timings`, so they travel with the
+artifact.
+
 ## Limitations
 
 - Native PDF ingestion requires a live Gemini API connection with `GEMINI_PRO_API_KEY`
 - Chunked fallback path may lose table formatting and cross-page context
 - Maximum 200 pages per PDF (Gemini native limit: 1000 pages / 50 MB)
-- LLM refinement adds latency (~5-15 seconds chunked, ~10-30 seconds native for large PDFs)
+- Native calls on the heavy tier take roughly 10 s + 12 s per page + 0.2 s per candidate; the plan estimate is printed before the run starts and the manifest budget is `long` (600 s)
 - STIX 2.1 parsing not yet implemented
 
 ## Safety Notes

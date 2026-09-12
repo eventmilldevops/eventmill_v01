@@ -33,6 +33,32 @@ class TestPluginLoader:
         assert plugin is not None
         assert plugin.tool_name == "test_plugin"
     
+    def test_get_for_pillar_includes_borrowed_tools(self):
+        """A tool naming another pillar is offered there, without moving."""
+        loader = PluginLoader(Path(__file__).parents[2] / "plugins")
+        loader.discover_all()
+
+        own = {p.tool_name for p in loader.get_by_pillar("threat_modeling")}
+        offered = loader.get_for_pillar("threat_modeling")
+        names = {p.tool_name for p in offered}
+
+        assert "threat_intel_ingester" not in own
+        assert "threat_intel_ingester" in names
+        assert loader.get("threat_intel_ingester").pillar == "log_analysis"
+        assert own.issubset(names)
+        assert [p.tool_name for p in offered[: len(own)]] == [
+            p.tool_name for p in loader.get_by_pillar("threat_modeling")
+        ]
+
+    def test_get_for_pillar_matches_get_by_pillar_when_nothing_is_borrowed(self):
+        """Pillars nobody declares are unaffected."""
+        loader = PluginLoader(Path(__file__).parents[2] / "plugins")
+        loader.discover_all()
+
+        assert [p.tool_name for p in loader.get_for_pillar("network_forensics")] == [
+            p.tool_name for p in loader.get_by_pillar("network_forensics")
+        ]
+
     def test_get_by_pillar(self, temp_plugins_dir: Path):
         """Test getting plugins by pillar."""
         loader = PluginLoader(temp_plugins_dir)
@@ -149,7 +175,48 @@ class TestPluginManifest:
         assert manifest.timeout_class in ["fast", "medium", "slow"]
         assert isinstance(manifest.safe_for_auto_invoke, bool)
         assert isinstance(manifest.requires_llm, bool)
-    
+        assert manifest.model_tier in ["light", "heavy", "none"]
+
+    def test_manifest_model_tier_defaults_to_light(self, temp_plugins_dir: Path):
+        """A manifest omitting model_tier gets the cheap tier, not the costly one."""
+        loader = PluginLoader(temp_plugins_dir)
+        loader.discover_all()
+
+        manifest = loader.get_manifest("test_plugin")
+        assert "model_tier" not in manifest.data
+        assert manifest.model_tier == "light"
+
+    def test_also_useful_in_defaults_to_empty(self, temp_plugins_dir: Path):
+        """A manifest that names no other pillar borrows none."""
+        loader = PluginLoader(temp_plugins_dir)
+        loader.discover_all()
+
+        manifest = loader.get_manifest("test_plugin")
+        assert manifest.also_useful_in == []
+
+    def test_also_useful_in_drops_the_tools_own_pillar(self, temp_plugins_dir: Path):
+        """The field names *other* pillars; the tool's own is not a second home."""
+        loader = PluginLoader(temp_plugins_dir)
+        loader.discover_all()
+
+        data = dict(loader.get_manifest("test_plugin").data)
+        data["also_useful_in"] = [data["pillar"], "threat_modeling"]
+        manifest = PluginManifest(data, loader.get_manifest("test_plugin").manifest_path)
+        assert manifest.also_useful_in == ["threat_modeling"]
+
+    def test_shipped_manifests_declare_a_valid_model_tier(self):
+        """Every real plugin's declared tier must be one the framework understands."""
+        loader = PluginLoader(Path(__file__).parents[2] / "plugins")
+        loader.discover_all()
+
+        plugins = loader.list_all()
+        assert plugins, "no plugins discovered"
+        for plugin in plugins:
+            assert plugin.manifest.model_tier in ("light", "heavy", "none"), (
+                f"{plugin.tool_name} declares model_tier="
+                f"{plugin.manifest.model_tier!r}"
+            )
+
     def test_manifest_to_dict(self, temp_plugins_dir: Path):
         """Test converting manifest to dictionary."""
         loader = PluginLoader(temp_plugins_dir)

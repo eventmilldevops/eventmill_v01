@@ -909,7 +909,17 @@ class ThreatReportAnalyzer:
         techniques: list[str] = []
         if context and hasattr(context, "llm_query") and context.llm_query:
             try:
-                response = context.llm_query.query_text(prompt=prompt, max_tokens=out_tokens)
+                # Per-chunk summarization is bulk, repetitive work — pin it to
+                # the light tier instead of letting out_tokens decide the model.
+                # The heavy tier is reserved for the synthesis pass below.
+                response = context.llm_query.query_text(
+                    prompt=prompt,
+                    max_tokens=out_tokens,
+                    # Bulk, repetitive work: light tier and shallow thinking.
+                    # The heavy tier and default thinking are reserved for the
+                    # synthesis pass, which reasons across every chunk.
+                    hints=QueryHints(tier="light", thinking_level="low"),
+                )
                 log_llm_interaction(
                     prompt=f"[tra chunk {chunk.index}] {prompt[:500]}",
                     response_text=response.text,
@@ -959,7 +969,13 @@ class ThreatReportAnalyzer:
         )
         if context and hasattr(context, "llm_query") and context.llm_query:
             try:
-                response = context.llm_query.query_text(prompt=prompt, max_tokens=4096)
+                # Synthesis reasons across every chunk summary at once — this is
+                # the pass that earns the heavy tier (the manifest default).
+                response = context.llm_query.query_text(
+                    prompt=prompt,
+                    max_tokens=4096,
+                    hints=QueryHints(tier="heavy", needs_reasoning=True),
+                )
                 log_llm_interaction(
                     prompt=f"[tra synthesis] {prompt[:500]}",
                     response_text=response.text,

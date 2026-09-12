@@ -112,8 +112,12 @@ Key changes from 0.1.0:
 
 - `artifacts_supported` is replaced by `artifacts_consumed` and `artifacts_produced` to support tool chaining
 - `requires_llm` is a new field for tools that depend on LLM capabilities
+- `model_tier` declares the default LLM tier (`light`, `heavy`, `none`) for the plugin's queries
 - `reference_data_overrides` declares which framework reference data entries the plugin extends
 - `chains_to` is an advisory field for the router describing downstream tool compatibility
+- `also_useful_in` names other pillars where the tool is a sensible choice. A plugin still
+  belongs to exactly one pillar - the directory it lives in - and MUST NOT list that pillar
+  here. The field is advisory: it widens where the tool is *offered*, never where it lives
 
 See `manifest_schema.json` for the complete field reference.
 
@@ -478,6 +482,41 @@ A plugin MAY declare `cost_hint` (`low`, `moderate`, `high`) for future scheduli
 
 ---
 
+## Model Tier
+
+Each plugin SHOULD declare `model_tier` — the default LLM tier for every query it makes:
+
+| Tier | Meaning | Typical work |
+|-------|---------|--------------|
+| `light` | Fast, cheap, high-volume (default) | Bulk extraction, pattern summarization, per-chunk passes, IOC scraping |
+| `heavy` | Deep reasoning, expensive | Threat modeling, risk assessment, cross-document synthesis, attack-path reasoning |
+| `none` | Plugin performs no LLM work | Purely deterministic tools |
+
+The framework applies the declared tier to `context.llm_query` before execution, so a
+plugin does not need to pass anything for its default case. Declaring `none` means the
+plugin receives `llm_query=None` and `llm_enabled=False`.
+
+**Precedence — highest wins:**
+
+1. Per-call `QueryHints(tier=...)` passed by the plugin
+2. The plugin's manifest `model_tier`
+3. `light` — the default for framework callers that express no preference
+
+`QueryHints.tier` defaults to `None` ("no opinion"), so hints that set only
+`thinking_level` or `media_resolution` fall through to the manifest tier. Output
+size never selects a tier: both tiers are capacity-identical.
+
+Override per call only when a specific query genuinely differs from the plugin's norm —
+for example `threat_report_analyzer` summarizes chunks on `light` and synthesizes the final
+report on `heavy`. Plugins MUST NOT select a provider or model id; tiers are the only
+model-selection vocabulary available to a plugin.
+
+Output tokens are clamped to the declared cap of the model that actually runs
+(`framework/llm/providers/<provider>.json`), so requesting more than it can emit
+degrades rather than failing the call.
+
+---
+
 ## Auto-Invocation Safety
 
 Each plugin MUST declare `safe_for_auto_invoke`:
@@ -555,5 +594,6 @@ A plugin is ready for registration when:
 - [ ] README exists and covers all required sections
 - [ ] Capabilities are reasonable and reusable
 - [ ] `requires_llm` is set correctly
+- [ ] `model_tier` reflects the work the plugin actually does (`none` if it makes no LLM calls)
 - [ ] `artifacts_consumed` and `artifacts_produced` accurately reflect tool behavior
 - [ ] Reference data overrides (if any) are documented in manifest and README

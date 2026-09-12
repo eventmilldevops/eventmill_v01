@@ -62,24 +62,35 @@ The framework additionally registers the final summary as a `text` session artif
 
 ## Example Usage
 
+Arguments are passed as `--key value` flags.
+
 ### List Available Reports
-```json
-{"action": "list_reports"}
+```
+run threat_report_analyzer --action list_reports
 ```
 
 ### Summarize a Report
-```json
-{"action": "summarize", "report_path": "mitre/enterprise-attack.json", "max_word_count": 2000}
+```
+run threat_report_analyzer --action summarize --report_path mitre/enterprise-attack.json --max_word_count 2000
 ```
 
 ### Summarize with Focus Areas
-```json
-{"action": "summarize", "report_path": "capec/capec-stix.xml", "focus_areas": ["attack_techniques", "mitigations"]}
+```
+run threat_report_analyzer --action summarize --report_path capec/capec-stix.xml --focus_areas attack_techniques,mitigations
 ```
 
+`--focus_areas` takes a comma-separated list. Repeating the flag appends to it,
+so `--focus_areas attack_techniques --focus_areas mitigations` is equivalent.
+
 ### Search Reports
-```json
-{"action": "search_reports", "query": "ransomware"}
+```
+run threat_report_analyzer --action search_reports --query ransomware
+```
+
+**JSON alternative.** Every tool also accepts a JSON payload. It is only
+needed for list or object arguments that a flag cannot express:
+```
+run threat_report_analyzer {"action": "summarize", "report_path": "capec/capec-stix.xml", "focus_areas": ["attack_techniques", "mitigations"]}
 ```
 
 ## LLM Integration

@@ -88,7 +88,6 @@ class RouterConfig:
     """Router configuration loaded from config files."""
     
     pillars: dict[str, dict[str, Any]]
-    adjacency_map: dict[str, list[str]]
     keyword_rules: dict[str, list[str]]
     artifact_rules: dict[str, dict[str, Any]]
     
@@ -103,7 +102,6 @@ class RouterConfig:
     
     # Limits
     max_candidate_tools: int = 5
-    expansion_mode: str = "strict"  # strict or adjacent
     
     @classmethod
     def load_from_directory(cls, config_dir: Path) -> RouterConfig:
@@ -113,11 +111,6 @@ class RouterConfig:
         pillars_path = config_dir / "pillars.json"
         with open(pillars_path) as f:
             pillars_data = json.load(f)
-        
-        # Load adjacency
-        adjacency_path = config_dir / "adjacency.json"
-        with open(adjacency_path) as f:
-            adjacency_data = json.load(f)
         
         # Load keywords
         keywords_path = config_dir / "keywords.json"
@@ -131,7 +124,6 @@ class RouterConfig:
         
         return cls(
             pillars=pillars_data.get("pillars", {}),
-            adjacency_map=adjacency_data.get("adjacency_map", {}),
             keyword_rules=keywords_data.get("keyword_rules", {}),
             artifact_rules=artifact_data.get("artifact_pillar_mapping", {}),
         )
@@ -203,13 +195,7 @@ class Router:
         )
         
         # Phase 2: Get candidate tools from pillar
-        pillar_tools = self.plugin_loader.get_by_pillar(selected_pillar)
-        
-        # Expand to adjacent pillars if configured
-        if self.config.expansion_mode == "adjacent":
-            adjacent_pillars = self.config.adjacency_map.get(selected_pillar, [])
-            for adj_pillar in adjacent_pillars:
-                pillar_tools.extend(self.plugin_loader.get_by_pillar(adj_pillar))
+        pillar_tools = self.plugin_loader.get_for_pillar(selected_pillar)
         
         # Phase 3: Score and rank tools
         scores = self._score_tools(
@@ -303,8 +289,8 @@ class Router:
             # Pillar match
             if tool.pillar == selected_pillar:
                 score.pillar_match = 1.0
-            elif tool.pillar in self.config.adjacency_map.get(selected_pillar, []):
-                score.pillar_match = 0.5
+            elif selected_pillar in tool.manifest.also_useful_in:
+                score.pillar_match = 0.75
             
             # Artifact match
             consumed = tool.manifest.artifacts_consumed
@@ -411,6 +397,6 @@ class Router:
         ]
     
     def get_tools_for_pillar(self, pillar: str) -> list[str]:
-        """Get all tools registered for a pillar."""
-        plugins = self.plugin_loader.get_by_pillar(pillar)
+        """Get all tools offered in a pillar, including those that declare it."""
+        plugins = self.plugin_loader.get_for_pillar(pillar)
         return [p.tool_name for p in plugins]

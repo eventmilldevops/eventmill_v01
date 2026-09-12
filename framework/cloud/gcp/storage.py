@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import BinaryIO
 
-from ..interfaces import StorageBackend
+from ..interfaces import StorageBackend, StoredObject
 
 logger = logging.getLogger("eventmill.framework.cloud.gcp")
 
@@ -131,5 +131,35 @@ class GCSStorageBackend(StorageBackend):
             if rel_path.startswith(self.prefix):
                 rel_path = rel_path[len(self.prefix):]
             results.append(rel_path)
-        
+
+        return results
+
+    def list_files_detailed(
+        self,
+        prefix: str = "",
+        max_results: int = 1000,
+    ) -> list[StoredObject]:
+        """List objects in GCS with size and modification time.
+
+        Size and timestamps are already present on the blobs returned by
+        list_blobs, so this costs no additional API calls.
+        """
+        bucket = self._get_bucket()
+        full_prefix = self._full_path(prefix)
+
+        blobs = bucket.list_blobs(prefix=full_prefix, max_results=max_results)
+
+        results = []
+        for blob in blobs:
+            rel_path = blob.name
+            if rel_path.startswith(self.prefix):
+                rel_path = rel_path[len(self.prefix):]
+            results.append(
+                StoredObject(
+                    path=rel_path,
+                    size_bytes=blob.size,
+                    modified=blob.updated or blob.time_created,
+                )
+            )
+
         return results

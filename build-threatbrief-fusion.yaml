@@ -1,13 +1,16 @@
-# Custom build config for threatbrief-fusion deployment
-# Usage: gcloud builds submit --project=apm0008778-prd-eltetl-80 --config=build-threatbrief-fusion.yaml .
+# Build config for threatbrief-fusion deployment
+# Usage: gcloud builds submit --project=YOUR_PROJECT_ID --config=build-threatbrief-fusion.yaml .
+#
+# Override the region with --substitutions="_REGION=<region>" if it differs from
+# the default below; it must match the region the project was provisioned in.
 
 steps:
-  # Build the container image with :latest tag
+  # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
       - '-t'
-      - 'northamerica-northeast2-docker.pkg.dev/apm0008778-prd-eltetl-80/eventmill/threatbrief-fusion:latest'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/threatbrief-fusion:latest'
       - '-f'
       - 'cloud_install/Dockerfile.cloudrun'
       - '.'
@@ -16,10 +19,13 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'northamerica-northeast2-docker.pkg.dev/apm0008778-prd-eltetl-80/eventmill/threatbrief-fusion:latest'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/threatbrief-fusion:latest'
 
 images:
-  - 'northamerica-northeast2-docker.pkg.dev/apm0008778-prd-eltetl-80/eventmill/threatbrief-fusion:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/threatbrief-fusion:latest'
+
+substitutions:
+  _REGION: northamerica-northeast2
 
 options:
   logging: CLOUD_LOGGING_ONLY

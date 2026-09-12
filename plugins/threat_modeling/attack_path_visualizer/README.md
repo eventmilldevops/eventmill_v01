@@ -15,20 +15,29 @@ Four output formats for attack path visualization:
 
 ### Usage Syntax
 
+Arguments are passed as `--key value` flags.
+
 ```bash
 # From threat_intel_ingester output (most common — generates graph from MITRE mappings)
-run attack_path_visualizer {"artifact_id": "<artifact_id>", "format": "mermaid"}
+run attack_path_visualizer --artifact_id <artifact_id> --format mermaid
 
 # ASCII art (terminal-friendly)
-run attack_path_visualizer {"artifact_id": "<artifact_id>", "format": "ascii"}
+run attack_path_visualizer --artifact_id <artifact_id> --format ascii
 
 # Compact single-line flow
-run attack_path_visualizer {"artifact_id": "<artifact_id>", "format": "compact"}
+run attack_path_visualizer --artifact_id <artifact_id> --format compact
 
 # Both ASCII + Mermaid
-run attack_path_visualizer {"artifact_id": "<artifact_id>", "format": "both"}
+run attack_path_visualizer --artifact_id <artifact_id> --format both
 
-# Inline stages (no artifact needed)
+# Suppress the control coverage matrix
+run attack_path_visualizer --artifact_id <artifact_id> --format mermaid --include_controls false
+```
+
+Inline `stages` is the one argument flags cannot express — it is a list of
+objects, so it needs the JSON form:
+
+```bash
 run attack_path_visualizer {"format": "ascii", "attack_type": "ransomware", "stages": [...]}
 ```
 
@@ -47,7 +56,7 @@ run attack_path_visualizer {"format": "ascii", "attack_type": "ransomware", "sta
 
 The `threat_intel_ingester` summary includes a ready-to-paste command:
 ```
-Quick chart: run attack_path_visualizer {"artifact_id": "art_XXXX", "format": "mermaid"}
+Quick chart: run attack_path_visualizer --artifact_id art_XXXX --format mermaid
 ```
 Copy, adjust the artifact ID, and paste into the Event Mill shell.
 
@@ -75,12 +84,46 @@ The tool writes the visualization directly to a format-specific file:
 | `compact` | `workspace/artifacts/attack_path_compact_<ts>.txt` |
 | `both` | `workspace/artifacts/attack_path_both_<ts>.txt` |
 
-The file is registered as a `text` session artifact. The artifact ID and full path are shown in the run summary. `.mmd` files can be rendered directly in GitHub, VS Code, or any Mermaid-compatible viewer.
+The file is registered as a `text` session artifact. `.mmd` files can be rendered directly in GitHub, VS Code, or any Mermaid-compatible viewer.
+
+## What You See After `run`
+
+The shell prints three things:
+
+1. **Summary** — the short text that also goes into the LLM context. It is
+   capped at 2000 characters by the plugin spec, so it never contains the
+   drawing itself; it lists paths, convergence points, unconfirmed tactics,
+   and where the files are.
+2. **Rendered output** — the complete ASCII and/or Mermaid rendering, printed
+   in full. Nothing is cut.
+3. **Output files** — the artifact IDs and paths written by this run.
+
+To print any of those files again later, use `show <artifact_id>`
+(`show <artifact_id> 40` limits it to the first 40 lines). Inline `stages`
+runs that write no file of their own are auto-saved as
+`workspace/artifacts/attack_path_visualizer_<ts>.md` and listed the same way.
+
+### Keeping the files on Cloud Run
+
+`workspace/artifacts` inside the container is ephemeral. On Cloud Run the
+shell exports this tool's outputs to the common bucket automatically after
+each run, under `exports/attack_path_visualizer/`, and prints the
+`gs://` URIs. To push everything a session produced in one go (for example
+before closing the terminal):
+
+```
+export --all                 # every tool-produced artifact
+export --all crowdstrike-26  # same, under a subfolder per incident
+```
+
+Set `EVENTMILL_AUTO_EXPORT_TOOLS` to change which tools auto-export (`*` for
+all, empty to disable); set `EVENTMILL_AUTO_EXPORT=1` to enable it outside
+Cloud Run.
 
 ## Example — Direct from threat_intel_ingester
 
-```json
-{"artifact_id": "art_04d30b48", "format": "mermaid"}
+```
+run attack_path_visualizer --artifact_id art_04d30b48 --format mermaid
 ```
 
 Stages are automatically derived from the MITRE technique mappings in the `json_events` artifact, ordered by kill-chain sequence.
@@ -99,21 +142,19 @@ flattens the tactical context and loses per-path role distinctions.
 ### Tactic Mismatch Indicators
 
 Entries from `threat_intel_ingester` may carry `"tactic_mismatch": true` when
-the assigned tactic is not in the technique's official ATT&CK tactic list.
-These nodes represent real attacker behavior described in the report, but the
-tactic label may be an LLM inference rather than an exact MITRE matrix mapping.
-Analysts should treat them with appropriate scrutiny.
+the assigned tactic is not in the technique's official ATT&CK tactic list and
+the ingester could not correct it deterministically. Those nodes render with
+a "tactic unconfirmed" line in Mermaid and a `? TACTIC` tag in ASCII. The
+node still represents real attacker behaviour from the report; only the
+tactic label is unconfirmed. The ingester's `allowed_tactics` field on the
+mapping entry lists the options the analyst can choose from.
 
 ## Example — Inline stages
 
-```json
-{
-  "format": "ascii",
-  "attack_type": "ransomware",
-  "stages": [
-    {"name": "Initial Access", "mitre_technique_id": "T1566", "stage_present": true, "controls": [...]}
-  ]
-}
+`stages` is a list of objects, so this example requires the JSON form:
+
+```
+run attack_path_visualizer {"format": "ascii", "attack_type": "ransomware", "stages": [{"name": "Initial Access", "mitre_technique_id": "T1566", "stage_present": true, "controls": []}]}
 ```
 
 ## Chains

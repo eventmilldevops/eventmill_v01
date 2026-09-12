@@ -51,7 +51,11 @@ coverage.xml
 *.pot
 
 # Environments
+# .env holds real API keys for local development and must never be committed.
+# .env.example is the tracked template — keep the negation below it.
 .env
+.env.*
+!.env.example
 .venv
 env/
 venv/
@@ -90,3 +94,9 @@ workspace/logs/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Archive stuff
+*.bak
+
+# Claude Code agent scratch memory (per-machine, not shared state)
+.claude/agent-memory/

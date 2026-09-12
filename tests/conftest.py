@@ -159,15 +159,6 @@ def routing_config_dir(temp_workspace: Path) -> Path:
     with open(config_dir / "pillars.json", "w") as f:
         json.dump(pillars, f)
     
-    adjacency = {
-        "adjacency_map": {
-            "log_analysis": ["threat_modeling"]
-        }
-    }
-    
-    with open(config_dir / "adjacency.json", "w") as f:
-        json.dump(adjacency, f)
-    
     keywords = {
         "keyword_rules": {
             "log_analysis": ["log", "event", "parse"]

@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eventmill.dev/schemas/projection_run.schema.json",
+  "title": "Adversary Path Projection Run Record",
+  "description": "One projection run, recorded so it can be compared with other runs of the same flow map long after the terminal output is gone. The division between 'deterministic' and 'sampled' is the point of the record: everything under 'deterministic' is fixed by flow_map_sha256 and must be identical across runs, so any difference below it came from the model. Validated in tests, not at runtime — a schema failure should break the build, not an analyst's run.",
+  "type": "object",
+  "required": ["run", "model", "deterministic", "outcome"],
+  "properties": {
+    "run": {
+      "type": "object",
+      "description": "Envelope and provenance.",
+      "required": [
+        "schema_version", "run_id", "run_group", "run_index", "run_count",
+        "created_at", "tool_version", "flow_map_sha256", "application",
+        "actor_input", "actor_resolved", "record_file"
+      ],
+      "properties": {
+        "schema_version": { "type": "integer", "minimum": 1 },
+        "run_id": { "type": "string", "minLength": 1 },
+        "run_group": { "type": "string", "minLength": 1 },
+        "run_index": { "type": "integer", "minimum": 1 },
+        "run_count": { "type": "integer", "minimum": 1 },
+        "created_at": {
+          "type": "string",
+          "description": "ISO 8601, UTC, with offset."
+        },
+        "tool_version": {
+          "type": "object",
+          "description": "Both identifiers, deliberately. The manifest version does not move on its own — it has read 0.2.0 since the projection action landed, while tactic correction, the kill-chain checks and the thinking-level default all shipped after it. The git SHA is the field that can actually separate two runs of different code.",
+          "required": ["manifest_version", "git_sha"],
+          "properties": {
+            "manifest_version": { "type": "string" },
+            "git_sha": { "type": "string" }
+          }
+        },
+        "flow_map_path": {
+          "type": "string",
+          "description": "As supplied by the operator. Empty when the map was passed inline or by artifact id."
+        },
+        "flow_map_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 over a canonical serialisation (sorted keys, no insignificant whitespace, UTF-8) of the flow map AS SUPPLIED, before normalization. Reformatting or key reordering does not change it; a content change does. This is the join key — two records sharing it were run against the same estate, and nothing else in the record can be trusted to say so."
+        },
+        "application": { "type": "string" },
+        "actor_input": {
+          "type": "string",
+          "description": "The string the operator typed, before resolution."
+        },
+        "actor_resolved": {
+          "type": "object",
+          "required": ["name", "technique_count"],
+          "properties": {
+            "name": { "type": "string" },
+            "resolved": {
+              "type": "boolean",
+              "description": "False when the actor came only from an intel artifact rather than from ATT&CK."
+            },
+            "attack_id": { "type": "string" },
+            "entity_type": {
+              "type": "string",
+              "enum": ["group", "campaign", "software", ""]
+            },
+            "aliases": { "type": "array", "items": { "type": "string" } },
+            "technique_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Size of the closed set the model was constrained to."
+            }
+          }
+        },
+        "record_file": { "type": "string", "minLength": 1 },
+        "raw_response_file": {
+          "type": "string",
+          "description": "Sibling artifact holding the unparsed reply. Present whenever the model returned any text, including on a parse failure — when two runs disagree, the parsed record shows that they diverged and only this shows why."
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "description": "What was asked of the model. Gemini only; a second provider is a separate path and this block does not attempt to abstract over one.",
+      "required": ["provider", "tier", "thinking_level"],
+      "properties": {
+        "provider": { "type": "string" },
+        "model_configured": {
+          "type": ["string", "null"],
+          "description": "The id the client was constructed with from gcp_gemini.json — NOT the id the API response reports. framework/llm/client.py sets model_used from its own configuration and never reads the response's model_version, and LLMResponse has no field to carry it. So a silent provider-side version bump is invisible in this corpus. Closing that needs a new LLMResponse field plus capture in client.py, which touches every LLM plugin and is its own task. Read this field as 'what we asked for', never as 'what ran'."
+        },
+        "tier": { "type": "string" },
+        "thinking_level": {
+          "type": "string",
+          "enum": ["minimal", "low", "medium", "high"],
+          "description": "The RESOLVED level, not the requested one. _default_thinking_level() reads the environment at call time and an unset level becomes 'high' in client.py whenever needs_reasoning is set, so what was asked for and what ran can differ. This is the variable that separated a 504 at ~110s from a completion at 27s."
+        },
+        "max_tokens": { "type": "integer" },
+        "max_paths": { "type": "integer" },
+        "software_scope": {
+          "type": "string",
+          "enum": ["none", "delivery", "all"]
+        }
+      }
+    },
+    "deterministic": {
+      "type": "object",
+      "description": "Everything computed without an LLM call. Given the same flow_map_sha256 these values must be identical across every run — the cheapest correctness check available on a corpus. Computed once per invocation and copied into each record of a --runs loop, so the meaningful comparison is across separate invocations.",
+      "required": ["entry_ranking", "routes", "unreachable_crown_jewels", "validation"],
+      "properties": {
+        "entry_ranking": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["component_id", "score", "reasons"],
+            "properties": {
+              "component_id": { "type": "string" },
+              "name": { "type": "string" },
+              "score": { "type": "integer", "minimum": 0 },
+              "exposure": { "type": "string" },
+              "zone": { "type": "string" },
+              "reasons": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["entry", "target", "route", "hops"],
+            "properties": {
+              "entry": { "type": "string" },
+              "target": { "type": "string" },
+              "route": { "type": "array", "items": { "type": "string" } },
+              "hops": { "type": "integer", "minimum": 0 },
+              "boundary_crossings": { "type": "integer", "minimum": 0 },
+              "unauthenticated_hops": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "unreachable_crown_jewels": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "validation": {
+          "type": "array",
+          "description": "Flow map warnings raised during normalization, with codes.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "location": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "sampled": {
+      "type": "object",
+      "description": "Model output only; nothing the tool computed belongs here. ABSENT on a failed run rather than empty — an empty block reads as 'the model returned nothing', which is a different event from never having gotten a usable reply.",
+      "required": ["paths"],
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path_id", "steps"],
+            "properties": {
+              "path_id": { "type": "string" },
+              "description": { "type": "string" },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["technique_id", "component_id"],
+                  "properties": {
+                    "technique_id": {
+                      "type": "string",
+                      "description": "First-class rather than embedded in prose: it is what a reader scans down a column to spot a one-off."
+                    },
+                    "technique_name": {
+                      "type": "string",
+                      "description": "From the ATT&CK database, never the model's wording."
+                    },
+                    "tactic": { "type": "string" },
+                    "component_id": { "type": "string" },
+                    "evidence": {
+                      "type": "string",
+                      "enum": ["documented", "via_software", ""],
+                      "description": "Derived from which block of the closed set the technique came from, never read from the reply."
+                    },
+                    "rationale": { "type": "string" },
+                    "precondition": { "type": "string" },
+                    "access_before": { "enum": ["none", "network_reach", "code_execution", "user_credential", "service_credential", "privileged", "data_access", null] },
+                    "exploited_condition": { "type": "string" },
+                    "result": { "type": "string" },
+                    "access_after": { "enum": ["none", "network_reach", "code_execution", "user_credential", "service_credential", "privileged", "data_access", null] },
+                    "assumptions": { "type": "array", "items": { "type": "string" } },
+                    "control_note": { "type": "string" },
+                    "actor_support": {
+                      "type": "string",
+                      "enum": ["procedure_documented", "technique_documented", "via_software", ""],
+                      "description": "Derived from ATT&CK procedure examples, never read from the reply."
+                    },
+                    "state_check": {
+                      "type": "string",
+                      "enum": ["ok", "gap", "unchecked", ""],
+                      "description": "Continuity check result. Schema version 2 onward."
+                    },
+                    "uncovered_mitigations": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "rejections": { "type": "array", "items": { "type": "object" } },
+        "warnings": { "type": "array", "items": { "type": "object" } },
+        "raw_response_path": { "type": ["string", "null"] }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "error"] },
+        "finish_reason": {
+          "type": ["string", "null"],
+          "description": "The provider's own stop signal, verbatim — 'STOP', 'MAX_TOKENS'. A run truncated at the output cap is not the same event as a completed one and must not be compared to it by accident."
+        },
+        "truncated": { "type": "boolean" },
+        "error_code": { "type": ["string", "null"] },
+        "message": { "type": ["string", "null"] },
+        "usage": {
+          "type": ["object", "null"],
+          "properties": {
+            "prompt_tokens": { "type": "integer" },
+            "completion_tokens": { "type": "integer" },
+            "thinking_tokens": { "type": "integer" },
+            "total_tokens": { "type": "integer" }
+          }
+        },
+        "wall_time_ms": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    }
+  }
+}

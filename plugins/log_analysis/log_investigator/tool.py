@@ -35,6 +35,15 @@ class ValidationResult:
     errors: list[str] | None = None
 
 
+# Sampling budget for the LLM investigation prompt.
+# Log lines tokenize densely (IPs, timestamps, paths) at roughly 3 chars/token,
+# so 400k chars is ~130k tokens — about 13% of a 1,048,576-token context window.
+# The char budget binds before the line count on wide lines, which is intended:
+# the cap self-adjusts to line width instead of trusting a raw line count.
+DEFAULT_CONTEXT_LINES = 500
+MAX_SAMPLE_CHARS = 400_000
+MAX_LINE_CHARS = 1_000
+
 # Predefined security-relevant regex patterns for workflows
 WORKFLOW_PATTERNS: dict[str, list[tuple[str, str]]] = {
     "top_talkers": [
@@ -57,7 +66,7 @@ INVESTIGATION TARGET: "{search_term}"
 LOG FILE: {file_name}
 TOTAL MATCHES: {total_matches} occurrences in {lines_scanned} lines
 
-SAMPLE LOG ENTRIES:
+SAMPLE LOG ENTRIES{sampling_note}:
 {sample_logs}
 
 ANALYSIS REQUIRED:
@@ -179,6 +188,16 @@ class LogInvestigator:
             scanned = data.get("lines_scanned", 0)
             parts = [f"Investigation of '{term}': {total} matches in {scanned} lines."]
 
+            # Say when the analysis saw only a subset, so downstream context
+            # does not read the findings as full coverage.
+            sampling = data.get("sampling") or {}
+            sampled = sampling.get("sampled", 0)
+            if sampled and sampled < total:
+                parts.append(
+                    f"AI analysis reviewed {sampled} of {total} matches "
+                    f"({sampling.get('strategy', 'sampled')})."
+                )
+
             ai = data.get("ai_analysis")
             if ai:
                 truncated = ai[:1500] + "..." if len(ai) > 1500 else ai
@@ -216,22 +235,25 @@ class LogInvestigator:
     ) -> ToolResult:
         """Targeted investigation with LLM threat analysis."""
         search_term = payload["search_term"]
-        context_lines = payload.get("context_lines", 100)
-        full_log = payload.get("full_log", False)
+        context_lines = payload.get("context_lines", DEFAULT_CONTEXT_LINES)
 
         matching_lines: list[str] = []
         lines_scanned = 0
         total_matches = 0
+        needle = search_term.lower()
 
+        # Always scan the whole file. Counting is decoupled from collection:
+        # stopping early once the buffer filled made total_matches and
+        # lines_scanned wrong, and the prompt reports both to the model as the
+        # basis for severity and timeline analysis. Reading is cheap — the LLM
+        # call is the expensive part, not the scan.
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 lines_scanned += 1
-                if search_term.lower() in line.lower():
+                if needle in line.lower():
                     total_matches += 1
                     if len(matching_lines) < context_lines:
-                        matching_lines.append(line.strip())
-                    elif not full_log:
-                        break
+                        matching_lines.append(line.strip()[:MAX_LINE_CHARS])
 
         result_data: dict[str, Any] = {
             "mode": "investigate",
@@ -244,13 +266,32 @@ class LogInvestigator:
 
         if not matching_lines:
             result_data["ai_analysis"] = None
+            result_data["sampling"] = {
+                "total_matches": 0,
+                "sampled": 0,
+                "strategy": "none",
+                "truncated_by": None,
+            }
             return ToolResult(ok=True, result=result_data)
+
+        sample, strategy, truncated_by = self._select_sample(
+            matching_lines, total_matches,
+        )
+        result_data["sampling"] = {
+            "total_matches": total_matches,
+            "sampled": len(sample),
+            "strategy": strategy,
+            "truncated_by": truncated_by,
+        }
 
         # LLM threat intelligence analysis
         ai_text = self._request_ai_investigation(
             file_name=file_path.name,
             search_term=search_term,
-            matching_lines=matching_lines,
+            sample_lines=sample,
+            sampling_note=self._sampling_note(
+                len(sample), total_matches, strategy,
+            ),
             lines_scanned=lines_scanned,
             total_matches=total_matches,
             context=context,
@@ -259,11 +300,94 @@ class LogInvestigator:
 
         return ToolResult(ok=True, result=result_data)
 
+    @staticmethod
+    def _select_sample(
+        matching_lines: list[str],
+        total_matches: int,
+        char_budget: int = MAX_SAMPLE_CHARS,
+    ) -> tuple[list[str], str, str | None]:
+        """Choose a representative subset of matches within a char budget.
+
+        First-N is a poor choice for security logs: an attack starting late in
+        the file would never be seen. When the retained matches exceed the
+        budget, take the first quarter, the last quarter, and an evenly strided
+        middle half — preserving onset, recency, and spread.
+
+        Returns (lines, strategy, truncated_by) where truncated_by is
+        "char_budget", "line_count", or None.
+        """
+        if not matching_lines:
+            return [], "none", None
+
+        def _fits(lines: list[str]) -> bool:
+            return sum(len(line) + 1 for line in lines) <= char_budget
+
+        truncated_by = "line_count" if len(matching_lines) < total_matches else None
+
+        if _fits(matching_lines):
+            strategy = (
+                f"all {len(matching_lines)} retained matches"
+                if truncated_by is None
+                else f"first {len(matching_lines)} of {total_matches} matches"
+            )
+            return matching_lines, strategy, truncated_by
+
+        # Binary-search the largest head+tail+stride selection that fits.
+        lo, hi, best = 1, len(matching_lines), 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if _fits(LogInvestigator._stride_select(matching_lines, mid)):
+                best, lo = mid, mid + 1
+            else:
+                hi = mid - 1
+
+        selected = LogInvestigator._stride_select(matching_lines, best)
+        head = tail = best // 4
+        middle = best - head - tail
+        step = max(1, (len(matching_lines) - head - tail) // max(1, middle))
+        strategy = (
+            f"first {head}, last {tail}, every {step}th match in between"
+        )
+        return selected, strategy, "char_budget"
+
+    @staticmethod
+    def _stride_select(lines: list[str], count: int) -> list[str]:
+        """Take first 25%, last 25%, and an evenly strided middle 50%."""
+        n = len(lines)
+        if count >= n:
+            return list(lines)
+        if count <= 2:
+            return lines[:count]
+
+        head = tail = count // 4
+        middle = count - head - tail
+        head_part = lines[:head]
+        tail_part = lines[n - tail:] if tail else []
+
+        mid_lo, mid_hi = head, n - tail
+        span = mid_hi - mid_lo
+        if middle <= 0 or span <= 0:
+            return head_part + tail_part
+        step = span / middle
+        mid_part = [
+            lines[min(mid_hi - 1, int(mid_lo + i * step))]
+            for i in range(middle)
+        ]
+        return head_part + mid_part + tail_part
+
+    @staticmethod
+    def _sampling_note(sampled: int, total_matches: int, strategy: str) -> str:
+        """Phrase for the prompt so the model knows the sample is partial."""
+        if sampled >= total_matches:
+            return ""
+        return f" (showing {sampled:,} of {total_matches:,} matches — {strategy})"
+
     def _request_ai_investigation(
         self,
         file_name: str,
         search_term: str,
-        matching_lines: list[str],
+        sample_lines: list[str],
+        sampling_note: str,
         lines_scanned: int,
         total_matches: int,
         context: Any,
@@ -273,16 +397,20 @@ class LogInvestigator:
             return None
 
         try:
-            sample_logs = "\n".join(matching_lines[:50])
+            sample_logs = "\n".join(sample_lines)
             prompt = INVESTIGATION_PROMPT_TEMPLATE.format(
                 search_term=search_term,
                 file_name=file_name,
                 total_matches=total_matches,
                 lines_scanned=lines_scanned,
+                sampling_note=sampling_note,
                 sample_logs=sample_logs,
             )
 
-            response = context.llm_query.query_text(prompt=prompt)
+            # The prompt asks for "under 800 words" (~1,100 tokens); 4096 is
+            # ample. Stated explicitly so it is a decision, not an inherited
+            # default. Tier comes from the manifest (model_tier: heavy).
+            response = context.llm_query.query_text(prompt=prompt, max_tokens=4096)
             if response.ok:
                 return response.text
             return None

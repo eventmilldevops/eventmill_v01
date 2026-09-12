@@ -1,10 +1,10 @@
 {
   "tool_name": "threat_model_analyzer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "pillar": "threat_modeling",
   "display_name": "Threat Model Analyzer",
   "description_short": "Analyze threat models, track scenarios, controls, attack events, and identify defense gaps.",
-  "description_long": "Comprehensive threat modeling tool that supports: (1) AI-powered analysis of threat model documents and tabletop exercise minutes, (2) threat scenario creation and tracking with security controls and attack sequence events, (3) defense-in-depth gap analysis identifying unprotected steps, weak controls, and easy bypasses, (4) markdown export of scenario reports. Integrates threat intelligence context for enriched analysis. Maps to MITRE ATT&CK techniques.",
+  "description_long": "Threat scenario tracking and defense-gap analysis. Supports: (1) summarizing a threat model document or tabletop exercise minutes — what the document itself states about assets, threats, controls and gaps; it does not construct attack paths or assign ATT&CK techniques the document does not cite; (2) building a threat scenario by hand from security controls and attack sequence events; (3) import_scenario, which loads an adversary_path_projector scenario seed as one scenario per projected path, or reloads a saved export_scenario document; (4) export_scenario, which saves scenarios in full so they survive a shell restart; (5) defense-in-depth gap analysis identifying steps with no implemented control, incomplete controls and easy bypasses; (6) markdown export of a scenario report. To project how a named threat actor would move through a specific architecture, use adversary_path_projector and import its scenario seed here.",
   "author": "Event Mill Contributors",
   "entry_point": "tool.py",
   "class_name": "ThreatModelAnalyzer",
@@ -29,5 +29,5 @@
   "stability": "stable",
   "tags": ["threat_model", "scenario", "controls", "mitre", "gap_analysis", "defense_in_depth"],
   "chains_to": ["attack_path_visualizer"],
-  "chains_from": ["log_investigator"]
+  "chains_from": ["log_investigator", "adversary_path_projector"]
 }

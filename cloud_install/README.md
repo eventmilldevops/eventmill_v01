@@ -21,17 +21,19 @@ SDK and libraries pre-installed. The workflow is:
 1. SSH into Linux deploy server
 2. Pull latest code from GitHub
 3. Authenticate to GCP (if session expired)
-4. Source deploy config
-5. Run deploy script
+4. Run deploy script (deploy config is loaded automatically)
 ```
 
 ```bash
 ssh deploy-server
 cd ~/eventmill_v01
 git pull
-source ~/.eventmill/deploy.env
 bash cloud_install/deploy-cloudrun-secrets.sh
 ```
+
+`~/.eventmill/deploy.env` is loaded automatically — anything already exported
+in your shell wins over it. Only `gcloud builds submit` still needs an explicit
+`source`, because Cloud Build cannot read your shell.
 
 ## First-Time Setup (Deploy Server)
 
@@ -58,14 +60,24 @@ This will:
 Then configure:
 
 ```bash
-nano ~/.eventmill/deploy.env     # Set GOOGLE_CLOUD_PROJECT and EVENTMILL_BUCKET_PREFIX (required)
+nano ~/.eventmill/deploy.env     # GOOGLE_CLOUD_PROJECT and CLOUD_RUN_REGION are required and blank
 gcloud auth login                # Authenticate to GCP
 gcloud config set project YOUR_PROJECT_ID
 ```
 
+`provision-gcp-project.sh` and `deploy-cloudrun-secrets.sh` **load
+`~/.eventmill/deploy.env` automatically** — anything already exported in your
+shell takes precedence. The explicit `source` in the examples below is harmless
+and still required for `gcloud builds submit`, which cannot read the file.
+
 > **Important:** `EVENTMILL_BUCKET_PREFIX` must match the prefix used when running
 > `provision-gcp-project.sh`. Storage resolution will silently use the wrong buckets
 > if this value is missing or mismatched.
+>
+> `CLOUD_RUN_REGION` must match too, and is left blank in the template on
+> purpose. Every script now refuses to guess it: the Artifact Registry image
+> path embeds the region, so provisioning in one and deploying in another fails
+> at `docker push` — after a full paid build.
 
 ## Deploy Commands
 
@@ -96,28 +108,24 @@ Connect GitHub repo to Cloud Build, then trigger manually:
 
 ```bash
 cd ~/eventmill_v01
+source ~/.eventmill/deploy.env
 gcloud builds submit \
     --project="${GOOGLE_CLOUD_PROJECT}" \
     --config=cloud_install/cloudbuild.yaml \
+    --substitutions="_REGION=${CLOUD_RUN_REGION},_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX}" \
     .
 ```
 
-To override the bucket prefix or region at build time, pass substitutions:
-
-```bash
-gcloud builds submit \
-    --project="${GOOGLE_CLOUD_PROJECT}" \
-    --config=cloud_install/cloudbuild.yaml \
-    --substitutions="_BUCKET_PREFIX=evtm_v01,_REGION=us-central1" \
-    .
-```
-
-Substitution defaults (edit `cloudbuild.yaml` to change permanently):
+Substitutions:
 
 | Substitution | Default | Description |
 |---|---|---|
-| `_REGION` | `northamerica-northeast2` | Cloud Run region |
-| `_BUCKET_PREFIX` | `eventmill` | GCS bucket prefix — must match provisioned buckets |
+| `_REGION` | **none — required** | Cloud Run region. Must match the region you provisioned in; the build fails fast if unset rather than guessing. |
+| `_BUCKET_PREFIX` | `${PROJECT_ID}-eventmill` | GCS bucket prefix — must match provisioned buckets |
+
+Cloud Build cannot read `~/.eventmill/deploy.env`, so `_REGION` has to be passed
+explicitly here even though the shell scripts pick it up automatically. When
+wiring a **trigger**, set both in the trigger's substitution config.
 
 ## Files
 
@@ -131,13 +139,16 @@ Substitution defaults (edit `cloudbuild.yaml` to change permanently):
 | `deploy-cloudrun-secrets.sh` | Production deploy with GCP Secret Manager |
 | `cloudbuild.yaml` | Cloud Build CI/CD pipeline |
 | `docker-compose.cloudrun.yml` | Local testing of the Cloud Run image |
+| `*.bak` | Superseded v1 scripts, kept for reference only — do not run |
 
 ## GCP Project Provisioning (first time only)
 
 ```bash
 export GOOGLE_CLOUD_PROJECT="your-project-id"
+export CLOUD_RUN_REGION="us-central1"          # required — no default
+export EVENTMILL_BUCKET_PREFIX="your-prefix"   # optional; derived if unset
 
-# 1. Provision APIs, service account, bucket, and secret entries
+# 1. Provision APIs, service account, buckets, Artifact Registry, secret entries
 bash cloud_install/provision-gcp-project.sh
 
 # 2. Set real secret values (interactive prompts, nothing in shell history)
@@ -149,6 +160,38 @@ This creates everything the project needs: APIs enabled (including
 audit logging), a dedicated service account with least-privilege IAM roles,
 GCS buckets (per-pillar + common) with lifecycle rules, Artifact Registry,
 and Secret Manager entries for dual Gemini API keys.
+
+Provisioning is the **only** place IAM is written. The deploy scripts merely
+verify, so the deploy path needs no `*.setIamPolicy` permission and can run
+under a CI service account that must not be able to rewrite IAM.
+
+When it finishes it prints the exact `~/.eventmill/deploy.env` to save, with
+the resolved project, region and bucket prefix filled in. The provisioning and
+deploy scripts both read that file automatically on subsequent runs.
+
+## LLM Models
+
+The deployed service binds two model tiers, configured declaratively in
+`framework/llm/providers/gcp_gemini.json`:
+
+| Tier | Model | Used for |
+|------|-------|----------|
+| light | `gemini-3.5-flash` | Bulk work — log pattern summarization, per-chunk IOC extraction, report chunking |
+| heavy | `gemini-3.1-pro-preview` | Deep reasoning — threat modeling, risk assessment, cross-document synthesis, `ask:` |
+
+Both accept 1,048,576 input and 65,536 output tokens, so the tier is a choice
+about reasoning depth and cost, never about how much fits. Each plugin declares
+its default tier as `model_tier` in its manifest; a plugin can override per call.
+
+Keys are separate per tier so high-volume light-tier traffic cannot exhaust the
+heavy tier's quota. If one tier is exhausted, the dispatcher falls back to the
+other and says so in the log.
+
+> The heavy tier is pinned to a **Preview** endpoint, which Google may retire
+> with roughly two weeks' notice. If it starts returning `NOT_FOUND`, the
+> dispatcher automatically retries against the tier's declared fallback and logs
+> the substitution. To pin a different model without a code change, set
+> `EVENTMILL_MODEL_HEAVY`.
 
 ## Storage Architecture
 
@@ -342,8 +385,10 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GOOGLE_CLOUD_PROJECT` | **Yes** | GCP project ID |
+| `EVENTMILL_MODEL_LIGHT` | No | Override the light-tier model id (default from `framework/llm/providers/gcp_gemini.json`) |
+| `EVENTMILL_MODEL_HEAVY` | No | Override the heavy-tier model id — useful if the pinned Preview model is retired |
 | `EVENTMILL_BUCKET_PREFIX` | No | Bucket naming prefix — must match `provision-gcp-project.sh` (default: `${GOOGLE_CLOUD_PROJECT}-eventmill`) |
-| `CLOUD_RUN_REGION` | No | Deploy region (default: `northamerica-northeast2`) |
+| `CLOUD_RUN_REGION` | **Yes** | Deploy region. No default — must match the region you provisioned in, because the Artifact Registry image path embeds it. Every script refuses to guess. |
 | `GCS_LOG_BUCKET` | No | Legacy single-bucket override — leave empty for new deployments |
 | `EVENTMILL_SECRET_GEMINI_FLASH` | No | Secret Manager name for Flash API key (default: `eventmill-gemini-flash-api`) |
 | `EVENTMILL_SECRET_GEMINI_PRO` | No | Secret Manager name for Pro API key (default: `eventmill-gemini-pro-api`) |
@@ -357,9 +402,29 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 |----------|-------------|
 | `GEMINI_FLASH_API_KEY` | Gemini Flash API key — light tier (injected from Secret Manager) |
 | `GEMINI_PRO_API_KEY` | Gemini Pro API key — heavy tier (injected from Secret Manager) |
-| `ANTHROPIC_API_KEY` | Anthropic API key (alternative LLM, optional) |
 | `TTYD_USERNAME` | ttyd basic auth username |
 | `TTYD_PASSWORD` | ttyd basic auth password |
 | `EVENTMILL_BUCKET_PREFIX` | Bucket prefix for pillar-based storage resolution |
 | `GCS_LOG_BUCKET` | Legacy bucket override for log_analysis pillar |
 | `GOOGLE_CLOUD_PROJECT` | Auto-set by Cloud Run — used by GCS client for project resolution |
+
+### Artifact export
+
+`workspace/artifacts` in the container is ephemeral. The `export` command
+copies session artifacts to the common bucket under
+`exports/<source_tool>/[<subfolder>/]<filename>`:
+
+```
+export <artifact_id> [subfolder]
+export --all [subfolder]          # every tool-produced artifact in the session
+```
+
+On Cloud Run (detected via `K_SERVICE`) outputs of `attack_path_visualizer`
+are exported automatically after each run. Two optional variables tune this:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `EVENTMILL_AUTO_EXPORT_TOOLS` | `attack_path_visualizer` | Comma-separated tool names to auto-export; `*` for all, empty string to disable |
+| `EVENTMILL_AUTO_EXPORT` | unset | Set to `1` to enable auto-export outside Cloud Run (local testing) |
+
+Download exported files with `gcloud storage cp gs://<prefix>-common/exports/... .`

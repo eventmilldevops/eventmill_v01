@@ -8,29 +8,221 @@ This is the primary user interface for Event Mill.
 from __future__ import annotations
 
 import cmd
+import difflib
+import fnmatch
 import json
 import os
 import random
+import re
 import shlex
 import signal
 import sys
 import threading
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from ..logging.structured import get_logger, setup_logging, log_user_activity, log_llm_interaction, set_user_context
 from ..session.manager import SessionManager
-from ..session.models import Pillar, ToolExecutionStatus
+from ..session.models import Pillar, ToolExecution, ToolExecutionStatus
 from ..plugins.loader import PluginLoader, LoadedPlugin
 from ..routing.router import Router, RouterConfig
 from ..artifacts.registry import ArtifactRegistry, create_artifact_registration_callback
-from ..llm.client import MCPLLMClient, ContextBuilder, LLMDispatcher
-from ..plugins.protocol import ExecutionContext, ReferenceDataView, ArtifactRef, TimeoutClass
-from ..reference_data.mitre_attack import get_mitre_db
-from ..cloud.resolver import StorageResolver, StorageResolverConfig, create_local_resolver
+from ..llm.client import (
+    ContextBuilder,
+    LLMDispatcher,
+    MCPLLMClient,
+    TierScopedLLMClient,
+)
+from ..llm.providers import load_tier_specs
+from ..plugins.protocol import (
+    ArtifactRef,
+    ExecutionContext,
+    QueryHints,
+    ReferenceDataView,
+    TimeoutClass,
+)
+from ..reference_data.mitre_attack import get_mitre_db, get_mitre_relationships
+from ..cloud.resolver import (
+    PILLAR_SLUGS,
+    StorageResolver,
+    StorageResolverConfig,
+    WorkspaceFile,
+    create_local_resolver,
+)
 
 logger = get_logger("cli")
+
+
+# ---------------------------------------------------------------------------
+# File listing support
+# ---------------------------------------------------------------------------
+
+_DURATION_RE = re.compile(r"^(\d+)\s*([smhdw])$", re.IGNORECASE)
+_DURATION_UNITS = {
+    "s": "seconds",
+    "m": "minutes",
+    "h": "hours",
+    "d": "days",
+    "w": "weeks",
+}
+
+_FILE_REF_RE = re.compile(r"^#(\d+)$")
+
+FILES_DEFAULT_LIMIT = 50
+FILES_SOURCES = ("pillar", "common", "all")
+
+# Stands in for the files sitting directly at the level a folder map lists,
+# so a bucket whose objects are all at one depth still maps to something.
+FOLDER_LEAF = "(files here)"
+
+
+def _folder_breakdown(
+    files: list[WorkspaceFile],
+    prefix: str = "",
+) -> list[tuple[str, int, int | None]]:
+    """Group *files* by the path segment one level below *prefix*.
+
+    Returns ``(label, count, total_bytes)`` per folder, alphabetically, with
+    files sitting directly at this level collected last under a marker rather
+    than dropped, so a bucket whose objects are all at the root still maps to
+    something.
+    """
+    base = prefix.rstrip("/")
+    groups: dict[str, list[WorkspaceFile]] = {}
+    for f in files:
+        rest = f.object_path
+        if base and rest.startswith(base):
+            rest = rest[len(base):]
+        rest = rest.lstrip("/")
+        head, sep, _ = rest.partition("/")
+        label = f"{head}/" if sep else FOLDER_LEAF
+        groups.setdefault(label, []).append(f)
+
+    out: list[tuple[str, int, int | None]] = []
+    for label in sorted(groups, key=lambda s: (s == FOLDER_LEAF, s)):
+        group = groups[label]
+        sizes = [g.size_bytes for g in group if g.size_bytes is not None]
+        out.append((label, len(group), sum(sizes) if sizes else None))
+    return out
+HISTORY_DEFAULT_LIMIT = 40
+
+
+def _parse_duration(text: str) -> timedelta | None:
+    """Parse a duration like ``24h`` or ``90m`` into a timedelta.
+
+    Compound forms and calendar units are rejected rather than guessed at.
+    ``m`` is minutes; there is no month unit.
+    """
+    match = _DURATION_RE.match(text.strip())
+    if not match:
+        return None
+    amount, unit = match.groups()
+    return timedelta(**{_DURATION_UNITS[unit.lower()]: int(amount)})
+
+
+def _format_bytes(size: int | None) -> str:
+    """Render a byte count in the widest unit that keeps it under 1024."""
+    if size is None:
+        return "-"
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            precision = 0 if unit == "B" else 1
+            return f"{value:.{precision}f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"
+
+
+def _format_age(moment: datetime | None) -> str:
+    """Render a timestamp as an age relative to now."""
+    if moment is None:
+        return "-"
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - moment
+    seconds = int(delta.total_seconds())
+    if seconds < 0:
+        return "just now"
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h ago"
+    if seconds < 86400 * 30:
+        return f"{seconds // 86400}d ago"
+    return moment.strftime("%Y-%m-%d")
+
+
+def _split_flags(tokens: list[str]) -> tuple[list[tuple[str, Any]], str | None]:
+    """Split --key value / --key=value / --key tokens into ordered pairs.
+
+    Returns (pairs, error). A bare flag yields True so callers can treat it
+    as a boolean. The error is a printable message when parsing fails.
+    """
+    pairs: list[tuple[str, Any]] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if not tok.startswith("--"):
+            return [], (
+                f"Unexpected token {tok!r}.\n"
+                "  Use --key value flags, or JSON for list/object arguments."
+            )
+        key, sep, inline = tok[2:].partition("=")
+        if not key:
+            return [], f"Invalid flag: {tok!r}. Use --key value or --key=value."
+        if sep:
+            pairs.append((key, inline))
+            i += 1
+        elif i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
+            pairs.append((key, tokens[i + 1]))
+            i += 2
+        else:
+            pairs.append((key, True))
+            i += 1
+    return pairs, None
+
+
+@dataclass
+class FilesQuery:
+    """Parsed arguments for the ``files`` command."""
+
+    prefix: str = ""
+    extensions: list[str] = field(default_factory=list)
+    newer_than: timedelta | None = None
+    match: str = ""
+    sort: str = "time"
+    limit: int = FILES_DEFAULT_LIMIT
+    source: str = "pillar"
+    folders: bool = False
+
+
+@dataclass
+class FileListingEntry:
+    """One numbered row of a ``files`` listing."""
+
+    index: int
+    file: WorkspaceFile
+    artifact_id: str | None = None
+    local_path: Path | None = None
+
+
+@dataclass
+class FileListing:
+    """The rows a ``files`` command printed, and the context it printed them in.
+
+    The context is what makes ``#3`` safe to reuse: a listing taken under a
+    different session, pillar, or workspace folder refers to different files,
+    so it is refused rather than silently resolved.
+    """
+
+    session_id: str
+    pillar: str
+    workspace_folder: str | None
+    entries: list[FileListingEntry]
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +235,7 @@ _BANNERS = [
     | ____| | | | ____| \ | |_   _| |  \/  |_ _| |   | |
     |  _| | | | |  _| |  \| | | |   | |\/| || || |   | |
     | |___| |_| | |___| |\  | | |   | |  | || || |___| |___
-    |_____|\___/|_____|_| \_| |_|   |_|  |_|___|_____|_____|
+    |_____|\___/|_____|_| \_| |_|v0 |_|11|_|___|_____|_____|
 """,
     r"""
     ╔══════════════════════════════════════════════════════╗
@@ -53,7 +245,7 @@ _BANNERS = [
     ║  ██╔══╝  ╚██╗ ██╔╝██╔══╝  ██║╚██╗██║   ██║          ║
     ║  ███████╗ ╚████╔╝ ███████╗██║ ╚████║   ██║          ║
     ║  ╚══════╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝   ╚═╝          ║
-    ║              M  I  L  L                             ║
+    ║              M  I  L  L    v011                     ║
     ╚══════════════════════════════════════════════════════╝
 """,
     r"""
@@ -62,12 +254,12 @@ _BANNERS = [
     / _ \ \ / / __|   | '_ \| | | |
    |  __/\ V /| |_    | | | | | | |
     \___| \_/  \__|   |_| |_|_|_|_|
-      event           mill
+      event           mill v011
 """,
     r"""
     ┌─────────────────────────────────────────┐
     │  ╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸  │
-    │     E V E N T   M I L L   v0.1.0       │
+    │     E V E N T   M I L L   v0.1.1       │
     │   event record analysis platform       │
     │  ╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸  │
     └─────────────────────────────────────────┘
@@ -76,12 +268,12 @@ _BANNERS = [
         ____                 __     __  ___ _  __  __
        / __/ _  __ ___  ___ / /_   /  |/  /(_)/ / / /
       / _/  | |/ // -_)/ _ / __/  / /|_/ // // / / /
-     /___/  |___/ \__//_//_\__/  /_/  /_//_//_/ /_/
+     /___/  |___/ \__//_//_\__/v0/_/ 1/_//_//_/1/_/
 """,
     r"""
       .--.      .--.      .--.      .--.
      /    \    /    \    /    \    /    \
-    | EVNT |--| MILL |--| v0.1|--| .0  |
+    | EVNT |--| MILL |--| v0.1 |--| .1   |
      \    /    \    /    \    /    \    /
       `--'      `--'      `--'      `--'
       upstream of the SIEM — analysis before commitment
@@ -156,6 +348,8 @@ class EventMillShell(cmd.Cmd):
         self.artifact_registry: ArtifactRegistry | None = None
         self.context_builder = ContextBuilder()
         self._conversation_history: list[dict[str, str]] = []
+        self._input_schema_cache: dict[str, dict[str, Any]] = {}
+        self._last_file_listing: FileListing | None = None
         
         # Initialize storage resolver
         # In Cloud Run (K_SERVICE set), use GCS resolver; otherwise local
@@ -191,47 +385,69 @@ class EventMillShell(cmd.Cmd):
                 self._load_errors.append(f"Router: {e}")
                 logger.warning("Failed to initialize router: %s", e)
         
-        # LLM availability - check for dual Gemini keys or legacy single key
-        self._available_models: list[dict[str, str]] = []
-        
-        # Check for dual Gemini API keys (production setup)
-        if os.environ.get("GEMINI_FLASH_API_KEY"):
-            self._available_models.append({
-                "id": "gemini-2.5-flash",
-                "name": "Gemini Flash",
-                "tier": "light",
-                "env_var": "GEMINI_FLASH_API_KEY",
-            })
-        if os.environ.get("GEMINI_PRO_API_KEY"):
-            self._available_models.append({
-                "id": "gemini-2.5-pro",
-                "name": "Gemini Pro",
-                "tier": "heavy",
-                "env_var": "GEMINI_PRO_API_KEY",
-            })
-        
-        # Fallback: legacy single GEMINI_API_KEY
-        if not self._available_models and os.environ.get("GEMINI_API_KEY"):
-            self._available_models.append({
-                "id": "gemini-2.5-flash",
-                "name": "Gemini (default)",
-                "tier": "default",
-                "env_var": "GEMINI_API_KEY",
-            })
-        
-        # Check for Anthropic
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            self._available_models.append({
-                "id": "claude-sonnet-4-20250514",
-                "name": "Claude Sonnet",
-                "tier": "heavy",
-                "env_var": "ANTHROPIC_API_KEY",
-            })
-        
+        # LLM availability — tiers come from the provider capability manifest
+        # (framework/llm/providers/gcp_gemini.json), so model ids, API-key env
+        # vars, and output caps live in one declarative place.
+        self._tier_specs = load_tier_specs()
+        self._available_models: list[dict[str, str]] = self._discover_models()
         self._llm_available = len(self._available_models) > 0
         
         self._update_prompt()
     
+    _TIER_DISPLAY = {"light": "light (fast, cheap)", "heavy": "heavy (deep reasoning)"}
+
+    def _discover_models(self) -> list[dict[str, str]]:
+        """Build the available-model list from the provider manifest + environment.
+
+        A tier is available when its declared API-key env var is set. Falls
+        back to the legacy single GEMINI_API_KEY, which is bound to BOTH
+        tiers so plugin manifests keep driving model selection rather than
+        every tool collapsing onto Flash.
+
+        One key may reach Flash but not the Pro preview. That binds cleanly —
+        MCPLLMClient.connect() does no entitlement check — and surfaces as
+        PERMISSION_DENIED on first use, which LLMDispatcher._is_access_error
+        catches and falls back to the other tier.
+        """
+        models: list[dict[str, str]] = []
+
+        for tier in ("light", "heavy"):
+            spec = self._tier_specs.get(tier)
+            if not spec or not spec.api_key_env:
+                continue
+            if not os.environ.get(spec.api_key_env):
+                continue
+            models.append({
+                "id": spec.model_id,
+                "name": spec.label(),
+                "tier": tier,
+                "env_var": spec.api_key_env,
+            })
+
+        if not models and os.environ.get("GEMINI_API_KEY"):
+            # Legacy single-key setup. Bind it to both tiers — one key reaches
+            # both models, so plugin manifests still drive model selection
+            # instead of everything collapsing onto Flash.
+            for tier in ("light", "heavy"):
+                spec = self._tier_specs.get(tier)
+                if not spec:
+                    continue
+                models.append({
+                    "id": spec.model_id,
+                    "name": spec.label(),
+                    "tier": tier,
+                    "env_var": "GEMINI_API_KEY",
+                })
+            if not models:
+                models.append({
+                    "id": "gemini-3.5-flash",
+                    "name": "Gemini (default)",
+                    "tier": "light",
+                    "env_var": "GEMINI_API_KEY",
+                })
+
+        return models
+
     def _update_prompt(self) -> None:
         """Update the command prompt based on current state."""
         session = self.session_manager.get_current_session()
@@ -293,6 +509,7 @@ class EventMillShell(cmd.Cmd):
         """
         description = arg.strip() if arg else ""
         session = self.session_manager.new_session(description=description)
+        self._conversation_history.clear()
         
         # Initialize artifact registry for session
         self.artifact_registry = ArtifactRegistry(
@@ -326,6 +543,7 @@ class EventMillShell(cmd.Cmd):
         
         session = self.session_manager.load_session(session_id)
         if session:
+            self._conversation_history.clear()
             # Initialize artifact registry
             self.artifact_registry = ArtifactRegistry(
                 artifacts_path=self.workspace_path / "artifacts",
@@ -507,17 +725,26 @@ class EventMillShell(cmd.Cmd):
         for b in buckets:
             print(f"  {b['pillar']:25s} {b['bucket']:40s} {b['type']}")
 
+    # Tools whose outputs are exported to the common bucket automatically
+    # after each run when the shell is on Cloud Run (or EVENTMILL_AUTO_EXPORT=1).
+    # Override with EVENTMILL_AUTO_EXPORT_TOOLS ("*" = every tool, "" = none).
+    DEFAULT_AUTO_EXPORT_TOOLS = "attack_path_visualizer"
+
     def do_export(self, arg: str) -> None:
-        """Export a session artifact to the common storage bucket.
+        """Export session artifacts to the common storage bucket.
 
         Writes to common/exports/<source_tool>/ by default — mirroring the
-        common/generated/ convention used by threat_report_analyzer.  Intended
-        for troubleshooting or handing off JSON/MMD outputs to external tools.
-        Not required for normal in-container workflows.
+        common/generated/ convention used by threat_report_analyzer.  On Cloud
+        Run this is the durable copy: the container's workspace/artifacts is
+        ephemeral and disappears when the instance is recycled.
 
         Usage: export <artifact_id> [subfolder]
+               export --all [subfolder]
 
         artifact_id — ID from the 'artifacts' command (e.g. art_04d30b48)
+        --all       — Export every tool-produced artifact in the session
+                      (inputs you loaded from a bucket are skipped; they are
+                      already there).
         subfolder   — Optional path appended inside exports/<source_tool>/.
                       Useful for tagging by incident (e.g. incident-2025-04).
 
@@ -528,35 +755,71 @@ class EventMillShell(cmd.Cmd):
         Examples:
           export art_04d30b48
           export art_04d30b48 incident-2025-04
+          export --all crowdstrike-2026
+
+        On Cloud Run, attack_path_visualizer outputs are exported automatically
+        after each run (see EVENTMILL_AUTO_EXPORT_TOOLS).
         """
         if not self.session_manager.get_current_session():
             print("  No active session. Use 'session new' first.")
             return
-
         if not self.storage_resolver:
             print("  Storage resolver not initialized.")
             return
 
         parts = shlex.split(arg) if arg.strip() else []
         if not parts:
-            print("  Usage: export <artifact_id> [subfolder]")
+            print("  Usage: export <artifact_id> [subfolder]  |  export --all [subfolder]")
+            return
+
+        if parts[0] == "--all":
+            subfolder = parts[1] if len(parts) > 1 else None
+            self._export_all(subfolder)
             return
 
         artifact_id = parts[0]
         subfolder = parts[1] if len(parts) > 1 else None
 
-        # Resolve artifact
         artifact = self.session_manager.get_artifact(artifact_id)
         if artifact is None:
             print(f"  Artifact '{artifact_id}' not found. Use 'artifacts' to list.")
             return
+        print(f"  Exporting {artifact_id} ({artifact.artifact_type})")
+        self._export_artifact(artifact, subfolder)
 
-        local_path = Path(artifact.file_path)
-        if not local_path.exists():
-            print(f"  Artifact file missing on disk: {local_path}")
+    def _export_all(self, subfolder: str | None) -> None:
+        """Export every tool-produced artifact in the session."""
+        artifacts = self.session_manager.list_artifacts()
+        produced = [a for a in artifacts if getattr(a, "source_tool", None)]
+        skipped_inputs = len(artifacts) - len(produced)
+        if not produced:
+            print("  No tool-produced artifacts to export.")
+            if skipped_inputs:
+                print(f"  ({skipped_inputs} loaded input(s) skipped — already in a bucket.)")
             return
 
-        # Build destination folder: exports/<source_tool>[/<subfolder>]
+        print(f"  Exporting {len(produced)} tool-produced artifact(s)"
+              + (f" to subfolder '{subfolder}'" if subfolder else "") + " ...")
+        ok = 0
+        for a in produced:
+            print(f"  {a.artifact_id} ({a.artifact_type}, {a.source_tool})")
+            if self._export_artifact(a, subfolder, indent="    "):
+                ok += 1
+        print(f"  Exported {ok}/{len(produced)}."
+              + (f" {skipped_inputs} loaded input(s) skipped." if skipped_inputs else ""))
+
+    def _export_artifact(
+        self, artifact: Any, subfolder: str | None, indent: str = "  "
+    ) -> str | None:
+        """Upload one artifact to common/exports/<source_tool>[/<subfolder>]/.
+
+        Returns the destination URI, or None if the export did not happen.
+        """
+        local_path = Path(artifact.file_path)
+        if not local_path.exists():
+            print(f"{indent}✗ Artifact file missing on disk: {local_path}")
+            return None
+
         source_tool = getattr(artifact, "source_tool", None) or "unknown"
         dest_folder = f"exports/{source_tool}"
         if subfolder:
@@ -566,13 +829,9 @@ class EventMillShell(cmd.Cmd):
         # since target="common" it won't be used for routing, but must be valid.
         session = self.session_manager.get_current_session()
         pillar = session.active_pillar or "log_analysis"
-
         filename = local_path.name
         common_bucket = self.storage_resolver.config.common_bucket()
-
-        print(f"  Exporting {artifact_id} ({artifact.artifact_type})")
-        print(f"  Destination: {common_bucket}/{dest_folder}/{filename}")
-
+        print(f"{indent}Destination: {common_bucket}/{dest_folder}/{filename}")
         try:
             resolved = self.storage_resolver.upload(
                 local_path=local_path,
@@ -581,60 +840,562 @@ class EventMillShell(cmd.Cmd):
                 workspace_folder=dest_folder,
                 target="common",
                 metadata={
-                    "artifact_id": artifact_id,
+                    "artifact_id": artifact.artifact_id,
                     "artifact_type": artifact.artifact_type,
                     "source_tool": source_tool,
                 },
             )
-            print(f"  ✓ Uploaded: {resolved.uri}")
+            print(f"{indent}✓ Uploaded: {resolved.uri}")
             log_user_activity("export_artifact", {
-                "artifact_id": artifact_id,
+                "artifact_id": artifact.artifact_id,
                 "destination": resolved.uri,
                 "source_tool": source_tool,
             })
+            return resolved.uri
         except Exception as e:
-            print(f"  ✗ Export failed: {e}")
+            print(f"{indent}✗ Export failed: {e}")
             logger.error("Artifact export failed: %s", e)
+            return None
+
+    def _auto_export_enabled(self, tool_name: str) -> bool:
+        """Auto-export runs on Cloud Run (K_SERVICE) or when EVENTMILL_AUTO_EXPORT=1,
+        for the tools named in EVENTMILL_AUTO_EXPORT_TOOLS."""
+        on_cloud_run = bool(os.environ.get("K_SERVICE"))
+        forced = os.environ.get("EVENTMILL_AUTO_EXPORT", "") == "1"
+        if not (on_cloud_run or forced):
+            return False
+        raw = os.environ.get("EVENTMILL_AUTO_EXPORT_TOOLS")
+        if raw is None:
+            raw = self.DEFAULT_AUTO_EXPORT_TOOLS
+        tools = {t.strip() for t in raw.split(",") if t.strip()}
+        return "*" in tools or tool_name in tools
+
+    def _auto_export_run_output(self, tool_name: str, artifacts_before: set[str]) -> None:
+        """Push the artifacts a run just produced to the common bucket.
+
+        Only for tools selected by _auto_export_enabled.  Failures are
+        reported but never fail the run — the files are still on disk and
+        can be exported by hand.
+        """
+        if not self._auto_export_enabled(tool_name):
+            return
+        new_artifacts = [
+            a for a in self.session_manager.list_artifacts()
+            if a.artifact_id not in artifacts_before
+        ]
+        if not new_artifacts:
+            return
+        if not self.storage_resolver:
+            print("  Auto-export skipped: storage resolver not initialized.")
+            return
+        print(f"\n  Auto-export ({len(new_artifacts)} file(s) to the common bucket):")
+        for a in new_artifacts:
+            self._export_artifact(a, None, indent="    ")
 
     def do_files(self, arg: str) -> None:
-        """List files available in the current pillar's storage.
-        
-        Shows files from both the pillar bucket and the common bucket.
-        If a workspace folder is set, lists files within that folder.
-        
-        Usage: files
+        """List files the current pillar can see.
+
+        Lists the pillar's own bucket by default. The common bucket holds
+        shared reference data plus tool output under exports/ and generated/;
+        it is one flag away, and the footer says how much is over there.
+
+        Usage: files [--source pillar|common|all] [--folders]
+                     [--path <folder>] [--ext .log,.json] [--newer 24h]
+                     [--match <pattern>] [--sort time|size|name] [--limit N]
+
+        Scope:
+          --source  pillar (default), common, or all
+          --folders show the folder layout instead of the files
+          --path    a folder inside the bucket, e.g. reports or
+                    vendor_advisories. Not a pillar or bucket name — the
+                    pillar you are in already picks the bucket.
+
+        Filters:
+          --ext     comma-separated extensions; matches any suffix, so
+                    --ext .log also matches auth.log.1
+          --newer   files modified within a duration: 90m, 24h, 7d, 2w
+          --match   substring on the path, or a glob when it contains * or ?
+
+        Display:
+          --sort    time (newest first, default), size (largest first), name
+          --limit   rows to show, default 50; --limit 0 shows all
+
+        Rows are numbered. Use #N in place of a path:
+
+          files --folders
+          files --ext .log --newer 24h
+          load #2
+          run log_navigator --action read --path #2
         """
         session = self.session_manager.get_current_session()
         if not session:
             print("  No active session. Use 'new' to create one.")
             return
-        
+
         if not session.active_pillar:
             print("  No pillar selected. Use 'pillar <name>' first.")
             return
-        
+
         if not self.storage_resolver:
             print("  Storage resolver not initialized.")
             return
-        
-        files = self.storage_resolver.list_workspace(
+
+        query = self._parse_files_flags(arg)
+        if query is None:
+            return
+
+        listing = self.storage_resolver.list_workspace(
             pillar=session.active_pillar,
             workspace_folder=session.workspace_folder,
+            prefix=query.prefix,
         )
-        
-        if not files:
-            location = session.active_pillar
-            if session.workspace_folder:
-                location += f"/{session.workspace_folder}"
-            print(f"  No files found in {location} or common bucket.")
+
+        location = session.active_pillar
+        if session.workspace_folder:
+            location += f"/{session.workspace_folder}"
+
+        in_scope = [
+            f for f in listing.files if query.source in ("all", f.source)
+        ]
+        if not in_scope:
+            self._explain_empty_listing(listing.files, query, session)
             return
-        
-        print(f"  {'Filename':40s} {'Source':10s} Path")
-        print(f"  {'─' * 40} {'─' * 10} {'─' * 40}")
-        
+
+        if query.folders:
+            self._render_folder_map(in_scope, query, session.active_pillar)
+            return
+
+        matched = self._apply_files_filters(in_scope, query)
+        if not matched:
+            print(f"  No files in {location} match those filters.")
+            print(f"  {len(in_scope)} file(s) before filtering.")
+            self._render_source_footer(listing.files, query)
+            return
+
+        shown = matched if query.limit == 0 else matched[: query.limit]
+        entries = [
+            FileListingEntry(index=i, file=f) for i, f in enumerate(shown, start=1)
+        ]
+
+        self._last_file_listing = FileListing(
+            session_id=session.session_id,
+            pillar=session.active_pillar,
+            workspace_folder=session.workspace_folder,
+            entries=entries,
+        )
+
+        self._render_file_table(entries, len(matched), listing.truncated)
+        self._render_source_footer(listing.files, query)
+
+    def _parse_files_flags(self, arg: str) -> FilesQuery | None:
+        """Parse flags for 'files'. Returns None after printing on error."""
+        query = FilesQuery()
+        if not arg.strip():
+            return query
+
+        try:
+            tokens = shlex.split(arg.strip())
+        except ValueError as e:
+            print(f"  Could not parse arguments: {e}")
+            return None
+
+        pairs, error = _split_flags(tokens)
+        if error:
+            print(f"  {error}")
+            return None
+
+        for key, value in pairs:
+            if key == "folders":
+                if value is not True:
+                    print("  --folders takes no value.")
+                    return None
+                query.folders = True
+                continue
+
+            if value is True and key not in ("help",):
+                print(f"  --{key} needs a value.")
+                return None
+
+            if key == "path":
+                query.prefix = str(value).replace("\\", "/").lstrip("/")
+            elif key == "source":
+                if str(value) not in FILES_SOURCES:
+                    print(f"  Unknown --source {value!r}.")
+                    print("  Use pillar (default), common, or all.")
+                    return None
+                query.source = str(value)
+            elif key == "ext":
+                query.extensions = [
+                    "." + part.strip().lstrip(".").lower()
+                    for part in str(value).split(",")
+                    if part.strip()
+                ]
+                if not query.extensions:
+                    print("  --ext needs at least one extension.")
+                    return None
+            elif key == "newer":
+                delta = _parse_duration(str(value))
+                if delta is None:
+                    print(f"  Could not read --newer {value!r}.")
+                    print("  Use a count and a unit: 90m, 24h, 7d, 2w.")
+                    return None
+                query.newer_than = delta
+            elif key == "match":
+                query.match = str(value)
+            elif key == "sort":
+                if str(value) not in ("time", "size", "name"):
+                    print(f"  Unknown --sort {value!r}. Use time, size, or name.")
+                    return None
+                query.sort = str(value)
+            elif key == "limit":
+                try:
+                    limit = int(str(value))
+                except ValueError:
+                    print(f"  --limit needs a whole number, got {value!r}.")
+                    return None
+                if limit < 0:
+                    print("  --limit cannot be negative. Use 0 to show all.")
+                    return None
+                query.limit = limit
+            else:
+                print(f"  Unknown flag --{key}.")
+                print("  Use --source, --folders, --path, --ext, --newer,")
+                print("  --match, --sort, --limit.")
+                return None
+
+        return query
+
+    def _apply_files_filters(
+        self,
+        files: list[WorkspaceFile],
+        query: FilesQuery,
+    ) -> list[WorkspaceFile]:
+        """Apply the shell-side filters and ordering to a listing."""
+        cutoff = (
+            datetime.now(timezone.utc) - query.newer_than
+            if query.newer_than
+            else None
+        )
+        is_glob = any(ch in query.match for ch in "*?")
+        needle = query.match.lower()
+
+        matched: list[WorkspaceFile] = []
         for f in files:
-            print(f"  {f['filename']:40s} {f['source']:10s} {f['object_path']}")
-    
+            if query.extensions:
+                suffixes = [s.lower() for s in Path(f.filename).suffixes]
+                if not any(ext in suffixes for ext in query.extensions):
+                    continue
+            if cutoff is not None:
+                if f.modified is None:
+                    continue
+                moment = f.modified
+                if moment.tzinfo is None:
+                    moment = moment.replace(tzinfo=timezone.utc)
+                if moment < cutoff:
+                    continue
+            if query.match:
+                if is_glob:
+                    if not fnmatch.fnmatch(f.object_path.lower(), needle):
+                        continue
+                elif needle not in f.object_path.lower():
+                    continue
+            matched.append(f)
+
+        # Unknown size/mtime sorts last so a degraded backend stays ordered
+        if query.sort == "time":
+            matched.sort(key=lambda f: f.object_path)
+            matched.sort(
+                key=lambda f: (
+                    f.modified is None,
+                    -(f.modified.timestamp() if f.modified else 0),
+                )
+            )
+        elif query.sort == "size":
+            matched.sort(key=lambda f: f.object_path)
+            matched.sort(
+                key=lambda f: (f.size_bytes is None, -(f.size_bytes or 0))
+            )
+        else:
+            matched.sort(key=lambda f: f.object_path)
+
+        return matched
+
+    def _render_folder_map(
+        self,
+        files: list[WorkspaceFile],
+        query: FilesQuery,
+        pillar: str,
+    ) -> None:
+        """Print the folder layout instead of the files themselves.
+
+        Nothing else in the shell shows how storage is laid out, so an
+        analyst who has never seen the buckets has no way to guess what to
+        pass to --path. This is that map, one level at a time.
+        """
+        config = self.storage_resolver.config
+        buckets = [
+            ("pillar", config.bucket_for_pillar(pillar)),
+            ("common", config.common_bucket()),
+        ]
+        here = query.prefix.rstrip("/")
+        where = f"under {here}/" if here else "at the top level"
+        print(f"  Folders {where}, as seen from the {pillar} pillar:")
+        print()
+
+        drillable = False
+        for source, bucket in buckets:
+            if query.source not in ("all", source):
+                continue
+            group = [f for f in files if f.source == source]
+            if not group:
+                continue
+            print(f"  {source} bucket — {bucket}")
+            for label, count, size in _folder_breakdown(group, here):
+                drillable = drillable or label != FOLDER_LEAF
+                noun = "file" if count == 1 else "files"
+                counted = f"{count} {noun}"
+                print(f"    {label:<36s} {counted:>9s}  {_format_bytes(size)}")
+            print()
+
+        scoped = f" --path {here}" if here else ""
+        scope = "" if query.source == "pillar" else f" --source {query.source}"
+        if drillable:
+            print(f"  Drill in with:   files --path <folder>{scope} --folders")
+            print(f"  List the files:  files --path <folder>{scope}")
+        else:
+            print("  No folders below this one.")
+            print(f"  List what is here: files{scoped}{scope}")
+
+    def _render_source_footer(
+        self,
+        all_files: list[WorkspaceFile],
+        query: FilesQuery,
+    ) -> None:
+        """Name what --source is holding back, and how to see it.
+
+        Listing the pillar alone is the useful default, but only if it never
+        looks like the whole picture — so a listing that hid files says how
+        many and where.
+        """
+        if query.source == "all":
+            return
+
+        other = "common" if query.source == "pillar" else "pillar"
+        hidden = self._apply_files_filters(
+            [f for f in all_files if f.source == other], query
+        )
+        if not hidden:
+            return
+
+        folders = [label for label, _, _ in _folder_breakdown(hidden, query.prefix)]
+        where = ", ".join(folders[:3])
+        if len(folders) > 3:
+            where += ", ..."
+        noun = "file" if len(hidden) == 1 else "files"
+        print(f"  {len(hidden)} more {noun} in the {other} bucket: {where}")
+        print("  Add --source all to include them.")
+
+    def _explain_empty_listing(
+        self,
+        listed: list[WorkspaceFile],
+        query: FilesQuery,
+        session: Any,
+    ) -> None:
+        """Say why a listing came back empty and point at what does exist.
+
+        Bucket names and folder layout are not something an analyst is
+        expected to know, so an empty result names where it looked rather
+        than only reporting that it found nothing.
+        """
+        pillar = session.active_pillar
+        tail = " --folders" if query.folders else ""
+        scope = {
+            "pillar": f"the {pillar} pillar bucket",
+            "common": "the common bucket",
+            "all": f"{pillar} or the common bucket",
+        }[query.source]
+
+        nothing = "Nothing" if query.folders else "No files"
+        if query.prefix:
+            print(f"  {nothing} under '{query.prefix}' in {scope}.")
+            hint = self._explain_prefix(query.prefix, pillar, tail)
+            if hint:
+                for line in hint:
+                    print(f"  {line}")
+                return
+        else:
+            print(f"  {nothing} in {scope}.")
+
+        # A prefix is applied by the backend, so the listing we were handed
+        # cannot say what else is there. Re-list without it.
+        if query.prefix:
+            probe = self.storage_resolver.list_workspace(
+                pillar=pillar,
+                workspace_folder=session.workspace_folder,
+            ).files
+        else:
+            probe = listed
+
+        if not probe:
+            print("  Nothing at all is visible from this pillar. If files are")
+            print("  expected, check that the deployment's bucket prefix")
+            print("  matches this project: use 'status' to see the buckets.")
+            return
+
+        if query.source != "all":
+            elsewhere = self._apply_files_filters(
+                [
+                    f for f in probe
+                    if f.source != query.source
+                    and f.object_path.startswith(query.prefix)
+                ],
+                query,
+            )
+            if elsewhere:
+                other = "common" if query.source == "pillar" else "pillar"
+                noun = "file" if len(elsewhere) == 1 else "files"
+                verb = "matches" if len(elsewhere) == 1 else "match"
+                scoped = f" --path {query.prefix}" if query.prefix else ""
+                print(f"  {len(elsewhere)} {noun} {verb} in the {other} bucket:")
+                print(f"  files{scoped} --source all{tail}")
+                return
+
+        folders = [label for label, _, _ in _folder_breakdown(probe)]
+        if query.prefix:
+            close = difflib.get_close_matches(
+                query.prefix.rstrip("/") + "/", folders, n=3, cutoff=0.5
+            )
+            if close:
+                print(f"  Did you mean: {', '.join(close)}")
+        print(f"  Folders here: {', '.join(folders[:8])}")
+        print("  See the full layout with: files --folders --source all")
+
+    def _explain_prefix(
+        self,
+        prefix: str,
+        pillar: str,
+        tail: str = "",
+    ) -> list[str] | None:
+        """Return an explanation when --path was handed a bucket, not a folder.
+
+        Pillar names never appear in object keys — the pillar selects the
+        bucket — so this is the mistake worth naming outright rather than
+        answering with an empty listing.
+        """
+        needle = prefix.strip("/").lower()
+        config = self.storage_resolver.config
+
+        own = {pillar.lower(), config.bucket_for_pillar(pillar).lower()}
+        own.add(PILLAR_SLUGS.get(pillar, pillar.replace("_", "-")).lower())
+        if needle in own:
+            return [
+                f"'{prefix}' is the bucket you are already in, not a folder",
+                "inside it. The pillar picks the bucket; --path picks a folder",
+                "below it. Run 'files --folders' to map the folders that exist.",
+            ]
+
+        if needle in ("common", config.common_bucket().lower()):
+            return [
+                f"'{prefix}' is a bucket, not a folder inside one.",
+                f"List it with: files --source common{tail}",
+            ]
+
+        for other in Pillar.ALL:
+            if other == pillar:
+                continue
+            names = {other.lower(), config.bucket_for_pillar(other).lower()}
+            names.add(PILLAR_SLUGS.get(other, other.replace("_", "-")).lower())
+            if needle in names:
+                return [
+                    f"'{prefix}' is a different pillar's bucket, not a folder.",
+                    f"Switch to it with: pillar {other}",
+                ]
+
+        return None
+
+    def _render_file_table(
+        self,
+        entries: list[FileListingEntry],
+        total: int,
+        truncated: bool,
+    ) -> None:
+        """Print a numbered file listing."""
+        print(f"  {'#':>3s}  Path")
+
+        for entry in entries:
+            f = entry.file
+            size = _format_bytes(f.size_bytes)
+            print(f"  {entry.index:>3d}  {f.object_path}")
+            print(
+                f"       Source: {f.source}  Size: {size}  "
+                f"Modified: {_format_age(f.modified)}"
+            )
+            print()
+
+        hidden = total - len(entries)
+        if hidden > 0:
+            print(f"\n  ... and {hidden} more. Use --limit 0 to show all.")
+        if truncated:
+            print("\n  ⚠ Listing hit the per-bucket object cap; filters saw")
+            print("    only part of the store. Narrow it with --path <prefix>.")
+
+    def complete_files(
+        self,
+        text: str,
+        line: str,
+        begidx: int,
+        endidx: int,
+    ) -> list[str]:
+        """Complete flag names for 'files'."""
+        flags = [
+            "--source", "--folders", "--path", "--ext",
+            "--newer", "--match", "--sort", "--limit",
+        ]
+        return [f for f in flags if f.startswith(text)]
+
+    def _resolve_file_ref(self, ref: str) -> FileListingEntry | None:
+        """Look up a '#N' reference against the last 'files' listing.
+
+        Returns None after printing why when there is no listing, the
+        listing was taken elsewhere, or the index is out of range.
+        """
+        match = _FILE_REF_RE.match(ref)
+        if not match:
+            return None
+
+        listing = self._last_file_listing
+        if listing is None:
+            print(f"  No file listing to resolve {ref} against. Run 'files' first.")
+            return None
+
+        session = self.session_manager.get_current_session()
+        if not session:
+            print("  No active session.")
+            return None
+
+        current = (session.session_id, session.active_pillar, session.workspace_folder)
+        taken = (listing.session_id, listing.pillar, listing.workspace_folder)
+        if current != taken:
+            def label(pillar: str, folder: str | None) -> str:
+                return f"{pillar}:{folder}" if folder else str(pillar)
+
+            was = label(listing.pillar, listing.workspace_folder)
+            now = label(session.active_pillar, session.workspace_folder)
+            print(f"  {ref} was listed under {was};")
+            print(f"  you are now in {now}. Run 'files' again.")
+            return None
+
+        index = int(match.group(1))
+        if index < 1 or index > len(listing.entries):
+            print(
+                f"  {ref} is out of range; the last listing had "
+                f"{len(listing.entries)} row(s)."
+            )
+            return None
+
+        return listing.entries[index - 1]
+
+
     # -------------------------------------------------------------------
     # Artifact Commands
     # -------------------------------------------------------------------
@@ -676,12 +1437,26 @@ class EventMillShell(cmd.Cmd):
             parts = [p for p in parts if p != "--fast"]
         
         file_ref = parts[0]
+        listing_entry: FileListingEntry | None = None
+        if _FILE_REF_RE.match(file_ref):
+            listing_entry = self._resolve_file_ref(file_ref)
+            if listing_entry is None:
+                return
+            # The URI is exact, so this skips re-resolution entirely
+            file_ref = listing_entry.file.uri
+            print(f"  {parts[0]} → {file_ref}")
+
         file_path = Path(file_ref)
-        
+
         # Try local file first
         if file_path.exists():
             artifact_type = parts[1] if len(parts) > 1 else self._infer_artifact_type(file_path)
-            self._register_local_artifact(file_path, artifact_type, use_dpkt=use_dpkt)
+            artifact_id = self._register_local_artifact(
+                file_path, artifact_type, use_dpkt=use_dpkt
+            )
+            if listing_entry:
+                listing_entry.artifact_id = artifact_id
+                listing_entry.local_path = file_path
             return
         
         # Try storage resolver (gs:// URI or filename lookup in buckets)
@@ -713,7 +1488,15 @@ class EventMillShell(cmd.Cmd):
                     return
                 
                 artifact_type = parts[1] if len(parts) > 1 else self._infer_artifact_type(local_dest)
-                self._register_local_artifact(local_dest, artifact_type, source_info=resolved.display, use_dpkt=use_dpkt)
+                artifact_id = self._register_local_artifact(
+                    local_dest,
+                    artifact_type,
+                    source_info=resolved.display,
+                    use_dpkt=use_dpkt,
+                )
+                if listing_entry:
+                    listing_entry.artifact_id = artifact_id
+                    listing_entry.local_path = local_dest
                 return
         
         # Nothing found
@@ -725,25 +1508,56 @@ class EventMillShell(cmd.Cmd):
         else:
             print("  Tip: set a pillar to enable bucket-based file resolution.")
     
+    @staticmethod
+    def _artifact_metadata(file_path: Path) -> dict[str, Any]:
+        """Metadata captured when a file is loaded.
+
+        The PDF page count is recorded here because it cannot be recovered
+        later: once an artifact resolves to GCS there is no local file to
+        read, and the dispatcher's context-overflow guard needs it to size
+        the request before sending it.
+        """
+        metadata: dict[str, Any] = {"original_filename": file_path.name}
+        try:
+            metadata["size_bytes"] = file_path.stat().st_size
+        except OSError as e:
+            logger.warning("Could not stat %s: %s", file_path, e)
+
+        if file_path.suffix.lower() != ".pdf":
+            return metadata
+
+        metadata["mime_type"] = "application/pdf"
+        try:
+            from pypdf import PdfReader
+            metadata["pages"] = len(PdfReader(str(file_path)).pages)
+        except Exception as e:
+            logger.warning("Could not read page count from %s: %s", file_path, e)
+        return metadata
+
     def _register_local_artifact(
         self,
         file_path: Path,
         artifact_type: str,
         source_info: str | None = None,
         use_dpkt: bool = False,
-    ) -> None:
-        """Register a local file as an artifact in the current session."""
+    ) -> str:
+        """Register a local file as an artifact in the current session.
+
+        Returns the new artifact id so callers can associate it with the
+        listing row the file came from.
+        """
+        metadata = self._artifact_metadata(file_path)
         artifact = self.session_manager.register_artifact(
             artifact_type=artifact_type,
             file_path=str(file_path.resolve()),
-            metadata={"original_filename": file_path.name},
+            metadata=metadata,
         )
         
         if self.artifact_registry:
             self.artifact_registry.register(
                 artifact_type=artifact_type,
                 source_path=file_path,
-                metadata={"original_filename": file_path.name},
+                metadata=dict(metadata),
                 copy_file=False,
             )
         
@@ -763,6 +1577,8 @@ class EventMillShell(cmd.Cmd):
         # Auto-parse PCAP files (mirrors event_mill v1 load_pcap behaviour)
         if artifact_type == "pcap":
             self._auto_parse_pcap(file_path, use_dpkt=use_dpkt)
+
+        return artifact.artifact_id
 
     def _auto_parse_pcap(self, file_path: Path, use_dpkt: bool = False) -> None:
         """Automatically parse a PCAP so downstream tools work immediately.
@@ -898,10 +1714,18 @@ class EventMillShell(cmd.Cmd):
         """Resolve a PCAP reference to a gs:// URI.
 
         Resolution order:
-          1. Already a gs:// URI → use as-is
-          2. Filename → look in network forensics bucket (workspace, then root)
-          3. Filename → look in common bucket
+          1. #N from the last 'files' listing → that row's URI
+          2. Already a gs:// URI → use as-is
+          3. Filename → look in network forensics bucket (workspace, then root)
+          4. Filename → look in common bucket
         """
+        if _FILE_REF_RE.match(pcap_ref):
+            entry = self._resolve_file_ref(pcap_ref)
+            if entry is None:
+                return None
+            print(f"  {pcap_ref} → {entry.file.uri}")
+            return entry.file.uri
+
         # 1. Explicit gs:// URI
         if pcap_ref.startswith("gs://"):
             return pcap_ref
@@ -1300,29 +2124,144 @@ class EventMillShell(cmd.Cmd):
     # -------------------------------------------------------------------
     
     def do_tools(self, arg: str) -> None:
-        """List available tools.
-        
-        Usage: tools [pillar]
+        """List available tools, scoped to the active pillar.
+
+        Usage: tools [pillar] [--all]
+
+        With a pillar active, the listing is that pillar's tools - including
+        tools from elsewhere that name it in their manifest's also_useful_in -
+        plus any tool that consumes an artifact type you have loaded.
+        '--all' shows every tool; naming a pillar shows that one.
         """
-        pillar = arg.strip() if arg else None
-        
+        stripped = arg.strip()
+        pillar = ""
+        show_all = False
+
+        if stripped:
+            try:
+                tokens = shlex.split(stripped)
+            except ValueError as e:
+                print(f"  Could not parse arguments: {e}")
+                return
+            for token in tokens:
+                if token == "--all":
+                    show_all = True
+                elif token.startswith("--"):
+                    print(f"  Unknown flag {token}. Use --all, or name a pillar.")
+                    return
+                elif pillar:
+                    print("  Usage: tools [pillar] [--all]")
+                    return
+                else:
+                    pillar = token
+
+        if pillar and show_all:
+            print("  Name a pillar or pass --all, not both.")
+            return
+
+        known_pillars = self.plugin_loader.list_pillars()
+
         if pillar:
-            plugins = self.plugin_loader.get_by_pillar(pillar)
-        else:
-            plugins = self.plugin_loader.list_all()
-        
+            if pillar not in known_pillars:
+                print(f"  No tools for pillar {pillar!r}.")
+                print(f"  Loaded pillars: {', '.join(sorted(known_pillars))}")
+                return
+            self._print_pillar_rows(pillar, self.plugin_loader.get_for_pillar(pillar))
+            return
+
+        all_plugins = self.plugin_loader.list_all()
+        if not all_plugins:
+            print("  No tools available.")
+            return
+
+        session = self.session_manager.get_current_session()
+        active = session.active_pillar if session else None
+
+        if show_all or not active or active not in known_pillars:
+            self._print_tool_rows(all_plugins, show_pillar=True)
+            if not show_all and not active:
+                print()
+                print("  Set a pillar with 'pillar <name>' to narrow this list.")
+            return
+
+        pillar_plugins = self.plugin_loader.get_for_pillar(active)
+        related = self._related_tools(active, pillar_plugins)
+
+        print(f"  {active} tools")
+        self._print_pillar_rows(active, pillar_plugins)
+
+        if related:
+            print()
+            print("  Related — these consume artifacts you have loaded")
+            self._print_tool_rows(related, show_pillar=True)
+
+        shown = {p.tool_name for p in pillar_plugins} | {p.tool_name for p in related}
+        hidden = [p for p in all_plugins if p.tool_name not in shown]
+        if hidden:
+            others = sorted({p.pillar for p in hidden})
+            print()
+            print(f"  {len(hidden)} more in other pillars: 'tools --all', or 'tools <pillar>'")
+            print(f"  ({', '.join(others)})")
+
+    def _related_tools(
+        self,
+        active_pillar: str,
+        pillar_plugins: list[LoadedPlugin],
+    ) -> list[LoadedPlugin]:
+        """Tools outside the active pillar that consume a loaded artifact type.
+
+        This is the session-driven half of cross-pillar relevance: a PCAP tool
+        earns a place in a threat_modeling listing once a PCAP is loaded. The
+        declared half is the manifest's also_useful_in, applied by the caller.
+        """
+        try:
+            loaded_types = {a.artifact_type for a in self.session_manager.list_artifacts()}
+        except ValueError:
+            return []
+        if not loaded_types:
+            return []
+
+        in_pillar = {p.tool_name for p in pillar_plugins}
+        related = [
+            p
+            for p in self.plugin_loader.list_all()
+            if p.tool_name not in in_pillar
+            and loaded_types.intersection(p.manifest.artifacts_consumed or [])
+        ]
+        return sorted(related, key=lambda p: (p.pillar, p.tool_name))
+
+    def _print_pillar_rows(self, pillar: str, plugins: list[LoadedPlugin]) -> None:
+        """Print one pillar's tools, including any that only declare it.
+
+        The pillar column appears only when a borrowed tool makes it vary, and
+        a footnote says why a row from another pillar is in the listing.
+        """
+        borrowed = [p for p in plugins if p.pillar != pillar]
+        self._print_tool_rows(plugins, show_pillar=bool(borrowed))
+        if borrowed:
+            print(f"  Rows outside {pillar} declare it in the manifest's also_useful_in.")
+
+    def _print_tool_rows(self, plugins: list[LoadedPlugin], show_pillar: bool) -> None:
+        """Print a tool table, with the pillar column only when it varies."""
         if not plugins:
             print("  No tools available.")
             return
-        
-        print(f"  {'Display Name':30s} {'Invoke As':30s} {'Pillar':20s} {'Stability':12s} Description")
-        print(f"  {'─' * 30} {'─' * 30} {'─' * 20} {'─' * 12} {'─' * 50}")
-        
-        for p in plugins:
-            m = p.manifest
+
+        if show_pillar:
+            print(f"  {'Display Name':30s} {'Invoke As':30s} {'Pillar':20s} {'Stability':12s} Description")
+            print(f"  {'─' * 30} {'─' * 30} {'─' * 20} {'─' * 12} {'─' * 50}")
+        else:
+            print(f"  {'Display Name':30s} {'Invoke As':30s} {'Stability':12s} Description")
+            print(f"  {'─' * 30} {'─' * 30} {'─' * 12} {'─' * 50}")
+
+        for plugin in plugins:
+            m = plugin.manifest
             desc = m.description_short[:80] if m.description_short else "—"
             invoke = f"run {m.tool_name}"
-            print(f"  {m.display_name:30s} {invoke:30s} {m.pillar:20s} {m.stability:12s} {desc}")
+            if show_pillar:
+                print(f"  {m.display_name:30s} {invoke:30s} {m.pillar:20s} {m.stability:12s} {desc}")
+            else:
+                print(f"  {m.display_name:30s} {invoke:30s} {m.stability:12s} {desc}")
     
     def do_help(self, arg: str) -> None:
         """Show help for a command or tool.
@@ -1348,9 +2287,12 @@ class EventMillShell(cmd.Cmd):
         print(f"  {'─' * 60}")
         print(f"  {m.display_name}  ({m.tool_name})")
         print(f"  Pillar: {m.pillar}   Stability: {m.stability}")
-        print(f"  Invoke: run {m.tool_name} {{\"action\": \"...\"}}") 
+        print(f"  Invoke: run {m.tool_name} --key value [--key value ...]")
+        print(f"      or: run {m.tool_name} {{\"key\": \"value\"}}   (for list/object arguments)")
         print(f"  {'─' * 60}")
         print()
+
+        self._print_tool_arguments(plugin)
 
         if readme_path.exists():
             rendered = self._render_markdown_plain(readme_path.read_text(encoding="utf-8"))
@@ -1361,6 +2303,61 @@ class EventMillShell(cmd.Cmd):
             print("  No README.md available for this tool.")
         print()
 
+    def _print_tool_arguments(self, plugin: LoadedPlugin) -> None:
+        """Print the tool's arguments as flags, derived from its input schema."""
+        import textwrap
+
+        schema = self._plugin_input_schema(plugin)
+        if not schema:
+            return
+        required_list, one_of = self._plugin_required_inputs(plugin)
+        required = set(required_list)
+
+        print("  Arguments")
+        print(f"  {'─' * 9}")
+
+        for name, spec in schema.items():
+            declared = self._declared_type(spec) or "string"
+            item_type = self._declared_type(spec.get("items") or {})
+
+            if declared == "boolean":
+                flag = f"--{name}"
+            elif declared == "array" and item_type in (None, "string"):
+                flag = f"--{name} a,b,c"
+            elif declared in ("object",) or (declared == "array" and item_type not in (None, "string")):
+                flag = f'{{"{name}": ...}}'
+            else:
+                flag = f"--{name} <{declared}>"
+
+            notes = []
+            if name in required:
+                notes.append("required")
+            if "default" in spec:
+                notes.append(f"default {spec['default']}")
+            if spec.get("enum"):
+                notes.append("one of: " + ", ".join(str(v) for v in spec["enum"]))
+            if "minimum" in spec and "maximum" in spec:
+                notes.append(f"range {spec['minimum']}-{spec['maximum']}")
+            elif "minimum" in spec:
+                notes.append(f"min {spec['minimum']}")
+            elif "maximum" in spec:
+                notes.append(f"max {spec['maximum']}")
+            if declared == "object" or (declared == "array" and item_type not in (None, "string")):
+                notes.append("JSON form only")
+
+            print(f"    {flag:<34} {'; '.join(notes)}".rstrip())
+            desc = spec.get("description")
+            if desc:
+                print(
+                    textwrap.fill(
+                        desc, width=78, initial_indent="        ", subsequent_indent="        "
+                    )
+                )
+        if one_of:
+            print()
+            print("    Supply one of: " + ", ".join(f"--{n}" for n in one_of))
+        print()
+
     @staticmethod
     def _render_markdown_plain(text: str) -> str:
         """Convert Markdown to readable plain-text for terminal display."""
@@ -1369,16 +2366,28 @@ class EventMillShell(cmd.Cmd):
 
         lines = text.splitlines()
         out: list[str] = []
+        para: list[str] = []
         in_code = False
+
+        def flush_paragraph() -> None:
+            """Wrap the buffered paragraph as one block, not line by line."""
+            if para:
+                out.append(
+                    textwrap.fill(
+                        " ".join(para),
+                        width=78,
+                        initial_indent="  ",
+                        subsequent_indent="  ",
+                    )
+                )
+                para.clear()
 
         for line in lines:
             # Toggle fenced code block
             if line.startswith("```"):
+                flush_paragraph()
                 in_code = not in_code
-                if in_code:
-                    out.append("")
-                else:
-                    out.append("")
+                out.append("")
                 continue
 
             if in_code:
@@ -1387,18 +2396,21 @@ class EventMillShell(cmd.Cmd):
 
             # H1
             if line.startswith("# "):
+                flush_paragraph()
                 title = line[2:].strip()
                 out.append(f"\n  {title}")
                 out.append(f"  {'═' * len(title)}")
                 continue
             # H2
             if line.startswith("## "):
+                flush_paragraph()
                 title = line[3:].strip()
                 out.append(f"\n  {title}")
                 out.append(f"  {'─' * len(title)}")
                 continue
             # H3
             if line.startswith("### "):
+                flush_paragraph()
                 title = line[4:].strip()
                 out.append(f"\n  {title}:")
                 continue
@@ -1414,21 +2426,216 @@ class EventMillShell(cmd.Cmd):
 
             # Table rows and list items — indent and pass through
             if line.startswith("|") or line.startswith("- ") or line.startswith("* ") or re.match(r"^\d+\. ", line):
+                flush_paragraph()
                 out.append(f"  {line}")
                 continue
 
             # Blank lines
             if not line.strip():
+                flush_paragraph()
                 out.append("")
                 continue
 
-            # Paragraph text — word-wrap at 78
-            wrapped = textwrap.fill(
-                line, width=78, initial_indent="  ", subsequent_indent="  "
-            )
-            out.append(wrapped)
+            # Paragraph text — buffered so the whole paragraph wraps at 78
+            para.append(line.strip())
 
+        flush_paragraph()
         return "\n".join(out)
+
+    def _plugin_input_schema(self, plugin: LoadedPlugin) -> dict[str, Any]:
+        """Return the ``properties`` block of a plugin's input schema, cached."""
+        name = plugin.tool_name
+        if name not in self._input_schema_cache:
+            props: dict[str, Any] = {}
+            schema_path = plugin.manifest.plugin_dir / "schemas" / "input.schema.json"
+            if schema_path.exists():
+                try:
+                    raw = json.loads(schema_path.read_text(encoding="utf-8"))
+                    props = raw.get("properties") or {}
+                except (OSError, json.JSONDecodeError) as e:
+                    logger.warning("Could not read input schema for %s: %s", name, e)
+            self._input_schema_cache[name] = props
+        return self._input_schema_cache[name]
+
+    def _plugin_required_inputs(self, plugin: LoadedPlugin) -> tuple[list[str], list[str]]:
+        """Return a plugin's required inputs as (always_required, one_of).
+
+        ``one_of`` collects the single-key ``anyOf`` alternatives some schemas use
+        to say "supply this argument or that one".
+        """
+        schema_path = plugin.manifest.plugin_dir / "schemas" / "input.schema.json"
+        if not schema_path.exists():
+            return [], []
+        try:
+            raw = json.loads(schema_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return [], []
+        one_of: list[str] = []
+        for branch in raw.get("anyOf") or []:
+            for name in branch.get("required") or []:
+                if name not in one_of:
+                    one_of.append(name)
+        return list(raw.get("required") or []), one_of
+
+    @staticmethod
+    def _declared_type(spec: dict[str, Any]) -> str | None:
+        """Resolve a schema property's type, tolerating ``["string", "null"]`` unions."""
+        declared = spec.get("type")
+        if isinstance(declared, list):
+            declared = next((t for t in declared if t != "null"), None)
+        return declared
+
+    def _coerce_flag_value(
+        self, key: str, value: Any, spec: dict[str, Any]
+    ) -> tuple[Any, str | None]:
+        """Convert a --flag string to the type the plugin's input schema declares.
+
+        Returns (value, None) on success or (None, message) on failure. Keys the
+        schema does not declare are passed through unchanged for the plugin's own
+        validate_inputs() to judge.
+        """
+        if value is True:  # bare --flag
+            return True, None
+
+        declared = self._declared_type(spec)
+
+        if declared in (None, "string"):
+            return value, None
+
+        if declared == "boolean":
+            low = value.strip().lower()
+            if low in ("true", "yes", "on", "1"):
+                return True, None
+            if low in ("false", "no", "off", "0"):
+                return False, None
+            return None, f"--{key} expects true or false, got {value!r}."
+
+        if declared == "integer":
+            try:
+                return int(value, 10) if isinstance(value, str) else int(value), None
+            except ValueError:
+                return None, f"--{key} expects a whole number, got {value!r}."
+
+        if declared == "number":
+            try:
+                return float(value), None
+            except ValueError:
+                return None, f"--{key} expects a number, got {value!r}."
+
+        if declared == "array":
+            item_type = self._declared_type(spec.get("items") or {})
+            if item_type in (None, "string"):
+                return [v.strip() for v in value.split(",") if v.strip()], None
+            return None, (
+                f"--{key} takes structured values. Use the JSON form instead: "
+                f'run <tool_name> {{"{key}": [...]}}'
+            )
+
+        if declared == "object":
+            return None, (
+                f"--{key} takes a structured value. Use the JSON form instead: "
+                f'run <tool_name> {{"{key}": {{...}}}}'
+            )
+
+        return value, None
+
+    def _local_path_for_entry(self, entry: FileListingEntry) -> Path | None:
+        """Find the local copy of a listed file, if it has been loaded.
+
+        Uses the id recorded when the row itself was loaded, and otherwise
+        falls back to matching a session artifact by filename so a plain
+        'load auth.log' still satisfies a later '#N'.
+        """
+        if entry.local_path and entry.local_path.exists():
+            return entry.local_path
+
+        for artifact in self.session_manager.list_artifacts():
+            candidate = Path(artifact.file_path)
+            if candidate.name == entry.file.filename and candidate.exists():
+                entry.artifact_id = artifact.artifact_id
+                entry.local_path = candidate
+                return candidate
+
+        return None
+
+    def _expand_file_refs(
+        self,
+        pairs: list[tuple[str, Any]],
+    ) -> tuple[list[tuple[str, Any]], bool]:
+        """Replace '#N' flag values with the local path of that listed file.
+
+        Only a value that is exactly '#N' is treated as a reference, so a
+        literal like --query "#3" is untouched. '##N' escapes to a literal
+        '#N'. Returns (pairs, ok); ok is False after printing an error.
+        """
+        expanded: list[tuple[str, Any]] = []
+        for key, value in pairs:
+            if not isinstance(value, str):
+                expanded.append((key, value))
+                continue
+
+            if value.startswith("##"):
+                expanded.append((key, value[1:]))
+                continue
+
+            if not _FILE_REF_RE.match(value):
+                expanded.append((key, value))
+                continue
+
+            entry = self._resolve_file_ref(value)
+            if entry is None:
+                return [], False
+
+            local = self._local_path_for_entry(entry)
+            if local is None:
+                print(
+                    f"  {value} is a stored file "
+                    f"({entry.file.object_path}), not a local one."
+                )
+                print(f"  Load it first:  load {value}")
+                return [], False
+
+            print(f"  {value} → {local}")
+            expanded.append((key, str(local)))
+
+        return expanded, True
+
+    def _parse_flag_payload(self, raw: str, plugin: LoadedPlugin) -> dict[str, Any] | None:
+        """Parse --key value flags into a typed payload.
+
+        Values are typed from the plugin's input schema, so --line_limit 100
+        arrives as an int while --query 404 stays a string. Returns None after
+        printing a message when the flags cannot be parsed.
+        """
+        try:
+            tokens = shlex.split(raw)
+        except ValueError as e:
+            print(f"  Could not parse arguments: {e}")
+            return None
+
+        pairs, error = _split_flags(tokens)
+        if error:
+            print(f"  {error}")
+            return None
+
+        expanded, ok = self._expand_file_refs(pairs)
+        if not ok:
+            return None
+        pairs = expanded
+
+        schema = self._plugin_input_schema(plugin)
+        payload: dict[str, Any] = {}
+        for key, value in pairs:
+            coerced, error = self._coerce_flag_value(key, value, schema.get(key) or {})
+            if error:
+                print(f"  {error}")
+                return None
+            # Repeating a list-valued flag appends rather than overwrites
+            if isinstance(coerced, list) and isinstance(payload.get(key), list):
+                payload[key].extend(coerced)
+            else:
+                payload[key] = coerced
+        return payload
 
     def complete_run(self, text: str, line: str, begidx: int, endidx: int) -> list[str]:
         # Complete tool names (first argument only)
@@ -1440,13 +2647,30 @@ class EventMillShell(cmd.Cmd):
 
     def do_run(self, arg: str) -> None:
         """Run a tool on the current session.
-        
-        Usage: run <tool_name> [--key value ...] | [json_payload]
 
-        Examples:
-          run log_investigator --severity orange --file_path auth.log
-          run log_investigator {"severity": "orange", "file_path": "auth.log"}
-          run log_investigator --verbose          (boolean flag, sets value to True)
+        Usage: run <tool_name> --key value [--key value ...]
+
+        Flags are the normal way to call a tool. Values are typed from the
+        tool's input schema, so numbers and true/false arrive correctly:
+
+          run log_navigator --action read --path access.log --line_limit 100
+          run log_pattern_analyzer --mode discover --file_path mystery.log --ai_analysis
+          run threat_report_analyzer --action search_reports --query "ransomware"
+
+        Flag forms:
+          --key value      set a value
+          --key=value      same, needed when the value starts with '-'
+          --key            a boolean flag, sets it true
+          --key a,b,c      a list of text values
+          --key #3         file #3 from the last 'files' listing, which
+                           must already be loaded; --key ##3 is a literal
+
+        JSON is the alternative for arguments a flag cannot express — lists of
+        objects, or nested structures:
+
+          run attack_path_visualizer {"format": "ascii", "stages": [{"name": "..."}]}
+
+        Use 'help <tool_name>' for a tool's arguments.
         """
         if not self.session_manager.get_current_session():
             print("  No active session. Use 'new' to create one.")
@@ -1475,25 +2699,10 @@ class EventMillShell(cmd.Cmd):
                     print(f"  Invalid JSON payload: {e}")
                     return
             else:
-                # --flag style: --key value  or  --flag (sets key=True)
-                tokens = shlex.split(raw)
-                i = 0
-                while i < len(tokens):
-                    tok = tokens[i]
-                    if tok.startswith("--"):
-                        key = tok[2:]
-                        if not key:
-                            print(f"  Invalid flag: {tok!r}. Use --key or --key value.")
-                            return
-                        if i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
-                            payload[key] = tokens[i + 1]
-                            i += 2
-                        else:
-                            payload[key] = True
-                            i += 1
-                    else:
-                        print(f"  Unexpected token {tok!r}. Use --key value flags or JSON format.")
-                        return
+                parsed = self._parse_flag_payload(raw, plugin)
+                if parsed is None:
+                    return
+                payload = parsed
         
         # Resolve artifact_id → file_path for plugins that need a file
         if "artifact_id" in payload:
@@ -1561,14 +2770,30 @@ class EventMillShell(cmd.Cmd):
                 metadata=metadata or {},
             )
 
+        # Apply the plugin's declared model_tier as the default for every LLM
+        # call it makes. A plugin can still override per call with QueryHints.
+        # model_tier "none" declares the plugin does no LLM work at all.
+        model_tier = plugin.manifest.model_tier
+        llm_connected = self.llm_client is not None and self.llm_client.connected
+        if model_tier == "none" or not llm_connected:
+            scoped_llm = None
+        else:
+            scoped_llm = TierScopedLLMClient(self.llm_client, default_tier=model_tier)
+
         context = ExecutionContext(
             session_id=session.session_id,
             selected_pillar=session.active_pillar or "",
             artifacts=artifact_refs,
-            llm_enabled=self.llm_client is not None and self.llm_client.connected,
-            llm_query=self.llm_client,
+            llm_enabled=scoped_llm is not None,
+            llm_query=scoped_llm,
+            model_tier=model_tier,
             register_artifact=_register_artifact,
-            reference_data=ReferenceDataView({"mitre_techniques": get_mitre_db()}),
+            reference_data=ReferenceDataView(
+                {
+                    "mitre_techniques": get_mitre_db(),
+                    "mitre_relationships": get_mitre_relationships(),
+                }
+            ),
         )
         
         # Track execution
@@ -1627,9 +2852,18 @@ class EventMillShell(cmd.Cmd):
                 raise RuntimeError("Plugin returned None instead of ToolResult")
             
             if result.ok:
-                # Register output_artifacts declared by the plugin
+                # Register output_artifacts declared by the plugin — unless the
+                # plugin already registered that file via context.register_artifact
+                # (threat_intel_ingester does both), which would list it twice.
+                _already_registered = {
+                    str(Path(a.file_path).resolve())
+                    for a in self.session_manager.list_artifacts()
+                    if a.artifact_id not in _artifacts_before
+                }
                 for oa in (result.output_artifacts or []):
                     oa_path = Path(oa.get("file_path", ""))
+                    if str(oa_path.resolve()) in _already_registered:
+                        continue
                     if oa_path.exists():
                         self.session_manager.register_artifact(
                             artifact_type=oa.get("artifact_type", "text"),
@@ -1663,6 +2897,8 @@ class EventMillShell(cmd.Cmd):
                 
                 print(f"  ✓ Completed successfully")
                 print(f"\n  Summary:\n  {summary}")
+                self._print_run_output(result, _artifacts_before)
+                self._auto_export_run_output(tool_name, _artifacts_before)
             else:
                 self.session_manager.complete_execution(
                     execution=execution,
@@ -1699,6 +2935,100 @@ class EventMillShell(cmd.Cmd):
             
             print(f"  ✗ Error: {e}")
             logger.exception("Tool execution failed: %s", tool_name)
+
+    def _print_run_output(self, result: Any, artifacts_before: set[str]) -> None:
+        """Show the full rendered output and the files a run produced.
+
+        summarize_for_llm() is capped at 2000 characters because it feeds the
+        LLM context; it is not the user's copy of the result.  Tools that
+        return a rendering under 'visualization' get it printed in full here,
+        and every artifact registered by the run is listed with its path, so
+        nothing is lost when the summary is cut short.
+        """
+        data = result.result or {}
+        viz = data.get("visualization")
+        if isinstance(viz, str) and viz.strip():
+            print("\n  Rendered output:")
+            for line in viz.splitlines():
+                print(f"  {line}")
+
+        new_artifacts = [
+            a for a in self.session_manager.list_artifacts()
+            if a.artifact_id not in artifacts_before
+        ]
+        if new_artifacts:
+            print("\n  Output files (use 'show <id>' to print one in full):")
+            for a in new_artifacts:
+                print(f"    {a.artifact_id:12s} {a.artifact_type:14s} {a.file_path}")
+
+    def do_show(self, arg: str) -> None:
+        """Print an artifact's contents in full.
+
+        Usage: show <artifact_id> [max_lines]
+
+        Text, markdown and Mermaid artifacts are printed as-is; JSON is
+        pretty-printed.  Use it to see a rendering the run summary cut
+        short, or to inspect a tool's JSON output.  Binary artifacts
+        (pcap, pdf) are not printed.
+        """
+        if not self.session_manager.get_current_session():
+            print("  No active session. Use 'new' to create one.")
+            return
+
+        parts = arg.strip().split()
+        if not parts:
+            print("  Usage: show <artifact_id> [max_lines]")
+            return
+        artifact_id = parts[0]
+        max_lines: int | None = None
+        if len(parts) > 1:
+            try:
+                max_lines = max(1, int(parts[1]))
+            except ValueError:
+                print(f"  max_lines must be a number, got {parts[1]!r}")
+                return
+
+        art_path = self.session_manager.get_artifact_path(artifact_id)
+        if art_path is None:
+            print(f"  Artifact not found: {artifact_id}. Use 'artifacts' to list them.")
+            return
+        art_path = Path(art_path)
+        if not art_path.exists():
+            print(f"  Artifact file is missing on disk: {art_path}")
+            return
+
+        printable = {
+            ".txt", ".md", ".mmd", ".json", ".csv", ".log", ".html",
+            ".xml", ".stix", ".yaml", ".yml", ".jsonl",
+        }
+        if art_path.suffix.lower() not in printable:
+            print(
+                f"  {art_path.name} is not a text artifact "
+                f"({art_path.suffix or 'no extension'}); nothing to print."
+            )
+            return
+
+        try:
+            content = art_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(f"  Could not read {art_path}: {exc}")
+            return
+
+        if art_path.suffix.lower() == ".json":
+            try:
+                content = json.dumps(json.loads(content), indent=2)
+            except json.JSONDecodeError:
+                pass
+
+        lines = content.splitlines()
+        shown = lines if max_lines is None else lines[:max_lines]
+        print(f"\n  {artifact_id}  {art_path}  ({len(lines)} lines)\n")
+        for line in shown:
+            print(f"  {line}")
+        if max_lines is not None and len(lines) > max_lines:
+            print(f"\n  ... {len(lines) - max_lines} more line(s); "
+                  f"run 'show {artifact_id}' without a limit to see all.")
+        print()
 
     def _auto_persist_result(
         self,
@@ -1760,26 +3090,237 @@ class EventMillShell(cmd.Cmd):
         except Exception as exc:
             logger.warning("Auto-persist failed for %s: %s", tool_name, exc)
 
-    def do_history(self, arg: str) -> None:
+    def do_tool_history(self, arg: str) -> None:
         """Show tool execution history for the current session.
-        
-        Usage: history
+
+        Usage: tool_history [--tool <name>] [--status <state>] [--limit <n>] [--detail]
+               tool_history <execution_id>
+
+        Statuses: running, completed, failed, timed_out.
+        A bare execution id prints that one execution in full.
         """
         if not self.session_manager.get_current_session():
             print("  No active session.")
             return
-        
+
+        stripped = arg.strip()
+        exec_id = ""
+        detail = False
+        tool_filter = ""
+        status_filter = ""
+        limit = 0
+
+        if stripped and not stripped.startswith("--"):
+            parts = stripped.split()
+            if len(parts) > 1:
+                print("  Usage: tool_history [--tool <name>] [--status <state>] [--limit <n>] [--detail]")
+                print("     or: tool_history <execution_id>")
+                return
+            exec_id = parts[0]
+        elif stripped:
+            try:
+                tokens = shlex.split(stripped)
+            except ValueError as e:
+                print(f"  Could not parse arguments: {e}")
+                return
+
+            pairs, error = _split_flags(tokens)
+            if error:
+                print(f"  {error}")
+                return
+
+            valid_states = [s.value for s in ToolExecutionStatus]
+            for key, value in pairs:
+                if key == "detail":
+                    detail = True
+                    continue
+                if value is True:
+                    print(f"  --{key} needs a value.")
+                    return
+                if key == "tool":
+                    tool_filter = str(value)
+                elif key == "status":
+                    status_filter = str(value).lower()
+                    if status_filter not in valid_states:
+                        print(f"  Unknown --status {value!r}. Use {', '.join(valid_states)}.")
+                        return
+                elif key == "limit":
+                    try:
+                        limit = int(str(value))
+                    except ValueError:
+                        print(f"  --limit needs a whole number, got {value!r}.")
+                        return
+                    if limit < 0:
+                        print("  --limit cannot be negative. Use 0 to show all.")
+                        return
+                else:
+                    print(f"  Unknown flag --{key}.")
+                    print("  Use --tool, --status, --limit, --detail.")
+                    return
+
         executions = self.session_manager.list_executions()
-        if not executions:
-            print("  No tool executions yet.")
+
+        if exec_id:
+            match = next((e for e in executions if e.execution_id == exec_id), None)
+            if match is None:
+                print(f"  Execution not found: {exec_id}. Use 'tool_history' to list them.")
+                return
+            self._print_execution_detail(match)
             return
-        
-        print(f"  {'ID':14s} {'Tool':24s} {'Status':12s} {'Time':20s}")
-        print(f"  {'─' * 14} {'─' * 24} {'─' * 12} {'─' * 20}")
-        
+
+        if tool_filter:
+            executions = [e for e in executions if e.tool_name == tool_filter]
+        if status_filter:
+            executions = [e for e in executions if e.status.value == status_filter]
+
+        if not executions:
+            if tool_filter or status_filter:
+                print("  No tool executions match that filter.")
+            else:
+                print("  No tool executions yet.")
+            return
+
+        shown = executions[-limit:] if limit else executions
+
+        if detail:
+            for e in shown:
+                self._print_execution_detail(e)
+        else:
+            print(f"  {'ID':14s} {'Tool':24s} {'Status':12s} {'Duration':10s} {'Time':20s}")
+            print(f"  {'─' * 14} {'─' * 24} {'─' * 12} {'─' * 10} {'─' * 20}")
+            for e in shown:
+                time_str = e.started_at.strftime("%Y-%m-%d %H:%M:%S")
+                duration = self._execution_duration(e)
+                print(
+                    f"  {e.execution_id:14s} {e.tool_name:24s} "
+                    f"{e.status.value:12s} {duration:10s} {time_str}"
+                )
+
+        if limit and len(executions) > len(shown):
+            print(f"  {len(shown)} of {len(executions)} executions shown - raise --limit for more.")
+
+    def _print_execution_detail(self, execution: ToolExecution) -> None:
+        """Print one tool execution with its artifacts and stored summary."""
+        print(f"  [{execution.execution_id}] {execution.tool_name}")
+        print(f"    Status:    {execution.status.value} ({self._execution_duration(execution)})")
+        print(f"    Started:   {execution.started_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        if execution.completed_at:
+            print(f"    Finished:  {execution.completed_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        if execution.input_artifact_id or execution.output_artifact_id:
+            src = execution.input_artifact_id or "-"
+            dst = execution.output_artifact_id or "-"
+            print(f"    Artifacts: {src} -> {dst}")
+        if execution.summary:
+            print("    Summary:")
+            for line in execution.summary.splitlines():
+                print(f"      {line}")
+        print()
+
+    @staticmethod
+    def _execution_duration(execution: ToolExecution) -> str:
+        """Wall-clock time an execution took, or '-' while it is still running."""
+        if execution.completed_at is None:
+            return "-"
+        seconds = (execution.completed_at - execution.started_at).total_seconds()
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        minutes, secs = divmod(int(seconds), 60)
+        return f"{minutes}m{secs:02d}s"
+
+    @staticmethod
+    def _turn_time(turn: dict[str, str]) -> datetime | None:
+        """Timestamp of an LLM turn, or None for turns recorded without one."""
+        raw = turn.get("timestamp")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+
+    def do_history(self, arg: str) -> None:
+        """Show a merged timeline of tool executions and LLM turns.
+
+        Usage: history [--limit <n>]
+
+        One row per event, oldest first. Use 'tool_history' or 'llm_history'
+        for the detail behind a row. Tool executions are session state in
+        SQLite; LLM turns live in memory for this shell session only.
+        """
+        stripped = arg.strip()
+        if stripped == "clear":
+            print("  Only LLM turns can be cleared; tool history is session state.")
+            self.do_llm_history("clear")
+            return
+
+        limit = HISTORY_DEFAULT_LIMIT
+        if stripped:
+            try:
+                tokens = shlex.split(stripped)
+            except ValueError as e:
+                print(f"  Could not parse arguments: {e}")
+                return
+
+            pairs, error = _split_flags(tokens)
+            if error:
+                print(f"  {error}")
+                return
+
+            for key, value in pairs:
+                if key != "limit":
+                    print(f"  Unknown flag --{key}. Use --limit.")
+                    return
+                try:
+                    limit = int(str(value))
+                except (TypeError, ValueError):
+                    print(f"  --limit needs a whole number, got {value!r}.")
+                    return
+                if limit < 0:
+                    print("  --limit cannot be negative. Use 0 to show all.")
+                    return
+
+        events: list[tuple[datetime, str, str]] = []
+
+        try:
+            executions = self.session_manager.list_executions()
+        except ValueError:
+            executions = []
+
         for e in executions:
-            time_str = e.started_at.strftime("%Y-%m-%d %H:%M:%S")
-            print(f"  {e.execution_id:14s} {e.tool_name:24s} {e.status.value:12s} {time_str}")
+            events.append((
+                e.started_at,
+                "tool",
+                f"[{e.execution_id}] {e.tool_name} - {e.status.value} "
+                f"({self._execution_duration(e)})",
+            ))
+
+        for i, turn in enumerate(self._conversation_history, 1):
+            question = " ".join(turn["question"].split())
+            if len(question) > 62:
+                question = question[:59] + "..."
+            events.append((self._turn_time(turn) or datetime.max, "llm", f"[{i}] {question}"))
+
+        if not events:
+            print("  No history yet. Run a tool, or use 'ask: <question>'.")
+            return
+
+        events.sort(key=lambda ev: ev[0])
+        shown = events[-limit:] if limit else events
+
+        print(f"  {'Time':20s} {'Kind':6s} Event")
+        print(f"  {'─' * 20} {'─' * 6} {'─' * 50}")
+        for ts, kind, detail in shown:
+            time_str = "-" if ts == datetime.max else ts.strftime("%Y-%m-%d %H:%M:%S")
+            print(f"  {time_str:20s} {kind:6s} {detail}")
+
+        tool_count = sum(1 for ev in events if ev[1] == "tool")
+        print()
+        if limit and len(events) > len(shown):
+            print(f"  {len(shown)} of {len(events)} events shown - raise --limit for more.")
+        print(
+            f"  {tool_count} tool, {len(events) - tool_count} llm. "
+            "Detail: 'tool_history', 'llm_history'."
+        )
     
     # -------------------------------------------------------------------
     # Route Command
@@ -1878,7 +3419,9 @@ class EventMillShell(cmd.Cmd):
         print("")
         print("  'connect'            — bind all models (tiered auto-routing)")
         print("  'connect <model_id>' — bind a specific model only")
-        print(f"  Routing: max_tokens ≤ {LLMDispatcher.LIGHT_THRESHOLD} → light (Flash), > {LLMDispatcher.LIGHT_THRESHOLD} → heavy (Pro)")
+        print("  Routing: plugin manifest model_tier, overridable per call")
+        print("           by the plugin; framework calls with no preference")
+        print("           use the light tier")
     
     def do_connect(self, arg: str) -> None:
         """Connect to LLM.
@@ -1922,7 +3465,10 @@ class EventMillShell(cmd.Cmd):
                 print("  No models connected.")
                 return
 
-            self.llm_client = LLMDispatcher(clients=connected_clients)
+            self.llm_client = LLMDispatcher(
+                clients=connected_clients,
+                tier_specs=self._tier_specs,
+            )
 
             log_user_activity("connect_llm", {
                 "models": {tier: c.model_id for tier, c in connected_clients.items()},
@@ -1931,8 +3477,8 @@ class EventMillShell(cmd.Cmd):
 
             if len(connected_clients) > 1:
                 print(f"")
-                print(f"  Auto-routing: max_tokens ≤ {LLMDispatcher.LIGHT_THRESHOLD} → light, "
-                      f"> {LLMDispatcher.LIGHT_THRESHOLD} → heavy")
+                print("  Auto-routing: each plugin's manifest model_tier, overridable")
+                print("                per call; calls with no preference use light")
             return
 
         # Specific model requested — single-client mode
@@ -1978,13 +3524,14 @@ class EventMillShell(cmd.Cmd):
                     connected_clients[m["tier"]] = fallback_client
                     print(f"  ✓ {m['name']} available as quota fallback")
 
-        if len(connected_clients) > 1:
-            self.llm_client = LLMDispatcher(
-                clients=connected_clients,
-                preferred_tier=selected_model["tier"],
-            )
-        else:
-            self.llm_client = primary_client
+        # Always dispatch, even with a single client. A bare MCPLLMClient
+        # skips token clamping, the PDF context guard, the retired-model
+        # retry, and native document handling entirely.
+        self.llm_client = LLMDispatcher(
+            clients=connected_clients,
+            preferred_tier=selected_model["tier"],
+            tier_specs=self._tier_specs,
+        )
 
         log_user_activity("connect_llm", {
             "model_id": selected_model["id"],
@@ -2078,10 +3625,13 @@ class EventMillShell(cmd.Cmd):
         print("  Thinking...")
         
         try:
+            # 'ask:' is analyst-facing reasoning over the full session context —
+            # deliberately the heavy tier, not an accident of max_tokens.
             response = self.llm_client.query_text(
                 prompt=full_prompt,
                 system_context=system_context,
                 max_tokens=4096,
+                hints=QueryHints(tier="heavy", needs_reasoning=True),
             )
             
             if response.ok and response.text:
@@ -2089,6 +3639,7 @@ class EventMillShell(cmd.Cmd):
                 self._conversation_history.append({
                     "question": question,
                     "answer": response.text,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
                 })
                 
                 # Print the response with indentation
@@ -2168,26 +3719,75 @@ class EventMillShell(cmd.Cmd):
         
         return "\n".join(parts)
     
-    def do_history(self, arg: str) -> None:
+    def do_llm_history(self, arg: str) -> None:
         """Show conversation history with the LLM.
-        
-        Usage: history [clear]
+
+        Usage: llm_history [--last <n>] [--full]
+               llm_history clear
+
+        Turns are held in memory for this shell session only; the durable
+        record is the structured log.
         """
-        if arg.strip() == "clear":
+        stripped = arg.strip()
+        if stripped == "clear":
             self._conversation_history.clear()
             print("  Conversation history cleared.")
             return
-        
+
+        last = 0
+        full = False
+        if stripped:
+            try:
+                tokens = shlex.split(stripped)
+            except ValueError as e:
+                print(f"  Could not parse arguments: {e}")
+                return
+
+            pairs, error = _split_flags(tokens)
+            if error:
+                print(f"  {error}")
+                return
+
+            for key, value in pairs:
+                if key == "full":
+                    full = True
+                elif key == "last":
+                    try:
+                        last = int(str(value))
+                    except (TypeError, ValueError):
+                        print(f"  --last needs a whole number, got {value!r}.")
+                        return
+                    if last < 0:
+                        print("  --last cannot be negative. Use 0 to show all.")
+                        return
+                else:
+                    print(f"  Unknown flag --{key}. Use --last or --full.")
+                    return
+
         if not self._conversation_history:
-            print("  No conversation history. Use 'ask <question>' to start.")
+            print("  No conversation history. Use 'ask: <question>' to start.")
             return
-        
-        for i, turn in enumerate(self._conversation_history, 1):
-            q = turn["question"]
-            a_preview = turn["answer"][:120] + "..." if len(turn["answer"]) > 120 else turn["answer"]
-            print(f"  [{i}] Q: {q}")
-            print(f"      A: {a_preview}")
+
+        turns = list(enumerate(self._conversation_history, 1))
+        shown = turns[-last:] if last else turns
+
+        for i, turn in shown:
+            ts = self._turn_time(turn)
+            stamp = f" {ts.strftime('%H:%M:%S')}" if ts else ""
+            print(f"  [{i}]{stamp} Q: {turn['question']}")
+            answer = turn["answer"]
+            if full:
+                print("      A:")
+                for line in answer.splitlines():
+                    print(f"        {line}")
+            else:
+                flat = " ".join(answer.split())
+                preview = flat[:120] + "..." if len(flat) > 120 else flat
+                print(f"      A: {preview}")
             print()
+
+        if last and len(turns) > len(shown):
+            print(f"  {len(shown)} of {len(turns)} turns shown - raise --last for more.")
     
     def do_exit(self, arg: str) -> bool:
         """Exit Event Mill.
@@ -2218,7 +3818,15 @@ class EventMillShell(cmd.Cmd):
     
     def default(self, line: str) -> None:
         """Handle unknown commands."""
-        print(f"  Unknown command: {line.split()[0]}")
+        stripped = line.strip()
+        if stripped.startswith("{"):
+            print("  That is a tool payload, not a command — it needs a 'run <tool_name>' prefix:")
+            print(f"    run <tool_name> {stripped}")
+            print("  Most arguments are easier as flags:")
+            print("    run <tool_name> --key value")
+            print("  'tools' lists the tool names; 'help <tool_name>' lists its arguments.")
+            return
+        print(f"  Unknown command: {stripped.split()[0]}")
         print("  Type 'help' for available commands.")
         if self.llm_client and self.llm_client.connected:
             print("  Tip: use 'ask: <question>' to query the LLM.")
@@ -2286,14 +3894,30 @@ def main() -> None:
     
     # Cloud Run sets K_SERVICE env var — use JSON logging for Cloud Logging
     is_cloud_run = os.environ.get("K_SERVICE") is not None
-    
+
+    # Local development: read .env from the working directory so API keys do
+    # not have to be exported by hand. Never on Cloud Run, where the same
+    # variables arrive from Secret Manager via --set-secrets and a stray file
+    # must not shadow them. override=False means a variable already in the
+    # environment always wins, on either path.
+    dotenv_path: Path | None = None
+    if not is_cloud_run:
+        from dotenv import find_dotenv, load_dotenv
+
+        found = find_dotenv(usecwd=True)
+        if found and load_dotenv(found, override=False):
+            dotenv_path = Path(found)
+
     setup_logging(
         log_level=log_level,
         log_file=log_file,
         console=True,
         cloud_json=is_cloud_run,
     )
-    
+
+    if dotenv_path is not None:
+        logger.info("Loaded local environment from %s", dotenv_path)
+
     # Gracefully handle SIGHUP (signal 1) — sent by ttyd when a browser
     # tab closes or Cloud Run manages instance lifecycle. Without this,
     # the Python process crashes with "Uncaught signal: 1".

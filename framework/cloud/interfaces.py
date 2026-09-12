@@ -8,8 +8,23 @@ Implementations live in provider-specific subdirectories (gcp/, local/).
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, BinaryIO
+
+
+@dataclass
+class StoredObject:
+    """One object in storage, with metadata where the backend knows it.
+
+    ``modified`` is always timezone-aware UTC. Backends normalize at their
+    own boundary so callers can compare values from any backend directly.
+    """
+
+    path: str
+    size_bytes: int | None = None
+    modified: datetime | None = None
 
 
 class StorageBackend(ABC):
@@ -104,6 +119,28 @@ class StorageBackend(ABC):
             List of file paths.
         """
         ...
+
+    def list_files_detailed(
+        self,
+        prefix: str = "",
+        max_results: int = 1000,
+    ) -> list[StoredObject]:
+        """List files with size and modification time.
+
+        Concrete rather than abstract so a backend that does not override
+        it still works, degraded to name-only entries.
+
+        Args:
+            prefix: Path prefix to filter by.
+            max_results: Maximum number of results.
+
+        Returns:
+            List of StoredObject, ordered as the backend returns them.
+        """
+        return [
+            StoredObject(path=p)
+            for p in self.list_files(prefix=prefix, max_results=max_results)
+        ]
 
 
 class SecretProvider(ABC):

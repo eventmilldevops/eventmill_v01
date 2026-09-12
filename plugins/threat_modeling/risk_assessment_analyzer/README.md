@@ -40,6 +40,32 @@ workspace/artifacts/risk_assessment_analyzer_<YYYYMMDD_HHMMSS>.json
 ```
 The file is registered as a `json_events` session artifact. Use `artifacts` to get its ID. The `analyze` action result includes extracted attack stages, which can be passed directly to `attack_path_visualizer`. Use `export <artifact_id>` to push the JSON to `common/exports/risk_assessment_analyzer/` in cloud storage for external access or troubleshooting.
 
+## Example Usage
+
+Arguments are passed as `--key value` flags.
+
+### List Attack Types
+```
+run risk_assessment_analyzer --action list_attack_types
+```
+
+### Analyze a Risk Assessment Document
+```
+run risk_assessment_analyzer --action analyze --attack_type ransomware --document_content "Backups are tested quarterly; EDR covers 80% of endpoints..."
+```
+`--document_content` is the document text, not a path. Quote it. For anything
+longer than a line or two, summarize the source with `threat_report_analyzer`
+first and pass the resulting summary text.
+
+### Validate Stages
+```
+run risk_assessment_analyzer {"action": "validate_stages", "attack_type": "ransomware", "stages": [{"name": "Initial Access", "mitre_technique_id": "T1566", "stage_present": true, "controls": [{"control_name": "mail filtering", "control_type": "preventive", "effectiveness_rating": "moderate", "evidence_basis": "benchmark"}]}]}
+```
+
+`stages` is a list of objects, so `validate_stages` is the one action that needs
+the JSON form — flags cannot express nested structures. Every tool accepts a
+JSON payload for exactly this reason; flags cover everything else.
+
 ## Chains
 
 - **From**: `threat_model_analyzer`

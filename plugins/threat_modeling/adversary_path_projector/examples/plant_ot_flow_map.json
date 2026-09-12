@@ -1,0 +1,256 @@
+{
+  "application": "Bottling Plant OT Estate",
+  "description": "Example flow map: a manufacturing site where a corporate IT network, an IT/OT DMZ and a control network meet. Deliberately contains findings — VPN MFA still planned, no vendor access review, no application allowlisting on the engineering workstation, shared local credentials on the SCADA console, and a dual-homed engineering workstation whose direct link to supervisory control bypasses the DMZ jump host entirely.",
+  "zones": [
+    {"id": "edge", "name": "Remote access edge", "trust_level": "untrusted"},
+    {"id": "corp", "name": "Corporate IT", "trust_level": "trusted"},
+    {"id": "dmz", "name": "IT/OT DMZ", "trust_level": "semi_trusted"},
+    {"id": "ot_super", "name": "Supervisory control", "trust_level": "semi_trusted"},
+    {"id": "ot_ctrl", "name": "Control network", "trust_level": "restricted"}
+  ],
+  "components": [
+    {
+      "id": "vpn",
+      "name": "Remote access VPN",
+      "type": "gateway",
+      "zone": "edge",
+      "exposure": "internet",
+      "technologies": ["ssl-vpn"],
+      "authentication": "password",
+      "data_classification": "internal",
+      "controls": [
+        {
+          "name": "VPN multi-factor authentication",
+          "control_type": "identity",
+          "implementation_status": "planned",
+          "bypass_difficulty": "trivial",
+          "detection_capability": "low",
+          "mitre_mitigation_id": "M1032"
+        }
+      ]
+    },
+    {
+      "id": "remote_vendor",
+      "name": "Vendor support portal",
+      "type": "external_service",
+      "zone": "edge",
+      "exposure": "partner",
+      "authentication": "vendor_sso",
+      "data_classification": "internal",
+      "description": "Line integrator's standing remote support channel into the DMZ jump host.",
+      "controls": [
+        {
+          "name": "Vendor access review",
+          "control_type": "identity",
+          "implementation_status": "missing",
+          "bypass_difficulty": "trivial",
+          "detection_capability": "none",
+          "mitre_mitigation_id": "M1018"
+        }
+      ]
+    },
+    {
+      "id": "corp_ad",
+      "name": "Corporate directory",
+      "type": "identity_provider",
+      "zone": "corp",
+      "exposure": "internal",
+      "technologies": ["windows-server", "active-directory"],
+      "authentication": "kerberos",
+      "data_classification": "confidential",
+      "controls": [
+        {
+          "name": "Tiered administration model",
+          "control_type": "identity",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium",
+          "mitre_mitigation_id": "M1026"
+        },
+        {
+          "name": "Domain controller audit logging",
+          "control_type": "monitoring",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "high",
+          "mitre_mitigation_id": "M1047"
+        }
+      ]
+    },
+    {
+      "id": "eng_ws",
+      "name": "Engineering workstation",
+      "type": "workstation",
+      "zone": "corp",
+      "exposure": "internal",
+      "technologies": ["windows", "plc-programming-suite"],
+      "authentication": "domain_credentials",
+      "data_classification": "confidential",
+      "description": "Dual-homed: joined to the corporate domain and cabled into supervisory control.",
+      "controls": [
+        {
+          "name": "Endpoint detection and response",
+          "control_type": "endpoint",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "high",
+          "mitre_mitigation_id": "M1049"
+        },
+        {
+          "name": "Application allowlisting",
+          "control_type": "application",
+          "implementation_status": "missing",
+          "bypass_difficulty": "trivial",
+          "detection_capability": "none",
+          "mitre_mitigation_id": "M1038"
+        }
+      ]
+    },
+    {
+      "id": "jump_ot",
+      "name": "OT jump host",
+      "type": "server",
+      "zone": "dmz",
+      "exposure": "management",
+      "technologies": ["windows-server"],
+      "authentication": "mfa",
+      "data_classification": "confidential",
+      "controls": [
+        {
+          "name": "Session recording",
+          "control_type": "monitoring",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "high",
+          "mitre_mitigation_id": "M1047"
+        },
+        {
+          "name": "Jump host multi-factor authentication",
+          "control_type": "identity",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium",
+          "mitre_mitigation_id": "M1032"
+        }
+      ]
+    },
+    {
+      "id": "mes",
+      "name": "Manufacturing execution system",
+      "type": "service",
+      "zone": "dmz",
+      "exposure": "internal",
+      "technologies": ["java", "windows-server"],
+      "authentication": "ldap",
+      "data_classification": "confidential",
+      "controls": [
+        {
+          "name": "LDAP service account restrictions",
+          "control_type": "identity",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "low",
+          "mitre_mitigation_id": "M1018"
+        }
+      ]
+    },
+    {
+      "id": "historian",
+      "name": "Process historian",
+      "type": "database",
+      "zone": "dmz",
+      "exposure": "internal",
+      "technologies": ["windows-server", "process-historian"],
+      "authentication": "service_account",
+      "data_classification": "regulated",
+      "description": "Batch records retained for regulatory audit.",
+      "controls": [
+        {
+          "name": "Read-only replication account",
+          "control_type": "data",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low",
+          "mitre_mitigation_id": "M1022"
+        }
+      ]
+    },
+    {
+      "id": "scada",
+      "name": "SCADA operator console",
+      "type": "admin_console",
+      "zone": "ot_super",
+      "exposure": "internal",
+      "technologies": ["windows", "hmi-software"],
+      "authentication": "shared_local_account",
+      "data_classification": "confidential",
+      "description": "One shared operator login per shift; the credential has not changed since commissioning.",
+      "controls": []
+    },
+    {
+      "id": "ot_switch",
+      "name": "Control network switch",
+      "type": "network_device",
+      "zone": "ot_ctrl",
+      "exposure": "internal",
+      "technologies": ["managed-switch"],
+      "authentication": "none",
+      "data_classification": "internal",
+      "controls": [
+        {
+          "name": "IT/OT network segmentation",
+          "control_type": "network",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low",
+          "mitre_mitigation_id": "M1030"
+        }
+      ]
+    },
+    {
+      "id": "plc",
+      "name": "Filler line PLC",
+      "type": "other",
+      "zone": "ot_ctrl",
+      "exposure": "internal",
+      "technologies": ["plc"],
+      "authentication": "none",
+      "data_classification": "regulated",
+      "description": "Controls fill volume and cap torque on the primary bottling line.",
+      "controls": [
+        {
+          "name": "Unidirectional gateway to control zone",
+          "control_type": "network",
+          "implementation_status": "planned",
+          "bypass_difficulty": "low",
+          "detection_capability": "none",
+          "mitre_mitigation_id": "M1030"
+        }
+      ]
+    }
+  ],
+  "flows": [
+    {"id": "f1", "from": "vpn", "to": "corp_ad", "protocol": "ldaps", "port": 636, "authenticated": true, "encrypted": true},
+    {"id": "f2", "from": "vpn", "to": "eng_ws", "protocol": "rdp", "port": 3389, "authenticated": true, "encrypted": true},
+    {"id": "f3", "from": "remote_vendor", "to": "jump_ot", "protocol": "https", "port": 443, "authenticated": true, "encrypted": true},
+    {"id": "f4", "from": "corp_ad", "to": "eng_ws", "protocol": "kerberos", "port": 88, "authenticated": true, "encrypted": true, "bidirectional": true},
+    {"id": "f5", "from": "eng_ws", "to": "jump_ot", "protocol": "rdp", "port": 3389, "authenticated": true, "encrypted": true},
+    {"id": "f6", "from": "eng_ws", "to": "scada", "protocol": "rdp", "port": 3389, "authenticated": true, "encrypted": false, "crosses_boundary": true, "description": "Second NIC straight into supervisory control; does not traverse the jump host."},
+    {"id": "f7", "from": "jump_ot", "to": "historian", "protocol": "https", "port": 443, "authenticated": true, "encrypted": true},
+    {"id": "f8", "from": "jump_ot", "to": "scada", "protocol": "rdp", "port": 3389, "authenticated": true, "encrypted": true},
+    {"id": "f9", "from": "mes", "to": "historian", "protocol": "mssql", "port": 1433, "authenticated": true, "encrypted": false, "bidirectional": true},
+    {"id": "f10", "from": "scada", "to": "ot_switch", "protocol": "ethernet-ip", "port": 44818, "authenticated": false, "encrypted": false},
+    {"id": "f11", "from": "ot_switch", "to": "plc", "protocol": "ethernet-ip", "port": 44818, "authenticated": false, "encrypted": false, "description": "Unauthenticated industrial protocol; any host on the control VLAN can issue commands."}
+  ],
+  "crown_jewels": ["plc", "historian"],
+  "controls": [
+    {
+      "name": "Plant-wide security monitoring",
+      "control_type": "monitoring",
+      "implementation_status": "partial",
+      "bypass_difficulty": "low",
+      "detection_capability": "low",
+      "mitre_mitigation_id": "M1047"
+    }
+  ]
+}

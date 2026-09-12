@@ -4,22 +4,25 @@
 
 ## What It Does
 
-Seven actions for comprehensive threat modeling:
+Nine actions for threat modeling:
 
-1. **analyze_document** — AI-powered analysis of threat model documents or tabletop exercise minutes
+1. **analyze_document** — Summarize what a threat model document or tabletop exercise minutes state: assets, threats named, controls documented, gaps recorded. It does not construct attack paths or assign ATT&CK techniques the document does not cite.
 2. **create_scenario** — Create a trackable threat scenario with actor, objectives, assets
 3. **add_control** — Add security controls with defense layer, bypass difficulty, implementation status
 4. **add_event** — Add attack sequence events with MITRE ATT&CK mapping and control references
 5. **list_scenarios** — List all tracked scenarios with summary stats
-6. **gap_analysis** — Identify unprotected steps, weak controls, and easy bypasses
+6. **gap_analysis** — Identify steps with no implemented control, weak controls, and easy bypasses
 7. **export** — Generate markdown report with full scenario details
+8. **export_scenario** — Save scenarios in full (controls and events included) so they can be reloaded
+9. **import_scenario** — Load an `adversary_path_projector` scenario seed, or a saved `export_scenario` result
 
 ## Artifacts
 
 | Direction | Type | Description |
 |-----------|------|-------------|
 | Consumed | `text`, `pdf` | Threat model documents |
-| Produced | `json_events`, `text` | Analysis results, markdown reports |
+| Consumed | `json_events` | Scenario seeds from `adversary_path_projector`; `export_scenario` results |
+| Produced | `json_events`, `text` | Analysis results, full scenario exports, markdown reports |
 
 ## Output Persistence
 
@@ -32,14 +35,20 @@ The file is registered as a `json_events` session artifact. Use `artifacts` to g
 - Scenario and gap analysis results can be loaded into `attack_path_visualizer` via the artifact ID
 - Use `export <artifact_id>` to push the JSON to `common/exports/threat_model_analyzer/` in cloud storage for external access or troubleshooting
 
+**Scenarios live in memory until exported.** The tracker does not survive a
+shell restart and is not reset by `new`. Run `export_scenario` to keep a
+half-built threat model; the auto-persisted artifact is exactly what
+`import_scenario` reads back.
+
 ## Defense Layers
 
 `perimeter`, `network`, `endpoint`, `application`, `data`, `identity`, `monitoring`
 
-## Example Workflow
+## Example Workflows
 
+Built by hand:
 ```
-1. analyze_document → AI extracts attack paths from document
+1. analyze_document → Summarize what the document states
 2. create_scenario → Track the scenario with ID
 3. add_control (x N) → Map existing security controls
 4. add_event (x N) → Map attack sequence with MITRE ATT&CK
@@ -47,7 +56,138 @@ The file is registered as a `json_events` session artifact. Use `artifacts` to g
 6. export → Generate markdown report
 ```
 
+From a threat actor projection:
+```
+1. adversary_path_projector project_paths → attack graph + scenario seed artifact
+2. import_scenario --artifact_id <seed>  → one scenario per projected path
+3. gap_analysis --scenario_id <id>       → steps with no implemented control
+4. export --scenario_id <id>             → markdown report
+```
+
+## Example Usage
+
+Arguments are passed as `--key value` flags.
+
+### Analyze a Document
+```
+run threat_model_analyzer --action analyze_document --source_type tabletop_exercise --document_content "Attackers phished a finance user, then pivoted to the ERP host..."
+```
+Quote the text — anything with spaces has to be quoted. For a document longer
+than a line or two, summarize it with `threat_report_analyzer` first and pass
+the summary text.
+
+### Create a Scenario
+```
+run threat_model_analyzer --action create_scenario --name "ERP ransomware" --description "Phish to encryption on the ERP estate" --threat_actor "financially motivated crimeware" --objective "encrypt ERP data" --target_assets erp_db,file_server --entry_vectors phishing,vpn
+```
+`--target_assets` and `--entry_vectors` take comma-separated lists. Repeating a
+list flag appends to it.
+
+### Add a Control
+```
+run threat_model_analyzer --action add_control --scenario_id <scenario_id> --name "EDR on ERP hosts" --control_type endpoint --implementation_status partial --bypass_difficulty high --detection_capability high --bypass_requirements "signed driver,kernel access"
+```
+
+### Add an Attack Event
+```
+run threat_model_analyzer --action add_event --scenario_id <scenario_id> --name "Spearphishing attachment" --sequence_order 1 --technique_name "Spearphishing Attachment" --technique_id T1566.001 --tactic "Initial Access" --required_access none --resulting_access user --blocking_controls "mail filtering" --detecting_controls "EDR on ERP hosts"
+```
+
+### List, Analyze Gaps, Export
+```
+run threat_model_analyzer --action list_scenarios
+run threat_model_analyzer --action gap_analysis --scenario_id <scenario_id>
+run threat_model_analyzer --action export --scenario_id <scenario_id> --output_path workspace/artifacts/erp_threat_model.md
+```
+
+### Save and Reload Scenarios
+```
+run threat_model_analyzer --action export_scenario --scenario_id <scenario_id>
+run threat_model_analyzer --action export_scenario
+run threat_model_analyzer --action import_scenario --artifact_id <artifact_id>
+```
+Omit `--scenario_id` to export every scenario in the tracker.
+
+### Import a Projection
+```
+run threat_model_analyzer --action import_scenario --artifact_id <seed_artifact_id>
+run threat_model_analyzer --action import_scenario --artifact_id <seed_artifact_id> --path_id s3-session-exfil
+run threat_model_analyzer --action import_scenario --artifact_id <seed_artifact_id> --max_paths 3
+```
+Use the **scenario seed** artifact (`adversary_scenario_seed_*.json`), not the
+attack graph. Each projected path becomes its own scenario, up to `--max_paths`
+(default 6, maximum 10) — every path is something an analyst has to review, so
+paths over the limit are listed by id and not imported. `--path_id` imports one.
+
+Imported scenarios are marked `source_type: actor_projection`. Each step keeps
+its ATT&CK tactic and its evidence — `documented` when ATT&CK attributes the
+technique to the actor, `via_software` when only the actor's tooling implements
+it.
+
+**Reading a projected report.** A projected scenario is not a confirmed attack
+and not a likelihood assessment, and the report says so everywhere a reader
+could miss it. Every projected output carries the same sentence — *Projected
+from threat intelligence, not a confirmed attack path.* The title reads
+*Projected Threat Scenario*, the sequence *Projected Attack Sequence*, and a
+notice under the description explains how the path was made: an LLM reasoning
+over the techniques ATT&CK documents the actor using, placed onto the
+organization's own flow map. An adversary would run the same kind of
+speculation with an LLM; the organization runs it with a better view of its own
+architecture and controls.
+
+| In the report | Where it comes from |
+|---|---|
+| Technique id and name, tactic | MITRE ATT&CK, checked against the actor's documented set |
+| Evidence | Derived — `documented` or `via_software` — never the model's own claim; explained in words on each step |
+| Controls, `CONTROL_PRESENT`, *Preventive Controls Present* | The organization's flow map |
+| The route from step to step | The model's projection, limited to flows the map declares |
+| *Path summary* and each step's *LLM rationale* | The model's projection, not verified — it can be wrong |
+| *Precondition*, *Exploits*, *Result*, *Against the controls* — all marked *(LLM)* | The model's account of the step — reasoning, not verified |
+| *Assumptions to test* | The model: what must be true that the flow map does not state. Collected again in the **Assumptions to Test** section — the scenario's test plan |
+| *Access (stated by the LLM, checked for continuity)* | The model's access before and after, from a fixed vocabulary, checked against what earlier steps provided |
+| *Typical access for this tactic* | Shown instead when the model gave no access state: a fixed table keyed on the step's tactic, not tracked |
+| *State check* | The tool: `ok`, `gap` (the step needs access no earlier step provided) or `unchecked`. Proves the chain is consistent, not that it is true |
+| *Via* | The flow map: the entry point, or the declared flow the step arrived over |
+| *ATT&CK support*, *ATT&CK procedure example* | ATT&CK: whether it holds a procedure example of this actor using the technique, and its text |
+
+Each step is one technique on one component. Projected steps also carry the
+state that connects them: what had to be true, what the attacker held before and
+after, and the assumptions it rests on. Compare the *ATT&CK procedure example*
+with the step itself — where ATT&CK documents the actor exploiting VPN
+appliances and the step places the technique on a web portal, the technique is
+sourced and the setting is the model's adaptation. That difference is often the
+first thing worth testing.
+
+`gap_analysis` reports `assumptions_to_test` and `state_gaps` separately from
+`total_issues`: an assumption is something to check, not a defect.
+
+`gap_analysis` on a projected scenario ends with the same notice, and its
+summary breaks `total_issues` into its parts — it adds steps, incomplete
+controls and easy-bypass controls together, and one control can count twice, so
+it is not a score.
+
+A document is checked in full before anything is created: an invalid control
+type, enum value or sequence order imports nothing and lists every problem.
+Control and event ids are reissued by the tracker, and event references to the
+old control ids follow.
+
+**What "blocking" means for a projected step.** A control counts as blocking
+when it is implemented, on a preventive layer, and on the component the step
+lands on — whether or not it addresses that particular technique. That answers
+triage's first question, *is there a control there at all*, which is why the
+markdown report labels such a step `CONTROL_PRESENT` rather than "protected",
+and lists the control under *Preventive Controls Present* rather than "blocking
+controls". The JSON field keeps its name, `blocking_controls`.
+How good the control is against the technique is a separate assessment.
+
+**JSON alternative.** Every tool also accepts a JSON payload. It is only
+needed for list or object arguments that a flag cannot express, or when a
+text value is long enough that quoting becomes unwieldy:
+```
+run threat_model_analyzer {"action": "create_scenario", "name": "ERP ransomware", "description": "Phish to encryption", "target_assets": ["erp_db", "file_server"]}
+```
+
 ## Chains
 
-- **From**: `log_investigator`
+- **From**: `log_investigator`, `adversary_path_projector`
 - **To**: `attack_path_visualizer`

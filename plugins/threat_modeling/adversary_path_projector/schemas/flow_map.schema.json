@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eventmill.dev/schemas/flow_map.schema.json",
+  "title": "Application Flow Map",
+  "description": "Canonical description of an application or estate: the components it is built from, the zones and trust boundaries they sit in, the data flows between them, and the assets worth protecting. Control fields reuse threat_model_analyzer's vocabulary so the two tools' artifacts interoperate.",
+  "type": "object",
+  "required": ["application", "components"],
+  "properties": {
+    "application": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the application or estate this map describes."
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional prose summary of what the application does."
+    },
+    "zones": {
+      "type": "array",
+      "description": "Network or trust zones. Components reference these by id.",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string" },
+          "trust_level": {
+            "type": "string",
+            "enum": ["untrusted", "semi_trusted", "trusted", "restricted"],
+            "default": "trusted",
+            "description": "How much the zone is trusted. 'restricted' is the most protected (e.g. a management or data enclave)."
+          },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The systems, services and stores the application is built from.",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": [
+              "web_app", "api", "service", "database", "datastore", "queue",
+              "cache", "identity_provider", "gateway", "load_balancer", "cdn",
+              "file_store", "workstation", "server", "container_platform",
+              "ci_cd", "secrets_manager", "external_service", "actor",
+              "admin_console", "network_device", "other"
+            ],
+            "default": "other"
+          },
+          "zone": {
+            "type": "string",
+            "description": "Id of the zone this component sits in."
+          },
+          "exposure": {
+            "type": "string",
+            "enum": ["internet", "partner", "internal", "management"],
+            "default": "internal",
+            "description": "Who can reach this component directly. Drives entry-surface ranking."
+          },
+          "technologies": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Products, frameworks or platforms in use. Informs technique applicability."
+          },
+          "authentication": {
+            "type": "string",
+            "description": "How access is authenticated. Use 'none' for unauthenticated components."
+          },
+          "data_classification": {
+            "type": "string",
+            "enum": ["public", "internal", "confidential", "pii", "regulated", "secret"],
+            "description": "Sensitivity of the data this component holds or handles."
+          },
+          "description": { "type": "string" },
+          "controls": {
+            "type": "array",
+            "description": "Security controls protecting this component.",
+            "items": { "$ref": "#/$defs/control" }
+          }
+        }
+      }
+    },
+    "flows": {
+      "type": "array",
+      "description": "Directed data flows between components. Reachability is computed over these.",
+      "items": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "id": { "type": "string" },
+          "from": { "type": "string", "description": "Source component id." },
+          "to": { "type": "string", "description": "Destination component id." },
+          "protocol": { "type": "string" },
+          "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+          "authenticated": { "type": "boolean", "default": false },
+          "encrypted": { "type": "boolean" },
+          "crosses_boundary": {
+            "type": "boolean",
+            "description": "True if the flow crosses a trust boundary. Derived from zone trust levels when omitted."
+          },
+          "bidirectional": {
+            "type": "boolean",
+            "default": false,
+            "description": "True if the flow is traversable in both directions."
+          },
+          "description": { "type": "string" },
+          "controls": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/control" }
+          }
+        }
+      }
+    },
+    "crown_jewels": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Component ids holding the assets an attacker would ultimately want."
+    },
+    "controls": {
+      "type": "array",
+      "description": "Estate-wide controls that are not tied to one component.",
+      "items": { "$ref": "#/$defs/control" }
+    }
+  },
+  "$defs": {
+    "control": {
+      "type": "object",
+      "required": ["name"],
+      "description": "A security control. Field names and enums match threat_model_analyzer's SecurityControl so scenario seeds import without translation.",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "control_type": {
+          "type": "string",
+          "enum": [
+            "perimeter", "network", "endpoint", "application",
+            "data", "identity", "monitoring"
+          ],
+          "description": "Defense layer, per threat_model_analyzer's DefenseLayerType."
+        },
+        "description": { "type": "string" },
+        "implementation_status": {
+          "type": "string",
+          "enum": ["implemented", "partial", "planned", "missing"],
+          "default": "implemented"
+        },
+        "bypass_difficulty": {
+          "type": "string",
+          "enum": ["trivial", "low", "medium", "high", "very_high"],
+          "default": "medium"
+        },
+        "bypass_requirements": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "detection_capability": {
+          "type": "string",
+          "enum": ["none", "low", "medium", "high"],
+          "default": "medium"
+        },
+        "mitre_mitigation_id": {
+          "type": "string",
+          "pattern": "^M[0-9]{4}$",
+          "description": "Optional ATT&CK mitigation id (M####) this control implements."
+        }
+      }
+    }
+  }
+}

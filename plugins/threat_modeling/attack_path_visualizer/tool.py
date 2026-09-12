@@ -18,44 +18,40 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from framework.reference_data.mitre_attack import LEGACY_TACTIC_ALIASES
+from framework.reference_data.mitre_attack import TACTIC_ORDER as _CANONICAL_TACTICS
+
 
 # ---------------------------------------------------------------------------
 # MITRE ATT&CK tactic → kill-chain stage mapping
 # ---------------------------------------------------------------------------
 
-TACTIC_ORDER = [
-    "reconnaissance",
-    "resource-development",
-    "initial-access",
-    "execution",
-    "persistence",
-    "privilege-escalation",
-    "defense-evasion",
-    "credential-access",
-    "discovery",
-    "lateral-movement",
-    "collection",
-    "command-and-control",
-    "exfiltration",
-    "impact",
-]
 
-TACTIC_DISPLAY = {
-    "reconnaissance": "Reconnaissance",
-    "resource-development": "Resource Development",
-    "initial-access": "Initial Access",
-    "execution": "Execution",
-    "persistence": "Persistence",
-    "privilege-escalation": "Privilege Escalation",
-    "defense-evasion": "Defense Evasion",
-    "credential-access": "Credential Access",
-    "discovery": "Discovery",
-    "lateral-movement": "Lateral Movement",
-    "collection": "Collection",
-    "command-and-control": "Command and Control",
-    "exfiltration": "Exfiltration",
-    "impact": "Impact",
+def _tactic_slug(name: str) -> str:
+    return name.lower().replace(" ", "-")
+
+
+# Kill-chain order as slugs, derived from the shared ATT&CK tactic sequence
+TACTIC_ORDER = [_tactic_slug(t) for t in _CANONICAL_TACTICS]
+
+TACTIC_DISPLAY = {_tactic_slug(t): t for t in _CANONICAL_TACTICS}
+
+# Retired tactics (e.g. "defense-evasion" from pre-v19 artifacts) keep their
+# original label but sort at the position of their first successor.
+_LEGACY_TACTIC_SLUGS = {
+    _tactic_slug(old): _tactic_slug(successors[0])
+    for old, successors in LEGACY_TACTIC_ALIASES.items()
 }
+TACTIC_DISPLAY.update({_tactic_slug(old): old for old in LEGACY_TACTIC_ALIASES})
+
+
+def _tactic_rank(slug: str) -> int:
+    """Kill-chain position of a tactic slug; unknown tactics sort last."""
+    canonical = _LEGACY_TACTIC_SLUGS.get(slug, slug)
+    if canonical in TACTIC_ORDER:
+        return TACTIC_ORDER.index(canonical)
+    return len(TACTIC_ORDER)
+
 
 _CONF_RANK = {"high": 2, "medium": 1, "low": 0}
 
@@ -74,15 +70,14 @@ def _build_stages_from_threat_intel(data: dict) -> list[dict]:
     # Group by normalised tactic label
     buckets: dict[str, list[dict]] = {}
     for mapping in mitre_mappings:
-        tactic = mapping.get("tactic", "unknown").lower().replace(" ", "-")
+        tactic = _tactic_slug(mapping.get("tactic", "unknown"))
         buckets.setdefault(tactic, []).append(mapping)
 
     stages: list[dict] = []
 
-    # Known tactics in kill-chain order
-    for tactic in TACTIC_ORDER:
-        if tactic not in buckets:
-            continue
+    # Kill-chain order; retired tactics sort with their successor and
+    # unknown tactics are appended at the end
+    for tactic in sorted(buckets, key=lambda t: (_tactic_rank(t), t)):
         techniques = sorted(
             buckets[tactic],
             key=lambda t: _CONF_RANK.get(t.get("confidence", "low"), 0),
@@ -102,24 +97,6 @@ def _build_stages_from_threat_intel(data: dict) -> list[dict]:
             stage["additional_techniques"] = extra_ids
         stages.append(stage)
 
-    # Unknown / ICS-only tactics appended at end
-    for tactic, techniques in buckets.items():
-        if tactic in TACTIC_ORDER:
-            continue
-        primary = sorted(
-            techniques,
-            key=lambda t: _CONF_RANK.get(t.get("confidence", "low"), 0),
-            reverse=True,
-        )[0]
-        stages.append({
-            "name": tactic.replace("-", " ").title(),
-            "mitre_technique_id": primary.get("technique_id", ""),
-            "technique_claimed": primary.get("technique_name", ""),
-            "stage_present": True,
-            "controls": [],
-            "gaps_detected": [],
-        })
-
     return stages
 
 
@@ -137,6 +114,7 @@ class DAGNode:
     controls: list[dict]
     gaps_detected: list[str]
     path_ids: list[str]       # which paths this node appears in
+    tactic_mismatch: bool = False  # ingester could not confirm the tactic
 
 
 @dataclass
@@ -189,6 +167,7 @@ def _build_dag_from_attack_graph(
             info_by_pair[(tid, tactic)] = {
                 "technique_name": m.get("technique_name", ""),
                 "tactic": tactic,
+                "tactic_mismatch": bool(m.get("tactic_mismatch")),
             }
             if tid not in info_by_tid:
                 info_by_tid[tid] = {
@@ -254,6 +233,7 @@ def _build_dag_from_attack_graph(
                     controls=[],
                     gaps_detected=[],
                     path_ids=[],
+                    tactic_mismatch=bool(info.get("tactic_mismatch")),
                 )
 
             # Resolve leads_to to composite keys within path context
@@ -635,6 +615,8 @@ def _render_mermaid_dag(
         if node.technique_name:
             label += f" - {node.technique_name[:30]}"
         label += "</small>"
+        if node.tactic_mismatch:
+            label += "<br/><small>tactic unconfirmed</small>"
         # Annotate entry-point nodes with their path name(s)
         if nk in entry_set and node.path_ids:
             path_tag = " | ".join(node.path_ids)
@@ -828,6 +810,8 @@ def _render_ascii_dag(dag: AttackDAG, attack_type: str) -> str:
                 tags.append("\u25a0 EXIT")
             if node.technique_id in convergence_set:
                 tags.append("\u25c6 CONVERGE")
+            if node.tactic_mismatch:
+                tags.append("? TACTIC")
             tag_str = " ".join(tags)
 
             # Box
@@ -865,7 +849,7 @@ def _render_ascii_dag(dag: AttackDAG, attack_type: str) -> str:
     lines.append("")
     lines.append("  " + "-" * (box_width + 2))
     lines.append("  Legend: \u25b7 Entry | \u25a0 Exit | \u25c6 Converge | \u25c7 Branch")
-    lines.append("          \u2713 control | \u2717 gap")
+    lines.append("          \u2713 control | \u2717 gap | ? TACTIC = tactic not confirmed by ATT&CK")
     lines.append("")
 
     return "\n".join(lines)
@@ -1001,7 +985,11 @@ class AttackPathVisualizer:
             if dag:
                 # Multi-path DAG rendering
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                art_dir = Path("workspace") / "artifacts"
+                # Same resolution as every other plugin: a hardcoded relative
+                # path ignored EVENTMILL_WORKSPACE and wrote wherever the
+                # process happened to start.
+                workspace = Path(os.environ.get("EVENTMILL_WORKSPACE", "./workspace"))
+                art_dir = workspace / "artifacts"
                 art_dir.mkdir(parents=True, exist_ok=True)
 
                 if fmt in ("ascii", "both"):
@@ -1074,6 +1062,18 @@ class AttackPathVisualizer:
                         "path_count": len(dag.paths),
                         "convergence_points": dag.convergence_points,
                         "branch_points": dag.branch_points,
+                        "paths": [
+                            {
+                                "path_id": p.get("path_id", "?"),
+                                "description": p.get("description", ""),
+                                "step_count": len(p.get("steps", [])),
+                            }
+                            for p in dag.paths
+                        ],
+                        "unconfirmed_tactics": [
+                            f"{n.technique_id} ({n.tactic})"
+                            for n in dag.nodes.values() if n.tactic_mismatch
+                        ],
                         "source": f"artifact:{artifact_id}",
                     },
                     output_artifacts=output_artifacts or None,
@@ -1103,6 +1103,8 @@ class AttackPathVisualizer:
                         "visualization": visualization,
                         "stages_rendered": len(present),
                         "missing_required": len(missing_req),
+                        "stage_names": [s.get("name", "?") for s in present],
+                        "missing_stage_names": [s.get("name", "?") for s in missing_req],
                         "source": f"artifact:{artifact_id}" if artifact_id else "payload",
                     },
                 )
@@ -1115,7 +1117,12 @@ class AttackPathVisualizer:
             )
 
     def summarize_for_llm(self, result: ToolResult) -> str:
-        """Compress output for LLM context."""
+        """Compress output for LLM context.
+
+        Describes what was rendered and where the full files are.  The
+        drawing itself is not embedded: the 2000-character cap would cut it
+        mid-diagram, and the shell prints the full rendering separately.
+        """
         if not result.ok:
             return f"attack_path_visualizer failed: {result.message}"
 
@@ -1126,35 +1133,52 @@ class AttackPathVisualizer:
         path_count = data.get("path_count")
         convergence = data.get("convergence_points", [])
 
+        parts: list[str] = []
         if path_count:
-            summary = (
+            parts.append(
                 f"Rendered {rendered} techniques across {path_count} attack path(s) "
                 f"({fmt} format)."
             )
             if convergence:
-                summary += f" Convergence at: {', '.join(convergence)}."
+                parts.append(f"Convergence at: {', '.join(convergence)}.")
         else:
-            summary = f"Rendered {rendered} attack stages ({fmt} format)."
+            parts.append(f"Rendered {rendered} attack stages ({fmt} format).")
 
         if missing:
-            summary += f" {missing} required stage(s) missing."
+            names = data.get("missing_stage_names") or []
+            parts.append(
+                f"{missing} required stage(s) missing"
+                + (f": {', '.join(names)}." if names else ".")
+            )
 
-        # List output files
         artifacts = result.output_artifacts or []
         if artifacts:
             file_list = ", ".join(
-                a.get("file_path", a.get("artifact_id", "?"))
-                for a in artifacts
+                a.get("file_path", a.get("artifact_id", "?")) for a in artifacts
             )
-            summary += f" Output files: {file_list}."
+            parts.append(f"Full rendering saved to: {file_list}.")
+        else:
+            parts.append("Full rendering is printed by the shell and auto-saved as a text artifact.")
 
-        # Include compact flow if available, truncate if too long
-        viz = data.get("visualization", "")
-        if len(viz) > 1500:
-            lines = viz.split("\n")
-            preview = "\n".join(lines[:20])
-            summary += f"\n{preview}\n... (truncated)"
-        elif viz:
-            summary += f"\n{viz}"
+        unconfirmed = data.get("unconfirmed_tactics") or []
+        if unconfirmed:
+            parts.append(
+                f"Tactic unconfirmed on {len(unconfirmed)} node(s): "
+                f"{', '.join(unconfirmed[:5])}"
+                + (" ..." if len(unconfirmed) > 5 else "") + "."
+            )
 
+        if path_count:
+            for p in data.get("paths", []):
+                desc = p.get("description", "")
+                line = f"- {p.get('path_id')} ({p.get('step_count', 0)} steps)"
+                if desc:
+                    line += f": {desc}"
+                parts.append(line)
+        else:
+            names = data.get("stage_names") or []
+            if names:
+                parts.append("Flow: " + " -> ".join(names))
+
+        summary = "\n".join(parts)
         return summary[:2000]

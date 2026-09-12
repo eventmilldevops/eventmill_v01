@@ -60,17 +60,30 @@ pillar bucket. The file paths reveal which workspace folders exist:
 
 ```
 eventmill (log_analysis) > files
-  Filename                                 Source     Path
-  ──────────────────────────────────────── ────────── ────────────────────────────────────────
-  auth.log                                 pillar     linuxdroplettest/auth.log
-  auth.log.1                               pillar     linuxdroplettest/auth.log.1
-  auth.log.2                               pillar     linuxdroplettest/auth.log.2
-  auth.log.3                               pillar     linuxdroplettest/auth.log.3
-  auth.log.4                               pillar     linuxdroplettest/auth.log.4
+    #  Path                                     Source       Size  Modified
+  ───  ──────────────────────────────────────── ─────── ─────────  ────────────
+    1  linuxdroplettest/auth.log                pillar     2.1 MB  3h ago
+    2  linuxdroplettest/auth.log.1              pillar   878.9 KB  1d ago
+    3  linuxdroplettest/auth.log.2              pillar     1.4 MB  8d ago
+    4  linuxdroplettest/auth.log.3              pillar     1.1 MB  15d ago
+    5  linuxdroplettest/auth.log.4              pillar   902.4 KB  22d ago
 ```
 
 The **Path** column shows that all files live under the
 `linuxdroplettest/` folder. This is the workspace you need.
+
+Listings are ordered newest first and capped at 50 rows. On a larger
+store, narrow the listing rather than scrolling it:
+
+```
+files --path linuxdroplettest    # one folder
+files --ext .log --newer 24h     # recent logs only
+files --match "*auth*"           # by name
+files --sort size --limit 10     # the ten largest
+```
+
+`--ext .log` matches any suffix, so it finds `auth.log.1` as well as
+`auth.log`. Durations take a count and a unit: `90m`, `24h`, `7d`, `2w`.
 
 ---
 
@@ -96,17 +109,28 @@ current pillar bucket and workspace:
 
 ```
 eventmill (log_analysis:linuxdroplettest) > files
-  Filename                                 Source     Path
-  ──────────────────────────────────────── ────────── ────────────────────────────────────────
-  auth.log                                 pillar     linuxdroplettest/auth.log
-  auth.log.1                               pillar     linuxdroplettest/auth.log.1
-  auth.log.2                               pillar     linuxdroplettest/auth.log.2
-  auth.log.3                               pillar     linuxdroplettest/auth.log.3
-  auth.log.4                               pillar     linuxdroplettest/auth.log.4
+    #  Path                                     Source       Size  Modified
+  ───  ──────────────────────────────────────── ─────── ─────────  ────────────
+    1  linuxdroplettest/auth.log                pillar     2.1 MB  3h ago
+    2  linuxdroplettest/auth.log.1              pillar   878.9 KB  1d ago
+    3  linuxdroplettest/auth.log.2              pillar     1.4 MB  8d ago
+    4  linuxdroplettest/auth.log.3              pillar     1.1 MB  15d ago
+    5  linuxdroplettest/auth.log.4              pillar   902.4 KB  22d ago
 ```
 
 Files are resolved from the pillar bucket first, then the common bucket.
 The **Source** column tells you where each file lives.
+
+The **#** column is a handle on the row. Use `#N` anywhere a file is
+expected and you never have to retype a path:
+
+```
+load #1                                    # instead of load auth.log
+run log_navigator --action read --path #1  # once #1 is loaded
+```
+
+A `#N` refers to the listing you last saw, so it is refused rather than
+guessed at if you change pillar or workspace in between.
 
 ---
 
@@ -309,9 +333,14 @@ eventmill (log_analysis:linuxdroplettest) > ask: based on the patterns found, wh
 View or clear conversation history:
 
 ```
-eventmill (log_analysis:linuxdroplettest) > history
-eventmill (log_analysis:linuxdroplettest) > history clear
+eventmill (log_analysis:linuxdroplettest) > llm_history
+eventmill (log_analysis:linuxdroplettest) > llm_history --full
+eventmill (log_analysis:linuxdroplettest) > llm_history clear
 ```
+
+Turns are held in memory for the current shell session only — they are
+cleared when you start or load a session. The durable record is the
+structured log.
 
 ---
 
@@ -320,11 +349,35 @@ eventmill (log_analysis:linuxdroplettest) > history clear
 After running several tools, review what has been done:
 
 ```
+eventmill (log_analysis:linuxdroplettest) > tool_history
+  ID             Tool                     Status       Duration   Time
+  ────────────── ──────────────────────── ──────────── ────────── ────────────────────
+  exec_a1b2c3d4  log_pattern_analyzer     completed    4.2s       2026-03-29 22:57:01
+  exec_e5f6a7b8  log_searcher             completed    1.1s       2026-03-29 22:58:15
+```
+
+Narrow it, or open one execution in full — `--detail` and a bare execution
+id both print the stored summary and the artifacts the run consumed and
+produced:
+
+```
+eventmill (log_analysis:linuxdroplettest) > tool_history --tool log_searcher
+eventmill (log_analysis:linuxdroplettest) > tool_history --status failed
+eventmill (log_analysis:linuxdroplettest) > tool_history exec_a1b2c3d4
+```
+
+`history` merges tool executions and LLM turns into one timeline, oldest
+first, so you can see what was asked between which runs:
+
+```
 eventmill (log_analysis:linuxdroplettest) > history
-  ID             Tool                     Status       Time
-  ────────────── ──────────────────────── ──────────── ────────────────────
-  exec_a1b2c3d4  log_pattern_analyzer     completed    2026-03-29 22:57:01
-  exec_e5f6a7b8  log_searcher             completed    2026-03-29 22:58:15
+  Time                 Kind   Event
+  ──────────────────── ────── ──────────────────────────────────────────────
+  2026-03-29 22:57:01  tool   [exec_a1b2c3d4] log_pattern_analyzer - completed (4.2s)
+  2026-03-29 22:58:15  tool   [exec_e5f6a7b8] log_searcher - completed (1.1s)
+  2026-03-29 23:01:44  llm    [1] what were the usernames targeted in this log file?
+
+  2 tool, 1 llm. Detail: 'tool_history', 'llm_history'.
 ```
 
 ---
@@ -358,13 +411,15 @@ pillar.
 | `new [description]` | Create a new investigation session |
 | `pillar log_analysis` | Set the active pillar |
 | `workspace <folder>` | Scope file resolution to a subfolder |
-| `files` | List available files in pillar + common buckets |
-| `load <filename>` | Download and register a file as an artifact |
+| `files [filters]` | List available files; `--path`, `--ext`, `--newer`, `--match`, `--sort`, `--limit` |
+| `load <filename\|#N>` | Download and register a file as an artifact |
 | `artifacts` | List loaded artifacts |
-| `tools` | List available tools |
+| `tools [pillar] [--all]` | Tools for the active pillar; `--all` shows every tool |
 | `run <tool> <json>` | Execute a tool with a JSON payload |
 | `status` | Show current session state |
-| `history` | Show tool execution history |
+| `history` | Merged timeline of tool executions and LLM turns |
+| `tool_history [filters]` | Tool execution history; `--tool`, `--status`, `--limit`, `--detail` |
+| `llm_history [--last <n>] [--full]` | LLM conversation turns; `clear` empties them |
 | `buckets` | Show bucket configuration |
 | `connect [model]` | Connect to an LLM for AI-powered analysis |
 
@@ -374,7 +429,7 @@ pillar.
 
 ```
 new → pillar log_analysis → files (discover workspaces)
-  → workspace <incident_id> → files (scoped listing) → load auth.log
+  → workspace <incident_id> → files --ext .log (scoped listing) → load #1
   → run log_pattern_analyzer (discover)
   → run log_searcher (Failed password / Invalid user / Accepted publickey)
   → run log_pattern_analyzer (regex: extract source IPs)

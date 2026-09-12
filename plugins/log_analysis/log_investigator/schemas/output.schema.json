@@ -4,38 +4,89 @@
   "properties": {
     "mode": {
       "type": "string",
-      "enum": ["investigate", "workflow"]
+      "enum": [
+        "investigate",
+        "workflow"
+      ]
     },
-    "search_term": { "type": "string" },
-    "lines_scanned": { "type": "integer" },
-    "total_matches": { "type": "integer" },
+    "search_term": {
+      "type": "string"
+    },
+    "lines_scanned": {
+      "type": "integer"
+    },
+    "total_matches": {
+      "type": "integer"
+    },
     "sample_matches": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "ai_analysis": {
       "type": "string",
       "description": "LLM-powered threat intelligence analysis."
     },
-    "workflow_type": { "type": "string" },
+    "workflow_type": {
+      "type": "string"
+    },
     "workflow_results": {
       "type": "array",
       "description": "Workflow section results.",
       "items": {
         "type": "object",
         "properties": {
-          "section": { "type": "string" },
+          "section": {
+            "type": "string"
+          },
           "entries": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "value": { "type": "string" },
-                "count": { "type": "integer" },
-                "line": { "type": "string" }
+                "value": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "line": {
+                  "type": "string"
+                }
               }
             }
           }
+        }
+      }
+    },
+    "sampling": {
+      "type": "object",
+      "description": "How the LLM prompt sample was selected from the matches.",
+      "properties": {
+        "total_matches": {
+          "type": "integer",
+          "description": "Total matches in the whole file."
+        },
+        "sampled": {
+          "type": "integer",
+          "description": "Matches included in the LLM prompt."
+        },
+        "strategy": {
+          "type": "string",
+          "description": "How the sample was chosen."
+        },
+        "truncated_by": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "char_budget",
+            "line_count",
+            null
+          ],
+          "description": "Which limit bound the sample, or null if none did."
         }
       }
     }

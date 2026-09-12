@@ -463,3 +463,99 @@ class TestMultiRoleDAG:
         key2 = _tool_mod._node_key("T1078", "Persistence")
         assert key2 == "T1078|persistence"
         assert key != key2
+
+
+class TestTacticOrdering:
+    """Verify kill-chain ordering follows the ATT&CK v19 tactic vocabulary."""
+
+    def test_order_table_uses_v19_vocabulary(self):
+        assert "defense-evasion" not in _tool_mod.TACTIC_ORDER
+        assert "stealth" in _tool_mod.TACTIC_ORDER
+        assert "defense-impairment" in _tool_mod.TACTIC_ORDER
+        assert _tool_mod.TACTIC_DISPLAY["stealth"] == "Stealth"
+        assert _tool_mod.TACTIC_DISPLAY["defense-impairment"] == "Defense Impairment"
+
+    def test_linear_stages_follow_kill_chain(self):
+        data = {
+            "mitre_mappings": [
+                {"technique_id": "T1486", "technique_name": "Data Encrypted for Impact",
+                 "tactic": "Impact", "confidence": "explicit"},
+                {"technique_id": "T1553", "technique_name": "Subvert Trust Controls",
+                 "tactic": "Defense Impairment", "confidence": "inferred"},
+                {"technique_id": "T1027", "technique_name": "Obfuscated Files or Information",
+                 "tactic": "Stealth", "confidence": "inferred"},
+                {"technique_id": "T1566", "technique_name": "Phishing",
+                 "tactic": "Initial Access", "confidence": "explicit"},
+            ]
+        }
+        names = [s["name"] for s in _tool_mod._build_stages_from_threat_intel(data)]
+        assert names == ["Initial Access", "Stealth", "Defense Impairment", "Impact"]
+
+    def test_legacy_defense_evasion_sorts_with_stealth(self):
+        """Pre-v19 artifacts keep their label but no longer sort after Impact."""
+        data = {
+            "mitre_mappings": [
+                {"technique_id": "T1486", "technique_name": "Data Encrypted for Impact",
+                 "tactic": "Impact", "confidence": "explicit"},
+                {"technique_id": "T1027", "technique_name": "Obfuscated Files or Information",
+                 "tactic": "Defense Evasion", "confidence": "inferred"},
+                {"technique_id": "T1003", "technique_name": "OS Credential Dumping",
+                 "tactic": "Credential Access", "confidence": "inferred"},
+            ]
+        }
+        names = [s["name"] for s in _tool_mod._build_stages_from_threat_intel(data)]
+        assert names == ["Defense Evasion", "Credential Access", "Impact"]
+
+    def test_unknown_tactic_sorts_last(self):
+        data = {
+            "mitre_mappings": [
+                {"technique_id": "T9999", "technique_name": "Made Up",
+                 "tactic": "Cyber Magic", "confidence": "inferred"},
+                {"technique_id": "T1486", "technique_name": "Data Encrypted for Impact",
+                 "tactic": "Impact", "confidence": "explicit"},
+            ]
+        }
+        names = [s["name"] for s in _tool_mod._build_stages_from_threat_intel(data)]
+        assert names == ["Impact", "Cyber Magic"]
+
+
+
+class TestTacticMismatchRendering:
+    """Unconfirmed tactics from the ingester are visible in both DAG renderers."""
+
+    @pytest.fixture
+    def mismatch_graph(self):
+        mappings = [
+            {"technique_id": "T1566", "technique_name": "Phishing",
+             "tactic": "Initial Access"},
+            {"technique_id": "T1078", "technique_name": "Valid Accounts",
+             "tactic": "Lateral Movement", "tactic_mismatch": True,
+             "allowed_tactics": ["Stealth", "Persistence"]},
+        ]
+        graph = {
+            "paths": [{
+                "path_id": "p1", "description": "test",
+                "steps": [
+                    {"technique_id": "T1566", "tactic": "Initial Access",
+                     "leads_to": ["T1078"]},
+                    {"technique_id": "T1078", "tactic": "Lateral Movement",
+                     "leads_to": []},
+                ],
+            }],
+            "convergence_points": [], "branch_points": [],
+        }
+        return graph, mappings
+
+    def test_mermaid_marks_unconfirmed(self, mismatch_graph):
+        graph, mappings = mismatch_graph
+        dag = _tool_mod._build_dag_from_attack_graph(graph, mappings)
+        raw, _md = _tool_mod._render_mermaid_dag(dag, "t")
+        assert raw.count("tactic unconfirmed") == 1
+        assert "T1078" in raw
+
+    def test_ascii_marks_unconfirmed(self, mismatch_graph):
+        graph, mappings = mismatch_graph
+        dag = _tool_mod._build_dag_from_attack_graph(graph, mappings)
+        out = _tool_mod._render_ascii_dag(dag, "t")
+        assert out.count("? TACTIC") >= 1
+        assert "tactic not confirmed" in out
