@@ -66,7 +66,7 @@ Every LLM call is routed to one of two tiers, declared per plugin as
 
 | Tier | Model | Used for |
 |------|-------|----------|
-| `light` | `gemini-3.5-flash` | Bulk work — pattern summarization, IOC extraction, chunked reads |
+| `light` | `gemini-3.8-flash` | Bulk work — pattern summarization, IOC extraction, chunked reads |
 | `heavy` | `gemini-3.1-pro-preview` | Deep reasoning — threat modeling, risk assessment, synthesis |
 
 Both models accept 1,048,576 input and 65,536 output tokens, so the tier is a

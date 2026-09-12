@@ -10,7 +10,9 @@ services:
       - ./.env:/app/.env:ro
     environment:
       - EVENTMILL_MCP_TRANSPORT=${EVENTMILL_MCP_TRANSPORT:-stdio}
-      - EVENTMILL_MODEL_ID=${EVENTMILL_MODEL_ID:-gemini-2.5-flash}
+      # Nothing reads EVENTMILL_MODEL_ID. Model ids come from
+      # framework/llm/providers/gcp_gemini.json, overridden per tier by
+      # EVENTMILL_MODEL_LIGHT / EVENTMILL_MODEL_HEAVY.
       - EVENTMILL_LOG_LEVEL=${EVENTMILL_LOG_LEVEL:-INFO}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -30,7 +32,9 @@ services:
       - ./.env:/app/.env:ro
     environment:
       - EVENTMILL_MCP_TRANSPORT=${EVENTMILL_MCP_TRANSPORT:-stdio}
-      - EVENTMILL_MODEL_ID=${EVENTMILL_MODEL_ID:-gemini-2.5-flash}
+      # Nothing reads EVENTMILL_MODEL_ID. Model ids come from
+      # framework/llm/providers/gcp_gemini.json, overridden per tier by
+      # EVENTMILL_MODEL_LIGHT / EVENTMILL_MODEL_HEAVY.
       - EVENTMILL_LOG_LEVEL=DEBUG
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}

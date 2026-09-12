@@ -3,8 +3,8 @@
   "display_name": "Google Gemini (GCP)",
   "tiers": {
     "light": {
-      "model_id": "gemini-3.5-flash",
-      "display_name": "Gemini 3.5 Flash",
+      "model_id": "gemini-3.8-flash",
+      "display_name": "Gemini 3.8 Flash",
       "fallback_model_id": "",
       "api_key_env": "GEMINI_FLASH_API_KEY",
       "max_output_tokens": 65536,
@@ -17,7 +17,7 @@
         "structured_output",
         "function_calling"
       ],
-      "_fallback_note": "GA endpoint; no fallback needed. EVENTMILL_MODEL_LIGHT overrides model_id without a code change."
+      "_fallback_note": "GA endpoint; no fallback needed. Verified live 2026-09-12 against models.get: id exists, display_name 'Gemini 3.8 Flash', 1048576 in / 65536 out, thinking_level honoured, native PDF read. EVENTMILL_MODEL_LIGHT overrides model_id, EVENTMILL_MAX_OUTPUT_LIGHT the cap, without a code change."
     },
     "heavy": {
       "model_id": "gemini-3.1-pro-preview",

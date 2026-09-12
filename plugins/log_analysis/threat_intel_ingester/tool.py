@@ -19,6 +19,7 @@ import shutil
 import tempfile
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -284,11 +285,28 @@ from framework.documents.profile import (  # noqa: E402
     OUTPUT_TOKENS_PER_CANDIDATE as _OUTPUT_TOKENS_PER_IOC,
 )
 
-# Tier and thinking depth for the native PDF calls. Refining regex hits into
-# JSON records is pattern work, not reasoning, and thinking tokens are spent
-# from the same budget as the reply — "low" keeps that budget for content.
-_NATIVE_TIER: str = "heavy"
-_NATIVE_THINKING_LEVEL: str = "low"
+# Thinking depth for the native PDF calls. Raised from "low" on 2026-09-12:
+# reading a report is not pure pattern work, and the light tier's model reads
+# PDFs better than the heavy tier's. Thinking tokens come out of the same
+# budget as the reply, so _native_content_budget() holds more back and batches
+# are smaller — that is the trade being made, not an oversight.
+_NATIVE_THINKING_LEVEL: str = "medium"
+
+
+@lru_cache(maxsize=1)
+def _native_tier() -> str:
+    """Tier the native PDF calls run on, read from this plugin's manifest.
+
+    The calls pin no tier in QueryHints, so TierScopedLLMClient applies the
+    manifest's model_tier and the manifest stays the one place the model is
+    chosen. This reads the same value only to size the output budget against
+    the cap of the model that will actually run.
+    """
+    try:
+        with open(Path(__file__).parent / "manifest.json", encoding="utf-8") as f:
+            return json.load(f).get("model_tier") or "light"
+    except (OSError, json.JSONDecodeError, KeyError):
+        return "light"
 
 # Request deadline the LLM client enforces (framework/llm/client.py sets
 # http_options timeout = 120 s, which the SDK also sends as a server deadline).
@@ -301,7 +319,7 @@ _NATIVE_MAX_EXTRA_CALLS: int = 8
 
 def _native_max_output_tokens() -> int:
     """What one native call may emit — the tier's real cap, not a guess."""
-    return max_output_tokens_for_tier(_NATIVE_TIER)
+    return max_output_tokens_for_tier(_native_tier())
 
 
 def _native_content_budget() -> int:
@@ -1520,7 +1538,7 @@ class ThreatIntelIngester:
                             "(%d chars), max_tokens=%d, tier=%s, thinking=%s, "
                             "pages=%d-%d, est. ~%d output tokens / ~%.0fs",
                             batch.label, batch_no, len(batch_iocs),
-                            len(native_prompt), native_cap, _NATIVE_TIER,
+                            len(native_prompt), native_cap, _native_tier(),
                             _NATIVE_THINKING_LEVEL, batch.start, batch.end,
                             batch.estimated_output_tokens, batch.estimated_seconds,
                         )
@@ -1535,7 +1553,9 @@ class ThreatIntelIngester:
                                 max_tokens=native_cap,
                                 grounding_data=grounding,
                                 hints=QueryHints(
-                                    tier=_NATIVE_TIER,
+                                    # No tier: the manifest's model_tier
+                                    # governs, applied by
+                                    # TierScopedLLMClient.
                                     prefers_native_file=True,
                                     needs_structured_output=True,
                                     # Refining regex hits into records is

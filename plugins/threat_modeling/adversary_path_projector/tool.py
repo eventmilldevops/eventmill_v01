@@ -78,7 +78,9 @@ THINKING_LEVEL_ENV_OVERRIDE = "EVENTMILL_PROJECTION_THINKING"
 # another, so the schema version is what tells a later reader whether two
 # records are the same shape.
 # 2: sampled steps carry the model's step state (Phase 3c).
-RUN_RECORD_SCHEMA_VERSION = 2
+# 3: model.model_served — the id the provider reports, so a comparison across
+#    models rests on what ran rather than on what was asked for.
+RUN_RECORD_SCHEMA_VERSION = 3
 
 # Output cap for the projection call: 48K (48 x 1024). Step state roughly
 # triples the size of a step, and the assessment sets out to show what deep
@@ -3503,6 +3505,7 @@ class AdversaryPathProjector:
             "model": {
                 "provider": "gcp_gemini",
                 "model_configured": getattr(response, "model_used", None),
+                "model_served": getattr(response, "model_version", None),
                 "tier": "heavy",
                 "thinking_level": run_context["thinking_level"],
                 "max_tokens": PROJECTION_MAX_TOKENS,

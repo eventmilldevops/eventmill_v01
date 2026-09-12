@@ -960,6 +960,7 @@ class _Resp:
     fallback_reason: str | None = None
     finish_reason: str | None = "STOP"
     truncated: bool = False
+    model_version: str | None = "mock-heavy-001"
 
 
 class _ScriptedLLM:
@@ -1683,12 +1684,29 @@ class TestStepState:
         schema = json.loads(
             (PLUGIN_DIR / "schemas" / "projection_run.schema.json").read_text())
         jsonschema.validate(record, schema)
-        assert record["run"]["schema_version"] == 2
+        assert record["run"]["schema_version"] == 3
         assert record["model"]["max_tokens"] == _tool_mod.PROJECTION_MAX_TOKENS
         step = record["sampled"]["paths"][0]["steps"][0]
         assert step["access_after"] == "code_execution"
         assert step["assumptions"] == ["The exploited route is not filtered by the WAF"]
         assert step["state_check"] == "ok"
+
+    def test_run_record_separates_the_model_asked_for_from_the_one_served(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """Comparing two models over one flow map rests on what ran. An alias
+        resolving to a different build is invisible without model_served."""
+        llm = _ScriptedLLM(_stateful_projection())
+        context = FakeContext()
+        context.llm_query = llm
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        assert result.ok, result.message
+        record = _records_in(os.environ["EVENTMILL_WORKSPACE"])[0]
+        assert record["model"]["model_configured"] == "mock-heavy"
+        assert record["model"]["model_served"] == "mock-heavy-001"
 
 
 class TestProjectionSummary:

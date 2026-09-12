@@ -84,7 +84,11 @@
         "provider": { "type": "string" },
         "model_configured": {
           "type": ["string", "null"],
-          "description": "The id the client was constructed with from gcp_gemini.json — NOT the id the API response reports. framework/llm/client.py sets model_used from its own configuration and never reads the response's model_version, and LLMResponse has no field to carry it. So a silent provider-side version bump is invisible in this corpus. Closing that needs a new LLMResponse field plus capture in client.py, which touches every LLM plugin and is its own task. Read this field as 'what we asked for', never as 'what ran'."
+          "description": "The id the client was constructed with from gcp_gemini.json, including an EVENTMILL_MODEL_* override or a retired-model substitution. Read it as 'what we asked for'; 'what ran' is model_served."
+        },
+        "model_served": {
+          "type": ["string", "null"],
+          "description": "The id the API reports having served the request (response.model_version, captured by framework/llm/client.py since schema_version 3). An alias resolves to a dated build, so this is the only field that shows a provider-side version change inside one model name — the confound that would otherwise be invisible when comparing two models over the same flow map. Null on records written before schema_version 3, and whenever the provider reports nothing."
         },
         "tier": { "type": "string" },
         "thinking_level": {

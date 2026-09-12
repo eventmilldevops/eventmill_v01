@@ -111,8 +111,11 @@ def load_tier_specs(
         override_env = TIER_MODEL_ENV_OVERRIDE.get(tier)
         overridden = False
         if override_env and os.environ.get(override_env):
+            # An override naming the manifest's own model is a redundant pin,
+            # not a substitution — warning about its output cap would be noise
+            # on every start.
+            overridden = os.environ[override_env] != model_id
             model_id = os.environ[override_env]
-            overridden = True
         if not model_id:
             logger.warning("Provider %s tier %s has no model_id", provider_id, tier)
             continue

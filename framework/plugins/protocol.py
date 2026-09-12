@@ -74,13 +74,18 @@ class LLMResponse:
     text: str | None = None
     error: str | None = None
     token_usage: dict[str, int] | None = None
-    model_used: str | None = None          # which model actually ran
+    model_used: str | None = None          # model id the client was configured with
     transport_path: str | None = None      # "gs_uri", "inline_bytes", "text_fallback"
     fallback_reason: str | None = None     # why preferred path wasn't used
     finish_reason: str | None = None       # provider stop reason, e.g. "STOP"
     # The reply stopped at the output-token cap, so text is a partial answer:
     # ok is still True and the content is usable, but it is not complete.
     truncated: bool = False
+    # Model id the provider reports having served the request, where model_used
+    # is only what was asked for. An alias resolves to a dated build, so these
+    # differ and a provider-side version change is invisible without this.
+    # None when the provider reports nothing.
+    model_version: str | None = None
 
 
 # ---------------------------------------------------------------------------

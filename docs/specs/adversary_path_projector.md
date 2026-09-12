@@ -365,7 +365,7 @@ against Gemini 3.1 Pro; see
 gained `tactic`, `evidence` and the controls it used to drop. See
 `docs/change_log/2026-09-11-adversary-path-projector-phase-3.md`.
 
-**Phase 3c — step state. DONE (2026-09-11); not yet run live.** Each step records
+**Phase 3c — step state. DONE and verified live (2026-09-11/12).** Each step records
 the attack state connecting it to the next — precondition, access before and
 after from a fixed vocabulary, what it exploits, what it yields, and the
 assumptions a threat modeller could test — with a deterministic continuity check

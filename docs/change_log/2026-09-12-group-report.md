@@ -90,11 +90,16 @@ payload key it forwarded; renamed.
 `validate_manifests.py` still reports exactly the 15 pre-existing `stability`
 errors. `ruff`/`black` are not installed here; style matched by hand.
 
-## Not verified
+## Verified live
 
-**No live run.** The report has been rendered from scripted corpora only. The
-first real test is the `phase3b-claims` group on the container, with
-`--file_path` pointing at the claims portal map so the control context appears.
+**2026-09-12, `phase3b-claims`, six runs, all completed.** Volt Typhoon against
+the claims portal on the container, summarised with the flow map supplied. The
+report rendered without issue and the operator's verdict was that it reads
+fine — which is the bar it was written to, since the JSON it replaces did not
+clear it.
+
+That group is also the first to exercise the batching fixes end to end: six
+runs assembled from two invocations, counted as six.
 
 ## Not in this change
 
