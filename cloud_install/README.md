@@ -176,7 +176,7 @@ The deployed service binds two model tiers, configured declaratively in
 
 | Tier | Model | Used for |
 |------|-------|----------|
-| light | `gemini-3.5-flash` | Bulk work — log pattern summarization, per-chunk IOC extraction, report chunking |
+| light | `gemini-3.8-flash` | Bulk work — log pattern summarization, per-chunk IOC extraction, report chunking |
 | heavy | `gemini-3.1-pro-preview` | Deep reasoning — threat modeling, risk assessment, cross-document synthesis, `ask:` |
 
 Both accept 1,048,576 input and 65,536 output tokens, so the tier is a choice
@@ -192,6 +192,12 @@ other and says so in the log.
 > dispatcher automatically retries against the tier's declared fallback and logs
 > the substitution. To pin a different model without a code change, set
 > `EVENTMILL_MODEL_HEAVY`.
+
+> The light tier also declares a fallback, for a different reason: 3.8 Flash's
+> id and token caps have not yet been confirmed against the live API, so a
+> wrong id lands on `gemini-3.5-flash` instead of failing the call. If you
+> repoint it with `EVENTMILL_MODEL_LIGHT`, set `EVENTMILL_MAX_OUTPUT_LIGHT`
+> too — the output cap otherwise still comes from the manifest.
 
 ## Storage Architecture
 
@@ -387,6 +393,7 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | `GOOGLE_CLOUD_PROJECT` | **Yes** | GCP project ID |
 | `EVENTMILL_MODEL_LIGHT` | No | Override the light-tier model id (default from `framework/llm/providers/gcp_gemini.json`) |
 | `EVENTMILL_MODEL_HEAVY` | No | Override the heavy-tier model id — useful if the pinned Preview model is retired |
+| `EVENTMILL_MAX_OUTPUT_LIGHT` / `EVENTMILL_MAX_OUTPUT_HEAVY` | No | Output-token cap for a tier whose model was overridden above. Set it with the model override: the cap otherwise still comes from the manifest, and clamping against the wrong one fails at the provider |
 | `EVENTMILL_BUCKET_PREFIX` | No | Bucket naming prefix — must match `provision-gcp-project.sh` (default: `${GOOGLE_CLOUD_PROJECT}-eventmill`) |
 | `CLOUD_RUN_REGION` | **Yes** | Deploy region. No default — must match the region you provisioned in, because the Artifact Registry image path embeds it. Every script refuses to guess. |
 | `GCS_LOG_BUCKET` | No | Legacy single-bucket override — leave empty for new deployments |

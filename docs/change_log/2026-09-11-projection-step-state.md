@@ -173,15 +173,29 @@ report line, the collected section, `gap_analysis` counts kept out of
 `total_issues`, the export/import round trip, a malformed `assumptions` refused,
 and none of it on analyst-built scenarios.
 
-## Not verified
+## Verified since
 
-**No live run.** Everything above ran against scripted replies. Still to do
-before the defaults are settled: the claims portal and telemetry SaaS maps at
-`medium`, three runs each, before and after, comparing wall time, completion and
-thinking tokens, and `finish_reason` through the run records — the ~110s
-gateway deadline is the ceiling to watch. Whether the model actually adds
-bridging steps when told to, and how often it produces gaps, is unknown until
-then.
+Everything above ran against scripted replies **at the time this was written**.
+It was run live the same day and again on 2026-09-12; the measurement and what
+it changed are in `docs/change_log/2026-09-11-live-run-findings.md`.
+
+What the runs answered:
+
+- **The model does supply the state fields** — 20 steps across the first three
+  runs, none missing, none off-vocabulary, and the bridging step the design
+  asked for was present every time.
+- **Gaps were frequent and informative.** Every run produced one, and they
+  pointed at one architectural question rather than at the model: a path
+  reaching a data store only by way of a component it never controls.
+- **Cost at `medium`:** ~1,500 completion and ~4,800 thinking tokens per run,
+  38–75 s. Thinking drives latency; output does not. The 48K cap is nowhere
+  near binding.
+- **The ~110 s figure named above was wrong.** It was our own client timeout
+  being sent as the server deadline, since raised to 180 s. No run has
+  approached it.
+
+The telemetry SaaS comparison at `medium` was not run, so the before/after
+figures come from the claims portal map only.
 
 ## Follow-up: 180 s request timeout and a 48K output cap
 

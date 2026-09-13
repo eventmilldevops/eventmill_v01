@@ -78,7 +78,7 @@ hardcode any of them elsewhere.
 
 | Tier | Model | Input | Output |
 |---|---|---|---|
-| light | `gemini-3.5-flash` | 1,048,576 | 65,536 |
+| light | `gemini-3.8-flash` | 1,048,576 | 65,536 |
 | heavy | `gemini-3.1-pro-preview` | 1,048,576 | 65,536 |
 
 **The tiers are capacity-identical.** Tier selects reasoning depth and cost, and
@@ -106,7 +106,13 @@ Non-obvious things that have already caused bugs here:
   front rather than failing mid-call.
 - **Default thinking effort moved to `medium` in 3.x.** Bulk extraction should
   pass `thinking_level="low"` or it pays reasoning cost per chunk for
-  pattern-matching work.
+  pattern-matching work. **One deliberate exception**:
+  `threat_intel_ingester`'s native PDF calls run at `medium` (2026-09-12) on the
+  judgement that reading a report is not pure pattern work. That costs usable
+  output per call — `_native_content_budget()` reserves 16,384 instead of 4,096,
+  so 49,152 rather than 61,440 — and therefore batches dense documents more
+  finely. Measured on a 94-IOC synthetic report it bought no extra IOCs and
+  ~40% latency; the case for it is real prose, not dense indicator lists.
 - **Thinking tokens are spent from `max_output_tokens`.** The cap is not a
   content budget: reasoning is drawn from it first and the answer is cut off
   with `finish_reason="MAX_TOKENS"`, `ok=True` and no error — a caller that
@@ -120,6 +126,26 @@ Non-obvious things that have already caused bugs here:
 - **The heavy tier is a Preview endpoint** and can be retired with ~2 weeks'
   notice. On `NOT_FOUND` the dispatcher retries against the tier's
   `fallback_model_id`. `EVENTMILL_MODEL_HEAVY` repoints it without a code change.
+- **The light tier is GA and declares no fallback.** Verified live 2026-09-12:
+  `models/gemini-3.8-flash` exists, 1,048,576 in / 65,536 out, `thinking_level`
+  honoured, native PDF read. `EVENTMILL_MODEL_LIGHT` and
+  `EVENTMILL_MAX_OUTPUT_LIGHT` repoint the model and its cap without a code
+  change — set them together, since the cap otherwise still comes from the
+  manifest. An override naming the manifest's own model is treated as a
+  redundant pin, not a substitution, and does not warn.
+- **An `EVENTMILL_MODEL_*` pin silently outranks the manifest.** A deployment
+  `.env` pinning a tier is what a manifest tier change has to get past; check
+  there first when a model change appears to have done nothing.
+- **PDF page cost measured on 3.8 Flash (2026-09-12)**, marginal tokens per
+  letter-size page: `low` 266, `medium` 520, `high` 1102, against the declared
+  280 / 560 / 1120. The declared values are kept as a deliberate upper bound —
+  they are 2-7% conservative and page size is not held constant across
+  documents, and the guard's job is to refuse before the provider does.
+- **`model_used` is what was asked for; `model_version` is what ran.** The
+  dispatcher records both — the second from the provider's response — so a
+  version change inside one alias is visible when comparing two models over
+  the same corpus. The projector writes them as `model_configured` and
+  `model_served` (run record `schema_version` 3).
 - **Use `models.generate_content()`, not the Interactions API.** The Interactions
   gateway caps input at 32,768 tokens regardless of the model's real context
   window — a documented trap that looks like a model limitation.

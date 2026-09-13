@@ -499,7 +499,14 @@ python scripts/generate_tool_catalog.py
 
 The `LLMResponse` includes diagnostic fields that help with debugging:
 
-- **`model_used`** — which model actually ran the query (e.g. `gemini-3.5-flash`)
+- **`model_used`** — the model id the client was *configured* with, including an
+  `EVENTMILL_MODEL_*` override or a retired-model substitution (e.g.
+  `gemini-3.8-flash`). What was asked for, not what ran
+- **`model_version`** — the id the provider reports having *served* the request,
+  or `None` when it reports nothing. An alias resolves to a dated build, so this
+  is the only field that shows a provider-side version change inside one model
+  name. Record it alongside `model_used` in anything meant to be compared across
+  models
 - **`transport_path`** — how the document was ingested (`gs_uri`, `inline_bytes`, `text`)
 - **`fallback_reason`** — why the preferred path wasn’t used (if applicable)
 

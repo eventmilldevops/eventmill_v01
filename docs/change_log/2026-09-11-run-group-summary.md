@@ -186,16 +186,18 @@ a verdict. A group too small to judge says so in its own line rather than
 silently reporting zero recurring routes. `PROJECTION_NOTICE` closes the
 summary, as everywhere else.
 
-## Not verified
+## Verified live
 
-**No live run.** Everything here ran against scripted replies. The two
-`stepstate-medium*` groups on the container are the real first test: group 2
-should report `portal → claims_api → doc_store` in 3 of 3 runs and
-`portal → claims_api → claims_db` in 2 of 3, both recurring, with the
-`claims_db` route's representative carrying the delegated-access gap.
+**2026-09-12, `phase3b-claims`.** Six runs of Volt Typhoon against the claims
+portal, assembled from two batches of three in one session and counted as six.
+It confirmed the batching fix end to end, and it is what found the two faults
+recorded above — the `run_index` collision and Reconnaissance splitting a
+route — neither of which any scripted corpus had exposed.
 
-Since records are session-scoped, summarising those groups needs either a
-session that still holds them or a fresh `--runs` invocation.
+The group summary and the report built from it both rendered without issue. The
+earlier `stepstate-medium*` groups were never summarised under the fixed code:
+they predate it, and records are session-scoped, so they would need re-running
+rather than re-reading.
 
 ## Not in this change
 

@@ -75,8 +75,11 @@ def _build_config(
         level = "high"
     if level:
         if level in _THINKING_LEVELS:
+            # Both fields are enum-typed in the SDK. Passing the string works by
+            # coercion but emits a Pydantic serializer warning on every call, so
+            # look the member up instead.
             config.thinking_config = genai_types.ThinkingConfig(
-                thinking_level=level.upper(),
+                thinking_level=genai_types.ThinkingLevel[level.upper()],
             )
         else:
             logger.warning("Ignoring unknown thinking_level %r", level)
@@ -84,7 +87,9 @@ def _build_config(
     if hints.media_resolution:
         res = hints.media_resolution
         if res in _MEDIA_RESOLUTIONS:
-            config.media_resolution = f"MEDIA_RESOLUTION_{res.upper()}"
+            config.media_resolution = genai_types.MediaResolution[
+                f"MEDIA_RESOLUTION_{res.upper()}"
+            ]
         else:
             logger.warning("Ignoring unknown media_resolution %r", res)
 
@@ -105,6 +110,18 @@ def _finish_reason(response: Any) -> str | None:
     if reason is None:
         return None
     return str(getattr(reason, "name", None) or reason)
+
+
+def _model_version(response: Any) -> str | None:
+    """Model id the provider reports having served the request.
+
+    Distinct from the id the client was configured with: an alias resolves to a
+    dated build, so a provider-side version change inside one alias is
+    invisible unless this is recorded. Returns None when the response carries
+    nothing — older SDKs and the error paths both omit it.
+    """
+    version = getattr(response, "model_version", None)
+    return str(version) if version else None
 
 
 def _usage(response: Any) -> dict[str, int] | None:
@@ -136,7 +153,7 @@ class MCPLLMClient:
     
     def __init__(
         self,
-        model_id: str = "gemini-3.5-flash",
+        model_id: str = "gemini-3.8-flash",
         transport: str = "stdio",
         endpoint: str | None = None,
         max_retries: int = 3,
@@ -254,7 +271,7 @@ class MCPLLMClient:
             # MCP query execution will be implemented when
             # the mcp package is integrated. For now, return
             # a placeholder indicating the query would be sent.
-            response_text, usage, reason = self._execute_mcp_query(
+            response_text, usage, reason, served = self._execute_mcp_query(
                 prompt=full_prompt,
                 system_context=system_context,
                 max_tokens=max_tokens,
@@ -265,6 +282,7 @@ class MCPLLMClient:
                 ok=True,
                 text=response_text,
                 model_used=self.model_id,
+                model_version=served,
                 token_usage=usage,
                 finish_reason=reason,
                 truncated=reason == "MAX_TOKENS",
@@ -316,7 +334,7 @@ class MCPLLMClient:
         )
         
         try:
-            response_text = self._execute_mcp_multimodal_query(
+            response_text, served = self._execute_mcp_multimodal_query(
                 prompt=prompt,
                 image_data=image_data,
                 image_format=image_format,
@@ -324,11 +342,12 @@ class MCPLLMClient:
                 max_tokens=max_tokens,
                 hints=hints,
             )
-            
+
             return LLMResponse(
                 ok=True,
                 text=response_text,
                 model_used=self.model_id,
+                model_version=served,
                 token_usage={"prompt_tokens": 0, "completion_tokens": 0},
             )
         except Exception as e:
@@ -392,11 +411,11 @@ class MCPLLMClient:
         system_context: str | None,
         max_tokens: int,
         hints: QueryHints | None = None,
-    ) -> tuple[str, dict[str, int] | None, str | None]:
+    ) -> tuple[str, dict[str, int] | None, str | None, str | None]:
         """Execute a text query via Google GenAI SDK (MCP bridge).
 
         Returns:
-            Tuple of (response_text, token_usage, finish_reason).
+            Tuple of (response_text, token_usage, finish_reason, model_version).
 
         Uses google.genai directly until full MCP transport
         is integrated.
@@ -426,7 +445,7 @@ class MCPLLMClient:
                         max_tokens, self.model_id,
                         (usage or {}).get("thinking_tokens", "?"),
                     )
-                return text, usage, reason
+                return text, usage, reason, _model_version(response)
             except Exception as exc:
                 if self._is_quota_exhausted(exc):
                     logger.warning(
@@ -456,8 +475,12 @@ class MCPLLMClient:
         system_context: str | None,
         max_tokens: int,
         hints: QueryHints | None = None,
-    ) -> str:
-        """Execute a multimodal query via Google GenAI SDK (MCP bridge)."""
+    ) -> tuple[str, str | None]:
+        """Execute a multimodal query via Google GenAI SDK (MCP bridge).
+
+        Returns:
+            Tuple of (response_text, model_version).
+        """
         if self._genai_client is None:
             raise RuntimeError("Client not initialised — call connect() first")
         
@@ -479,7 +502,7 @@ class MCPLLMClient:
                     contents=contents,
                     config=config,
                 )
-                return response.text or ""
+                return response.text or "", _model_version(response)
             except Exception as exc:
                 if self._is_quota_exhausted(exc):
                     logger.warning(
@@ -530,7 +553,7 @@ class LLMDispatcher:
                  tier_specs: dict[str, TierSpec] | None = None) -> None:
         self._clients = clients
         # When set, this tier is preferred for callers that pass no hints.
-        # Lets explicit 'connect gemini-3.5-flash' keep Flash as primary.
+        # Lets explicit 'connect gemini-3.8-flash' keep Flash as primary.
         self._preferred_tier = preferred_tier
         # Per-tier capability specs from the provider manifest. Used to clamp
         # max_tokens to what the selected model can actually emit.
@@ -1216,6 +1239,7 @@ class LLMDispatcher:
                         ok=True,
                         text=response.text or "",
                         model_used=client.model_id,
+                        model_version=_model_version(response),
                         transport_path=transport_path,
                         token_usage=usage,
                         finish_reason=reason,

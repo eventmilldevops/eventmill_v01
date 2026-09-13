@@ -440,7 +440,7 @@ class EventMillShell(cmd.Cmd):
                 })
             if not models:
                 models.append({
-                    "id": "gemini-3.5-flash",
+                    "id": "gemini-3.8-flash",
                     "name": "Gemini (default)",
                     "tier": "light",
                     "env_var": "GEMINI_API_KEY",

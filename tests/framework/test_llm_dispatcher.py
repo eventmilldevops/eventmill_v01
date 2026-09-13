@@ -19,6 +19,7 @@ from framework.llm.client import (
     TierScopedLLMClient,
     _build_config,
     _finish_reason,
+    _model_version,
     _usage,
 )
 from framework.llm.providers import (
@@ -376,6 +377,24 @@ class TestProviderManifest:
         assert specs["heavy"].fallback_model_id
         assert specs["heavy"].fallback_model_id != specs["heavy"].model_id
 
+    def test_ga_light_tier_needs_no_fallback(self):
+        """3.8 Flash is a GA endpoint, confirmed live 2026-09-12, so it cannot
+        be retired out from under us the way the heavy tier's preview can. A
+        fallback here would only mask a mistyped model id."""
+        assert load_tier_specs()["light"].fallback_model_id == ""
+
+    def test_a_redundant_model_pin_is_not_treated_as_a_substitution(
+        self, monkeypatch,
+    ):
+        """A deployment .env that pins a tier to the model the manifest already
+        names is redundant, not a substitution — it must not warn about an
+        output cap that was never wrong."""
+        specs = load_tier_specs()
+        monkeypatch.setenv("EVENTMILL_MODEL_LIGHT", specs["light"].model_id)
+        repinned = load_tier_specs()
+        assert repinned["light"].model_id == specs["light"].model_id
+        assert repinned["light"].max_output_tokens == specs["light"].max_output_tokens
+
     def test_model_id_override_from_env(self, monkeypatch):
         monkeypatch.setenv("EVENTMILL_MODEL_LIGHT", "gemini-experimental")
         assert load_tier_specs()["light"].model_id == "gemini-experimental"
@@ -419,12 +438,14 @@ class _FakeUsage:
 
 
 class _FakeSDKResponse:
-    def __init__(self, reason=None, usage=None):
+    def __init__(self, reason=None, usage=None, model_version=None):
         self.text = '{"refined_iocs": [{"value": "1.2.3'
         self.candidates = (
             [type("C", (), {"finish_reason": reason})()] if reason is not None else []
         )
         self.usage_metadata = usage
+        if model_version is not None:
+            self.model_version = model_version
 
 
 class _FakeGenaiClient:
@@ -483,6 +504,58 @@ class TestTruncationIsVisible:
         result = self._run(_FakeSDKResponse("STOP", _FakeUsage()))
         assert result.ok is True and result.truncated is False
         assert result.finish_reason == "STOP"
+
+
+# ---------------------------------------------------------------------------
+# Which model actually ran
+# ---------------------------------------------------------------------------
+
+
+class TestServedModelIsRecorded:
+    """model_used is what was asked for; model_version is what the provider
+    says served the request. Comparing two models over one corpus needs the
+    second — an alias resolving to a different build is otherwise invisible."""
+
+    def test_helper_reads_the_reported_version(self):
+        assert _model_version(
+            _FakeSDKResponse(model_version="gemini-3.8-flash-001")
+        ) == "gemini-3.8-flash-001"
+
+    def test_helper_is_none_when_the_provider_reports_nothing(self):
+        assert _model_version(_FakeSDKResponse()) is None
+        assert _model_version(_FakeSDKResponse(model_version="")) is None
+
+    def test_document_query_records_configured_and_served_separately(self):
+        result = LLMDispatcher._execute_document_query(
+            client=_FakeDocClient(
+                _FakeSDKResponse("STOP", _FakeUsage(), "gemini-3.1-pro-001")
+            ),
+            prompt="p",
+            doc=DocumentPart(mime_type="application/pdf", inline_bytes=b"%PDF"),
+            system_context=None,
+            max_tokens=16384,
+        )
+        assert result.model_used == "pro"                     # configured
+        assert result.model_version == "gemini-3.1-pro-001"   # served
+
+    def test_text_query_carries_the_served_version(self):
+        client = MCPLLMClient(model_id="flash")
+        client._connected = True
+        client._genai_client = _FakeGenaiClient(
+            _FakeSDKResponse("STOP", _FakeUsage(), "gemini-3.8-flash-001")
+        )
+        result = client.query_text("p")
+        assert result.ok is True
+        assert result.model_used == "flash"
+        assert result.model_version == "gemini-3.8-flash-001"
+
+    def test_a_provider_that_reports_nothing_leaves_it_none(self):
+        client = MCPLLMClient(model_id="flash")
+        client._connected = True
+        client._genai_client = _FakeGenaiClient(
+            _FakeSDKResponse("STOP", _FakeUsage())
+        )
+        assert client.query_text("p").model_version is None
 
 
 # ---------------------------------------------------------------------------
