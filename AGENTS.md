@@ -72,6 +72,16 @@ resolution to GCS and logging to JSON for Cloud Logging.
 
 ## LLM models — read before changing anything under `framework/llm/`
 
+**The layer is no longer vendor-wired.** As of 2026-09-13 the Google SDK lives
+only in `framework/llm/clients/gemini.py`; `framework/llm/dispatcher.py` talks
+to whatever it holds through the `LLMModelClient` protocol in `model_client.py`
+and imports no vendor SDK — `tests/framework/test_provider_seam.py` enforces
+that with an `ast` walk over its imports. Adding a provider means a new file
+under `clients/` and a new manifest under `providers/`, and nothing else.
+
+Gemini is still the only implemented provider and the only one the runtime
+binds. Plan: `docs/specs/multi_provider_llm_clients.md`.
+
 Two tiers, declared in `framework/llm/providers/gcp_gemini.json`. That file is
 the single source of truth for model ids, token limits and capabilities; do not
 hardcode any of them elsewhere.
@@ -310,6 +320,24 @@ ranges. Cloud Shell always works and is the reliable fallback.
 - Provisioning seeds every secret with the literal string `placeholder`. Run
   `provision-secrets.sh` or the LLM is dead and the web terminal password is
   `placeholder`.
+- **Seven secrets are provisioned, and all six LLM/ttyd ones are mounted, but
+  two are dormant by design.** `eventmill-anthropic-api` and
+  `eventmill-openai-api` are created and IAM-bound like the rest and hold
+  `placeholder` until someone adopts that vendor. This keeps the revision shape
+  identical for every deployment, so adopting a provider is a new secret version
+  plus a restart rather than an infrastructure change.
+  `EVENTMILL_LLM_PROVIDERS` (space-separated, default `gcp_gemini`) names the
+  ones actually in use; only those must hold real values, and an unknown id is
+  refused rather than ignored. **A placeholder in an unadopted provider is the
+  expected steady state** — Step 4 of the deploy reports it as `·` and does not
+  prompt. Do not "fix" that by making it blocking again; it would train
+  operators to dismiss the check that stops ttyd shipping with the password
+  `placeholder`.
+- **A mounted key is not a bound provider.** `_discover_models`
+  (`framework/cli/shell.py:418`) reads tier specs from the Gemini manifest
+  alone, so `ANTHROPIC_API_KEY` arrives in the container and binds nothing until
+  the provider registry lands. Confirm key delivery with `printenv`, not
+  `models`. Verified on Cloud Run 2026-09-13.
 - Deploys default to `--allow-unauthenticated`; the only gate is shared ttyd
   basic auth. `ALLOW_UNAUTH=false` switches to IAM (`roles/run.invoker`).
   Prefer that for anything holding real investigation data.

@@ -2,7 +2,10 @@
 
 **Date:** 2026-09-13
 **Branch:** `llm_multi`
-**Status:** Stage 0 done (`1d31b54`), Stage 1 done 2026-09-13. Part 1 Stage 2 next.
+**Status:** Stage 0 (`1d31b54`), Stage 1 (`3464b69`) and the secret-wiring half
+of Stage 6 (`52e3a10`) all done 2026-09-13 and verified on Cloud Run. **Part 1
+Stage 2 next** — the `(provider_id, tier)` rekey is the piece that must land
+first.
 
 **Revised 2026-09-13** after the operator corrected a premise: concurrent
 multi-vendor operation and per-module provider override were requirements from
@@ -397,9 +400,18 @@ three concurrently, the CLI shows and overrides them per module, every response
 and run record names the provider that served it, and all nine modules execute
 without plugin changes.
 
-### Stage 6 — deployment
+### Stage 6 — deployment — **secret wiring DONE 2026-09-13** (`52e3a10`)
 
 **Decision: provision all three secrets always, seeded with placeholders.**
+
+Brought forward ahead of Stages 2–5 deliberately, and verified on Cloud Run: the
+four LLM keys reach the container through Secret Manager for providers that have
+no code behind them yet. When the registry lands, the only untested variable is
+the code. **Done:** `provision-gcp-project.sh`, `provision-secrets.sh`,
+`deploy-cloudrun-secrets.sh`, `deploy-cloudrun.sh`. **Still open:**
+`cloudbuild.yaml`, the `pyproject` extras and `Dockerfile.cloudrun`,
+`docker-compose.cloudrun.yml`, `setup-deploy-server.sh`.
+Change log: `docs/change_log/2026-09-13-three-vendor-secret-wiring.md`.
 
 The infrastructure provisions a fixed set of secrets — Gemini Flash, Gemini Pro,
 Anthropic, OpenAI — regardless of which vendors an operator actually uses.

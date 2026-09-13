@@ -303,10 +303,33 @@ Secret Manager. To manage secrets manually:
 #   GEMINI_FLASH_API_KEY  →  eventmill-gemini-flash-api
 #   GEMINI_PRO_API_KEY    →  eventmill-gemini-pro-api
 
+# Anthropic / OpenAI keys — issued in those vendors' own consoles, so there is
+# no `gcloud services api-keys create` equivalent. One key per provider: neither
+# vendor splits keys by tier the way the Gemini pair does.
+#   ANTHROPIC_API_KEY     ->  eventmill-anthropic-api
+#   OPENAI_API_KEY        ->  eventmill-openai-api
+
 # ttyd basic auth credentials
 echo -n "analyst" | gcloud secrets versions add eventmill-ttyd-user --data-file=-
 echo -n "strong-password" | gcloud secrets versions add eventmill-ttyd-cred --data-file=-
 ```
+
+### Why two secrets hold `placeholder`
+
+`eventmill-anthropic-api` and `eventmill-openai-api` are provisioned, IAM-bound
+and mounted for **every** deployment, holding `placeholder` until someone adopts
+that vendor. The build and the deploy are then identical for every project, and
+adopting a provider later is a new secret version plus a restart — no
+infrastructure change, no rebuild, no different deploy path.
+
+`EVENTMILL_LLM_PROVIDERS` names the ones in use. Only those must hold real
+values: Step 4 of the deploy blocks on a placeholder in a provider you listed,
+and merely reports one in a provider you did not.
+
+**A mounted key is not yet a bound provider.** Model discovery currently reads
+`framework/llm/providers/gcp_gemini.json` alone, so a real Anthropic key reaches
+the container but does not appear in `models`. Confirm delivery with `printenv`
+in the terminal. See `docs/specs/multi_provider_llm_clients.md`.
 
 ### GCS Access (Workload Identity)
 
@@ -397,8 +420,11 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | `EVENTMILL_BUCKET_PREFIX` | No | Bucket naming prefix — must match `provision-gcp-project.sh` (default: `${GOOGLE_CLOUD_PROJECT}-eventmill`) |
 | `CLOUD_RUN_REGION` | **Yes** | Deploy region. No default — must match the region you provisioned in, because the Artifact Registry image path embeds it. Every script refuses to guess. |
 | `GCS_LOG_BUCKET` | No | Legacy single-bucket override — leave empty for new deployments |
+| `EVENTMILL_LLM_PROVIDERS` | No | Space-separated providers actually in use (default: `gcp_gemini`). Only these must hold real key values; the rest stay on `placeholder`. An unknown id is refused, not ignored |
 | `EVENTMILL_SECRET_GEMINI_FLASH` | No | Secret Manager name for Flash API key (default: `eventmill-gemini-flash-api`) |
 | `EVENTMILL_SECRET_GEMINI_PRO` | No | Secret Manager name for Pro API key (default: `eventmill-gemini-pro-api`) |
+| `EVENTMILL_SECRET_ANTHROPIC` | No | Secret Manager name for the Anthropic API key (default: `eventmill-anthropic-api`) |
+| `EVENTMILL_SECRET_OPENAI` | No | Secret Manager name for the OpenAI API key (default: `eventmill-openai-api`) |
 | `EVENTMILL_SECRET_TTYD_USER` | No | Secret Manager name for ttyd username (default: `eventmill-ttyd-user`) |
 | `EVENTMILL_SECRET_TTYD_CRED` | No | Secret Manager name for ttyd password (default: `eventmill-ttyd-cred`) |
 | `EVENTMILL_LOG_LEVEL` | No | Logging level (default: `INFO`) |
@@ -409,6 +435,9 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 |----------|-------------|
 | `GEMINI_FLASH_API_KEY` | Gemini Flash API key — light tier (injected from Secret Manager) |
 | `GEMINI_PRO_API_KEY` | Gemini Pro API key — heavy tier (injected from Secret Manager) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (injected from Secret Manager; `placeholder` until adopted) |
+| `OPENAI_API_KEY` | OpenAI API key (injected from Secret Manager; `placeholder` until adopted) |
+| `EVENTMILL_LLM_PROVIDERS` | Providers this deployment intends to use |
 | `TTYD_USERNAME` | ttyd basic auth username |
 | `TTYD_PASSWORD` | ttyd basic auth password |
 | `EVENTMILL_BUCKET_PREFIX` | Bucket prefix for pillar-based storage resolution |

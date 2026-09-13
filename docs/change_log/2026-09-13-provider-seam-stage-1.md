@@ -171,6 +171,19 @@ tier fails the call outright rather than being clamped. No plugin currently does
 Not fixed here — it is a provider-manifest question (which levels a tier
 actually supports), which is Stage 2's territory.
 
+## Confirmed on Cloud Run — 2026-09-13
+
+The operator deployed and exercised the refactored layer on the container and
+reported it working: **Gemini runs unchanged through the extracted client, and
+the dispatcher's decoupling from the vendor holds in the deployed environment**,
+not only in the test suite and the local live run.
+
+That closes the gap this change log opened. The local verification could only
+reach the `inline_bytes` ingestion branch, because a local artifact has no
+`gs://` URI; the container is the only place the `gs_uri` branch runs. Stage 1
+moved that code off the dispatcher, so a deployed run was the last untested
+piece of the move.
+
 ## Not done here
 
 - **No behaviour change.** No routing, clamping or guard logic was altered.

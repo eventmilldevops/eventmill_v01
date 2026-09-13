@@ -120,9 +120,20 @@ reporting block was run with mixed keys, with Gemini absent, and with everything
 unset; the all-unset path does not trip `set -e`, which is the failure mode that
 motivated the `cloud_install` rewrite in the first place.
 
-Not verified: an actual deploy. That is the operator's next step, and
-`DRY_RUN=1 bash cloud_install/deploy-cloudrun-secrets.sh` runs the full preflight
-— existence, values, IAM — and stops before the build.
+**Verified on Cloud Run the same day.** The operator provisioned the two new
+secrets, set real values, deployed, and reported the infrastructure working: the
+four LLM keys reach the container through Secret Manager, and the Gemini path is
+unaffected by the two dormant mounts.
+
+So the full chain is proven end to end — secret created, IAM-bound to
+`eventmill-runner`, mounted by the revision, present in the container's
+environment — for a provider that has no code behind it yet. That was the whole
+point of doing Stage 6 first: when the provider registry lands, the only
+untested variable will be the code.
+
+`DRY_RUN=1 bash cloud_install/deploy-cloudrun-secrets.sh` remains the cheap
+pre-check — it runs existence, values and IAM across all six mounted secrets and
+stops before paying for an image build.
 
 ## Not done here
 
