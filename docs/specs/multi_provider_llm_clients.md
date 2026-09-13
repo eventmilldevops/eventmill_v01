@@ -4,27 +4,62 @@
 **Branch:** `llm_multi`
 **Status:** Stage 0 done (`1d31b54`), Stage 1 done 2026-09-13. Part 1 Stage 2 next.
 
+**Revised 2026-09-13** after the operator corrected a premise: concurrent
+multi-vendor operation and per-module provider override were requirements from
+the start, not deferrable extensions. Decisions 8 and 9 are new, Stages 2, 5 and
+6 are rewritten, and two items move out of "out of scope" into "in scope,
+corrected". Stages 0 and 1 are unaffected — `provider_id` on both the client and
+the response, landed in Stage 1, is exactly the attribution this needs.
+
 Event Mill has to run on OpenAI or Anthropic without the analysis tools
-changing. This plan gets there in two parts, and the split matters:
+changing — and, where the operator asks for it, **on more than one at the same
+time**. This plan gets there in two parts, and the split matters:
 
 > **Part 1 builds the plumbing. Part 2 finds out what it's worth.**
 >
-> Part 1 ends when all three providers are selectable at the CLI and every
+> Part 1 ends when every configured provider can be bound concurrently and every
 > module still runs. That proves nothing about output quality — it proves the
 > platform is no longer wired to one vendor. Part 2 is where each module is
 > assessed against each provider, one module at a time, because there is no
 > single answer to "which provider is better" and a plan that produces one is
 > lying.
 
-The architecture is adopted wholesale from the GPT 5.6 assessment: per-provider
-clients each owning their SDK, a thin dispatcher, a small internal model-client
-protocol, an explicit registry keyed by `EVENTMILL_LLM_PROVIDER`, per-provider
-JSON manifests, and no cross-provider fallback. There is no universal client that
-understands every vendor. Nothing below argues with that.
+## The concurrency requirement, stated plainly
+
+Event Mill was never meant to be tied to one vendor. The settled decision is
+**one heavy and one light model per tool module**, taken from the module's
+manifest — and **overridable at runtime so the same module can be run across
+vendors and the outputs compared.**
+
+Two things follow, and they shape every stage below:
+
+1. **Several providers may be bound at once.** An operator can run Gemini Flash
+   for the light-tier work and Anthropic for `adversary_path_projector` in the
+   same session, or run the projector three times across three vendors for a
+   diversity of opinion on the same flow map.
+2. **Provider choice is an operator decision, not a plugin decision.** It
+   arrives through the per-execution scoping wrapper, never through plugin code
+   or `QueryHints`. That is what keeps "the analysis tools do not change" true,
+   and it is what keeps prompts byte-identical across a swap — the precondition
+   for any comparison meaning anything.
+
+**What is still forbidden is automatic cross-provider *fallback*.** A quota
+exhaustion must not silently move a session to another vendor: nobody chose it,
+and the output is unattributable afterwards. Deliberate selection is the
+requirement; silent failover is the hazard. Fallback stays inside the active
+provider's two tiers. Earlier revisions of this plan collapsed the two and ruled
+out both — that was wrong, and the stages below are rewritten accordingly.
+
+The architecture is otherwise adopted wholesale from the GPT 5.6 assessment:
+per-provider clients each owning their SDK, a thin dispatcher, a small internal
+model-client protocol, an explicit provider registry, per-provider JSON
+manifests, and no cross-provider fallback. There is no universal client that
+understands every vendor.
 
 What the assessment could not see is how much Gemini-specific code lives
-**outside** `MCPLLMClient`, and how unevenly the provider differences actually
-land across the plugin estate. Both change the sequence.
+**outside** `MCPLLMClient`, how unevenly the provider differences actually land
+across the plugin estate, and that the dispatcher's client map is keyed by tier
+alone. All three change the sequence.
 
 ---
 
@@ -84,7 +119,7 @@ Three things follow, and they set the whole shape of Part 2:
 
 ---
 
-## Seven decisions the assessment leaves open
+## Nine decisions the assessment leaves open
 
 ### 1. The document path moves into the provider client, not out of `MCPLLMClient`
 
@@ -164,6 +199,44 @@ The name has been wrong since the MCP transport was deferred. It becomes
 `GeminiClient`; `framework/llm/client.py` becomes `framework/llm/dispatcher.py`.
 Nothing outside this repo imports it and the suite catches the six call sites.
 
+### 8. The dispatcher's client map is keyed by tier, and must be keyed by both
+
+`LLMDispatcher._clients` is `dict[str, LLMModelClient]` keyed by `"light"` /
+`"heavy"`. With one vendor that is complete; with two bound at once it cannot
+express the state. Eight call sites read it (`dispatcher.py:80` through `:679`),
+and `_tier_of` reverse-looks-up a client by scanning it.
+
+It becomes keyed by **`(provider_id, tier)`**. `_route()` resolves the provider
+first — from the execution scope, else the session default — and the tier within
+it. `connected_models()` reports both.
+
+**`_fallback_client` is the one method that must stay provider-scoped.** It
+answers "the other connected tier" today; it has to answer "the other connected
+tier *of the same provider*". This is where the data-handling boundary actually
+lives, and it is a three-line constraint rather than a policy spanning the
+design. A test asserting that a quota failure on one vendor never routes to
+another belongs with it.
+
+### 9. Runtime provider override rides the scoping wrapper, not `QueryHints`
+
+`shell.py:2782` already wraps every plugin execution in
+`TierScopedLLMClient(self.llm_client, default_tier=plugin.manifest.model_tier)`.
+That is the single place a manifest default is turned into a per-execution
+decision, and it is the right place for the provider too:
+
+```python
+TierScopedLLMClient(dispatcher, default_tier=..., default_provider=...)
+```
+
+The alternative — a `provider` field on `QueryHints` — is wrong twice. It would
+put vendor selection in plugin code, breaking "the analysis tools do not
+change"; and it would let a plugin's own hints override an operator's A/B
+choice, making a comparison silently unattributable.
+
+The manifest may later declare a per-module provider preference through the same
+channel, which is the mechanism Part 2 would use to record a per-module
+decision. Neither the plugin nor its prompts change either way.
+
 ---
 
 ## Target layout
@@ -224,18 +297,44 @@ reproduced 82/82 non-technique recall on the probe corpus.
 
 Change log: `docs/change_log/2026-09-13-provider-seam-stage-1.md`.
 
-### Stage 2 — generalise construction
+### Stage 2 — generalise construction, and make the client map two-dimensional
 
-`LLMModelClient` protocol, `PROVIDER_CLIENTS` registry, `EVENTMILL_LLM_PROVIDER`
-(default `gcp_gemini`). Thread `provider_id` through every accessor in
-`providers/__init__.py` and the dispatcher's four unqualified calls. Per-tier
-`output_budget` / `file_handling` override. `LLMQueryInterface.output_budget()`
-and `.max_output_tokens()`, with `threat_intel_ingester` cut over. Add
-`remote_uri_gs` and dispatcher-side byte materialisation.
+The largest stage, and the one the concurrency requirement reshapes.
 
-**Done when:** with the default provider the suite is green and live behaviour is
-unchanged; with an unknown provider id the shell refuses to start with a named
-error rather than silently falling back to Gemini.
+**Construction.** `PROVIDER_CLIENTS` registry in `factory.py`.
+`EVENTMILL_LLM_PROVIDERS` — **plural, space-separated, default `gcp_gemini`** —
+names which providers a session may bind. A provider is *available* when it is
+listed and its key env var is set; listing one whose key is absent is a named
+warning at startup, not a failure, because a placeholder-seeded deployment is
+the expected steady state (see Stage 6).
+
+**Keying.** `LLMDispatcher._clients` moves to `(provider_id, tier)` per decision
+8. `_route()` resolves provider then tier; `_tier_of` becomes
+`_locate(client) -> (provider_id, tier)`; `connected_models()` reports both.
+`_fallback_client` is constrained to the same provider, with a test asserting a
+quota failure never crosses vendors.
+
+**Scoping.** `TierScopedLLMClient` gains `default_provider`, set from the
+execution scope in `shell.py:2782` per decision 9. With one provider bound this
+is a no-op and behaviour is identical.
+
+**Provider-qualified accessors.** Thread `provider_id` through every accessor in
+`providers/__init__.py` and the dispatcher's four unqualified calls
+(`pdf_handling()`, `tokens_per_pdf_page()`, and the two in the PDF guard).
+Per-tier `output_budget` / `file_handling` override.
+`LLMQueryInterface.output_budget()` and `.max_output_tokens()`, with
+`threat_intel_ingester` cut over. Add `remote_uri_gs` and dispatcher-side byte
+materialisation.
+
+**Done when:** with only `gcp_gemini` configured the suite is green and live
+behaviour is unchanged; two providers can be bound simultaneously and each
+response carries the `provider_id` that served it; a quota failure on one
+provider never routes to another; and an unknown provider id is refused with a
+named error rather than a silent fall back to Gemini.
+
+This is large enough to split if it gets unwieldy — the `(provider_id, tier)`
+rekey is separable from the accessor threading, and the rekey is the half that
+must land first.
 
 ### Stage 3 — `OpenAIClient`
 
@@ -264,33 +363,104 @@ honest test precisely because it is third.
 Its PDF limits are the tightest of the three and will exercise
 `_pdf_context_overflow` in a way Gemini never has.
 
-### Stage 5 — CLI selection and normalised diagnostics
+### Stage 5 — CLI selection, runtime override, and normalised diagnostics
 
-Rework `_discover_models` and `do_connect` to be provider-driven. `models` lists
-the active provider's tiers; `connect` prints **provider, tier, model, and key
-env var** on every bind. A `provider` command shows what is selected and what is
-available, and refuses an unconfigured one with the missing env var named.
+Rework `_discover_models` and `do_connect` to be provider-driven.
+`_discover_models` currently gates on `spec.api_key_env` from the Gemini
+manifest alone (`shell.py:418`), so until this lands a mounted
+`ANTHROPIC_API_KEY` is invisible — correct in source, inert in the environment,
+which is the 09-12 failure mode exactly.
+
+- `models` lists every **bound** provider's tiers, provider-qualified.
+- `connect` binds all available providers and prints **provider, tier, model and
+  key env var** for each.
+- `providers` shows what is configured, what is bound, and what is missing a key
+  — naming the env var for each gap.
+- **`use <provider> [for <tool>]`** sets the session default, or a per-module
+  override. This is the runtime A/B control, and the only supported way to
+  choose a vendor for a module.
 
 The 3.8 swap's most expensive lesson was a change that was correct in the source
-and inert in the environment. A provider switch has strictly more ways to be
-half-applied, so it has to announce itself.
+and inert in the environment. Several vendors bound at once has strictly more
+ways to be half-applied, so every bind and every override announces itself.
 
-Every provider now returns provider id, requested model, reported model,
-normalised usage (prompt / completion / reasoning / total), finish reason,
-truncation and `error_kind`. Add `provider_id` to `LLMResponse` and to the
-projector's run record (`RUN_RECORD_SCHEMA_VERSION` 3 → 4) — Part 2's comparisons
-are unreadable without it.
+Every provider returns provider id, requested model, reported model, normalised
+usage (prompt / completion / reasoning / total), finish reason, truncation and
+`error_kind`. `provider_id` is already on `LLMResponse` as of Stage 1; add it to
+the projector's run record (`RUN_RECORD_SCHEMA_VERSION` 3 → 4). **With vendors
+running concurrently this stops being a convenience and becomes the only thing
+that makes a run interpretable** — two records from one session may now come
+from two vendors.
 
-**Part 1 is done when** `EVENTMILL_LLM_PROVIDER` selects any of the three, the
-CLI shows and binds it, and all nine modules execute without plugin changes.
+**Part 1 is done when** `EVENTMILL_LLM_PROVIDERS` binds any combination of the
+three concurrently, the CLI shows and overrides them per module, every response
+and run record names the provider that served it, and all nine modules execute
+without plugin changes.
 
 ### Stage 6 — deployment
 
-Parameterise the secret wiring, which names Gemini in five places
-(`cloud_install/deploy-cloudrun-secrets.sh:129`, `deploy-cloudrun.sh:96`,
-`provision-secrets.sh:207`, `setup-deploy-server.sh:108`, and the README env
-table). The selected provider's key secret, and only that one, gets mounted; the
-container build installs the selected provider's extra.
+**Decision: provision all three secrets always, seeded with placeholders.**
+
+The infrastructure provisions a fixed set of secrets — Gemini Flash, Gemini Pro,
+Anthropic, OpenAI — regardless of which vendors an operator actually uses.
+OpenAI and Anthropic are seeded with the literal `placeholder` that
+`provision-gcp-project.sh` already writes, and stay that way until someone
+adopts them.
+
+This separates infrastructure from development, and it is the right call for
+three reasons:
+
+1. **The build is identical for every deployment.** No provider-conditional
+   branching in `deploy-cloudrun-secrets.sh` or `cloudbuild.yaml`; `ALL_SECRETS`
+   stays a static list and the `--set-secrets` string stays fixed. The
+   alternative — computing the secret set from `EVENTMILL_LLM_PROVIDERS` —
+   duplicates that logic across the shell script and the CI YAML, where it will
+   drift.
+2. **It stays GCP-first.** Gemini remains the default and the only provider with
+   real keys out of the box. Nothing about a stock deployment changes.
+3. **Adoption becomes a one-module decision.** Extending to another vendor is
+   `gcloud secrets versions add` plus a `use` override — no redeploy, no
+   infrastructure change, no re-provisioning. That is what makes Part 2's
+   module-at-a-time sequence practical rather than theoretical.
+
+The work:
+
+- **`provision-gcp-project.sh:94`** — add `eventmill-anthropic-api` and
+  `eventmill-openai-api` to `SECRET_NAMES`, so they are created and
+  secretAccessor-bound at bootstrap like every other secret. Existing projects
+  pick them up by re-running provisioning, which is idempotent.
+- **`provision-secrets.sh`** — these keys are externally issued, so
+  `create_restricted_gemini_key` (which calls `gcloud services api-keys create`,
+  a Google-only mechanism) does not apply. Use the existing `add_secret_version`
+  helper, already used for ttyd and the GCS SA. **One secret per provider, not
+  two**: Section 1's per-tier quota-isolation rationale is specific to Gemini —
+  neither OpenAI nor Anthropic splits keys by tier, so one key serves both tiers
+  of that provider.
+- **`deploy-cloudrun-secrets.sh`** — add the two secret-name variables
+  (`:129`), append to `ALL_SECRETS` (`:202`), mount both in `--set-secrets`
+  (`:724`), and pass `EVENTMILL_LLM_PROVIDERS` through `--set-env-vars`.
+  **Step 4's placeholder check needs care**: it currently warns and prompts to
+  abort on any `placeholder` value, which would fire on every Gemini-only deploy
+  once the new secrets exist. A placeholder in an *unadopted* provider is the
+  expected state and must be informational; a placeholder in a provider named by
+  `EVENTMILL_LLM_PROVIDERS` stays blocking.
+- **`cloudbuild.yaml:117/229/257`** — the CI path duplicates the preflight loop,
+  the `--set-secrets` string and the secret-name substitutions. Easy to miss,
+  and it would keep deploying Gemini-only in silence.
+- **`Dockerfile.cloudrun:26`** — installs `[gcp,plugins-*]` only. Add
+  `llm-openai` and `llm-anthropic` extras to `pyproject.toml` and install all
+  three, so the image is consistent and adopting a vendor never needs a rebuild.
+  Neither SDK is declared anywhere today. **`openai` must be `>=1.66`** — the
+  Responses API this plan specifies landed there, and the 1.58.1 currently in
+  the dev venv has no `.responses` attribute at all.
+- Documentation follow-on: `Dockerfile.cloudrun:76`, `setup-deploy-server.sh:108`,
+  `deploy-cloudrun.sh:96`, and the `cloud_install/README.md` env tables.
+
+**Sequencing:** the `pyproject` extras and the Dockerfile can land any time —
+they only make SDKs present. The script changes should land **with or after
+Stage 5**, because until `_discover_models` is provider-driven a mounted
+Anthropic key binds nothing and the deploy would look correct while doing
+nothing.
 
 ---
 
@@ -309,8 +479,11 @@ decision. The end state is not "we moved to provider X". It is a per-module
 record of which providers are acceptable for that module and what each one costs.
 
 This is also why `model_tier` lives in the plugin manifest. That mechanism
-already lets one module run on a different model from another; the same mechanism
-is what a per-module provider choice would eventually need.
+already lets one module run on a different model from another, and Stage 5
+extends the same channel to the provider — so by the time Part 2 starts, running
+one module on a different vendor from the rest is a `use` override, not a code
+change. Part 2 records which vendors are acceptable per module; the mechanism to
+act on that answer already exists.
 
 ## What is not being assessed, and why
 
@@ -386,6 +559,20 @@ a distribution and not a single figure. Every run records `provider_id` and
 `model_served`, so a comparison rests on what actually ran rather than what was
 configured — the gap `model_version` was added to close on 2026-09-12.
 
+**Concurrent binding makes this one invocation rather than three sessions.** The
+projector already supports multiple runs per invocation (`runs`, `max_paths`),
+and with several providers bound the same mechanism spreads those runs across
+vendors. That removes the largest confound in the original design: three
+sequentially-configured sessions differ in more than the vendor — session state,
+artifact set, and any environment drift between them all move too. One
+invocation over one flow map with one actor holds every one of those fixed.
+
+It also raises the stakes on attribution. Two run records from one session may
+now come from two vendors, so `provider_id` on the record
+(`RUN_RECORD_SCHEMA_VERSION` 4, Stage 5) stops being a convenience and becomes
+the only thing that makes the output interpretable. A run record without it is
+not a weaker measurement — it is an unreadable one.
+
 A provider is **acceptable for this module** when its rejection count is at or
 below the `stepstate-medium-2` baseline and no run produces a parse failure or a
 truncated reply. Everything else is a cost discussion.
@@ -425,21 +612,42 @@ the model.
 
 ---
 
+## In scope, corrected 2026-09-13
+
+Two items previously listed as out of scope were **requirements all along**, and
+ruling them out was this plan's own error rather than a design decision:
+
+- **Several providers bound at once, and mixed across modules.** Gemini Flash for
+  light-tier work while `adversary_path_projector` runs on Anthropic is a
+  supported configuration, not a violation. Decision 8 makes the dispatcher able
+  to express it.
+- **Per-module provider selection at runtime.** The point of the work, not a
+  Part 2 recommendation to be deferred. Decision 9 gives it a channel that does
+  not touch plugin code. The earlier justification — "speculative until the
+  assessment says it is needed" — inverted the requirement and the evidence for
+  it.
+
+Both are about *deliberate* selection. The distinction from the bullet below is
+the whole of it: an operator choosing a vendor and having it recorded, versus a
+session moving vendors on its own.
+
 ## Out of scope, deliberately
 
-- **Cross-provider fallback.** A process started on OpenAI must not send
-  investigation data to Google or Anthropic because a quota ran out. Fallback
-  stays within the active provider's two tiers. This is a data-handling boundary,
-  not a routing convenience.
-- **Mixing providers across tiers.** Same reason, plus it makes every Part 2
-  comparison unattributable.
-- **Per-module provider selection at runtime.** The manifest mechanism could
-  support it and Part 2 may recommend it, but building it before the assessment
-  says it is needed is speculative.
+- **Automatic cross-provider fallback.** A quota exhaustion must not move a
+  session to another vendor. Nobody chose it, investigation data reaches a
+  provider the operator did not select, and the output is unattributable
+  afterwards. Fallback stays within the active provider's two tiers —
+  `_fallback_client`, and nowhere else. This is a data-handling boundary, not a
+  routing convenience, and it is narrower than it looks: it constrains one
+  method, not the shape of the design.
 - **Retiring `thinking_level` / `media_resolution` from `QueryHints`.** They stay;
   `GeminiClient` consumes them, others map or ignore with a diagnostic.
 - **Prompt changes.** Prompts stay byte-identical across a provider swap or the
-  comparison means nothing — the rule the 3.8 swap held to.
+  comparison means nothing — the rule the 3.8 swap held to. This is also why the
+  provider override rides the scoping wrapper: a channel that reached plugin
+  code could not make this guarantee.
+- **A `provider` field on `QueryHints`.** Decision 9. It would put vendor choice
+  in plugin code and let a plugin override an operator's A/B selection.
 - **Adopting `structured_output`.** Still declared and unused, for the reasons
   recorded on 2026-09-12. If a provider produces *parse failures*, the narrow fix
   is a JSON mime type, not a schema. Part 2 may revisit this per provider.
@@ -450,9 +658,14 @@ the model.
 ## Rollback
 
 Part 1 Stages 1–2 are a pure refactor: revert the commit. From Stage 3 on, the
-rollback is `EVENTMILL_LLM_PROVIDER=gcp_gemini`, which is the default — a broken
+rollback is `EVENTMILL_LLM_PROVIDERS=gcp_gemini`, which is the default — a broken
 new provider client cannot affect the Gemini path, because it shares no code with
 it. That property is the point of the design and belongs in `AGENTS.md`.
+
+Stage 6's placeholder seeding gives the same property in the infrastructure: a
+deployment carrying all three secrets but real keys only for Gemini behaves
+exactly as a Gemini-only deployment does, and reverting an adoption is removing
+a `use` override — not a redeploy.
 
 Part 2 changes no code by default. A module moves to a different provider only by
 an explicit decision recorded in a change log, and moves back by reverting that
