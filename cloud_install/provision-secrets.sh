@@ -219,6 +219,35 @@ create_restricted_gemini_key \
     "Heavy tier — threat modeling, attack path reasoning, risk assessment"
 
 # =============================================================================
+# Section 1b: Anthropic and OpenAI API Keys (optional)
+# =============================================================================
+# These are NOT created here. create_restricted_gemini_key above calls
+# `gcloud services api-keys create`, which issues a Google API key restricted
+# to generativelanguage.googleapis.com — a Google-only mechanism with no
+# equivalent for another vendor. Anthropic and OpenAI keys are issued in those
+# vendors' own consoles and pasted in, so they use the same interactive path as
+# the ttyd credentials below.
+#
+# One key per provider, not two. The dual-tier split above exists to stop bulk
+# Flash work consuming Pro quota; neither Anthropic nor OpenAI keys by tier, so
+# a single key serves both tiers of that provider.
+#
+# Skipping these is the normal case. Both secrets are created holding
+# "placeholder" by provision-gcp-project.sh and mounted into the container
+# regardless, so the deployment shape never changes — adopting a vendor later
+# means setting a value here and adding it to EVENTMILL_LLM_PROVIDERS, with no
+# infrastructure change and no rebuild.
+# =============================================================================
+
+add_secret_version \
+    "eventmill-anthropic-api" \
+    "Anthropic API key — leave unset unless you are using Anthropic"
+
+add_secret_version \
+    "eventmill-openai-api" \
+    "OpenAI API key — leave unset unless you are using OpenAI"
+
+# =============================================================================
 # Section 2: GCS Service Account Key
 # =============================================================================
 # JSON key file for a service account with Storage Object Viewer/User
@@ -264,6 +293,8 @@ echo ""
 echo "To verify secrets have valid values:"
 echo "  gcloud secrets versions list eventmill-gemini-flash-api --project=${PROJECT_ID}"
 echo "  gcloud secrets versions list eventmill-gemini-pro-api   --project=${PROJECT_ID}"
+echo "  gcloud secrets versions list eventmill-anthropic-api    --project=${PROJECT_ID}"
+echo "  gcloud secrets versions list eventmill-openai-api       --project=${PROJECT_ID}"
 echo "  gcloud secrets versions list eventmill-ttyd-user        --project=${PROJECT_ID}"
 echo ""
 echo "To deploy Event Mill:"

@@ -128,8 +128,15 @@ BUCKET_PREFIX="${EVENTMILL_BUCKET_PREFIX:-${PROJECT_ID}-eventmill}"
 
 SECRET_GEMINI_FLASH="${EVENTMILL_SECRET_GEMINI_FLASH:-eventmill-gemini-flash-api}"
 SECRET_GEMINI_PRO="${EVENTMILL_SECRET_GEMINI_PRO:-eventmill-gemini-pro-api}"
+SECRET_ANTHROPIC="${EVENTMILL_SECRET_ANTHROPIC:-eventmill-anthropic-api}"
+SECRET_OPENAI="${EVENTMILL_SECRET_OPENAI:-eventmill-openai-api}"
 SECRET_TTYD_USER="${EVENTMILL_SECRET_TTYD_USER:-eventmill-ttyd-user}"
 SECRET_TTYD_CRED="${EVENTMILL_SECRET_TTYD_CRED:-eventmill-ttyd-cred}"
+
+# Providers this deployment intends to actually use. Only these must hold real
+# key values; the rest are mounted holding "placeholder" so the revision shape
+# is identical for every deployment and adopting a vendor needs no redeploy.
+LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini}"
 
 SA_NAME="${EVENTMILL_SA_NAME:-eventmill-runner}"
 
@@ -199,12 +206,67 @@ fi
 IMAGE_TAG="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || true)"
 [ -n "${IMAGE_TAG}" ] || IMAGE_TAG="$(date -u +%Y%m%d-%H%M%S)"
 
+# Every secret this revision mounts. Must exist and be readable by the runtime
+# SA, or Cloud Run rejects the revision — which is why Step 3 preflights all of
+# them before paying for a build. Provisioned by provision-gcp-project.sh.
 ALL_SECRETS=(
     "${SECRET_GEMINI_FLASH}"
     "${SECRET_GEMINI_PRO}"
+    "${SECRET_ANTHROPIC}"
+    "${SECRET_OPENAI}"
     "${SECRET_TTYD_USER}"
     "${SECRET_TTYD_CRED}"
 )
+
+# Of those, the ones that must hold a REAL value rather than "placeholder".
+# The ttyd pair always must — a web terminal whose password is "placeholder" is
+# an open door. An LLM key must only when its provider is named in
+# EVENTMILL_LLM_PROVIDERS: a placeholder in a provider nobody has adopted is
+# the expected steady state, not a problem to warn about on every deploy.
+REQUIRED_SECRETS=("${SECRET_TTYD_USER}" "${SECRET_TTYD_CRED}")
+for _provider in ${LLM_PROVIDERS}; do
+    case "${_provider}" in
+        gcp_gemini)
+            REQUIRED_SECRETS+=("${SECRET_GEMINI_FLASH}" "${SECRET_GEMINI_PRO}") ;;
+        anthropic)
+            REQUIRED_SECRETS+=("${SECRET_ANTHROPIC}") ;;
+        openai)
+            REQUIRED_SECRETS+=("${SECRET_OPENAI}") ;;
+        *)
+            echo "ERROR: unknown provider '${_provider}' in EVENTMILL_LLM_PROVIDERS."
+            echo "       Known: gcp_gemini anthropic openai"
+            echo ""
+            echo "  Refused rather than ignored: a typo here would deploy with"
+            echo "  that provider silently absent, which looks like a working"
+            echo "  deployment until a tool tries to use it."
+            exit 1 ;;
+    esac
+done
+unset _provider
+
+# True when a placeholder in this secret should block the deploy.
+secret_is_required() {
+    local candidate="$1" s
+    for s in "${REQUIRED_SECRETS[@]}"; do
+        [ "${s}" = "${candidate}" ] && return 0
+    done
+    return 1
+}
+
+# What gets mounted, as env var = secret : version. Built here rather than
+# inline in the deploy call so the list is readable and only stated once.
+#
+# ALL providers are mounted, including ones holding "placeholder". That is the
+# point of the placeholder design: the revision shape is identical for every
+# deployment, so adopting a vendor is a new secret version plus a restart, not
+# a different deploy. Nothing reads a dormant key — the runtime binds a
+# provider only when its manifest and key are both present.
+SECRET_MOUNTS="GEMINI_FLASH_API_KEY=${SECRET_GEMINI_FLASH}:latest"
+SECRET_MOUNTS="${SECRET_MOUNTS},GEMINI_PRO_API_KEY=${SECRET_GEMINI_PRO}:latest"
+SECRET_MOUNTS="${SECRET_MOUNTS},ANTHROPIC_API_KEY=${SECRET_ANTHROPIC}:latest"
+SECRET_MOUNTS="${SECRET_MOUNTS},OPENAI_API_KEY=${SECRET_OPENAI}:latest"
+SECRET_MOUNTS="${SECRET_MOUNTS},TTYD_USERNAME=${SECRET_TTYD_USER}:latest"
+SECRET_MOUNTS="${SECRET_MOUNTS},TTYD_PASSWORD=${SECRET_TTYD_CRED}:latest"
 
 echo "⚙ Event Mill — Cloud Run Deployment (Secret Manager)"
 echo "========================================================="
@@ -546,13 +608,22 @@ echo ""
 # terminal whose password is "placeholder". Values are never printed.
 # ---------------------------------------------------------------------------
 echo "🔐 Step 4: Checking secret values..."
+echo "   Providers in use: ${LLM_PROVIDERS}"
 PLACEHOLDER_FOUND=0
+DORMANT_FOUND=0
 for secret in "${ALL_SECRETS[@]}"; do
     if value=$(gcloud secrets versions access latest \
                   --secret="${secret}" --project="${PROJECT_ID}" 2>/dev/null); then
         if [ "${value}" = "placeholder" ]; then
-            echo "   ⚠ ${secret} still holds the seeded 'placeholder' value"
-            PLACEHOLDER_FOUND=1
+            if secret_is_required "${secret}"; then
+                echo "   ⚠ ${secret} still holds the seeded 'placeholder' value"
+                PLACEHOLDER_FOUND=1
+            else
+                # Expected: a provider nobody has adopted. Mounted so the
+                # revision shape never changes, dormant until someone sets it.
+                echo "   · ${secret} holds 'placeholder' (provider not in use — fine)"
+                DORMANT_FOUND=1
+            fi
         else
             echo "   ✓ ${secret} has a real value (${#value} chars)"
         fi
@@ -562,8 +633,18 @@ for secret in "${ALL_SECRETS[@]}"; do
     unset value
 done
 
+if [ "${DORMANT_FOUND}" -ne 0 ]; then
+    echo ""
+    echo "   Dormant secrets are mounted but unused. To adopt one later:"
+    echo "     echo -n 'KEY' | gcloud secrets versions add SECRET_NAME \\"
+    echo "         --project=${PROJECT_ID} --data-file=-"
+    echo "   then add its provider to EVENTMILL_LLM_PROVIDERS and redeploy."
+fi
+
 if [ "${PLACEHOLDER_FOUND}" -ne 0 ]; then
     echo ""
+    echo "   A provider you ARE using has no real key, or ttyd would deploy"
+    echo "   with the password 'placeholder'."
     echo "   Set real values first:  bash cloud_install/provision-secrets.sh"
     if [ "${DRY_RUN}" != "1" ]; then
         read -r -p "   Deploy anyway? [y/N]: " confirm
@@ -721,8 +802,8 @@ if ! gcloud run deploy "${SERVICE_NAME}" \
         --concurrency=5 \
         --session-affinity \
         --service-account="${SA_EMAIL}" \
-        --set-secrets="GEMINI_FLASH_API_KEY=${SECRET_GEMINI_FLASH}:latest,GEMINI_PRO_API_KEY=${SECRET_GEMINI_PRO}:latest,TTYD_USERNAME=${SECRET_TTYD_USER}:latest,TTYD_PASSWORD=${SECRET_TTYD_CRED}:latest" \
-        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},EVENTMILL_BUCKET_PREFIX=${BUCKET_PREFIX},EVENTMILL_LOG_LEVEL=${LOG_LEVEL}" \
+        --set-secrets="${SECRET_MOUNTS}" \
+        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},EVENTMILL_BUCKET_PREFIX=${BUCKET_PREFIX},EVENTMILL_LOG_LEVEL=${LOG_LEVEL},EVENTMILL_LLM_PROVIDERS=${LLM_PROVIDERS}" \
         "${AUTH_FLAG}"; then
     echo ""
     if [ "${SERVICE_EXISTS}" = "1" ]; then
@@ -774,8 +855,19 @@ if [ "${ALLOW_UNAUTH}" = "true" ]; then
     echo ""
 fi
 
-echo "📋 Rotate a secret:"
+echo "🤖 LLM providers:  ${LLM_PROVIDERS}"
+echo "   Mounted keys:   GEMINI_FLASH_API_KEY, GEMINI_PRO_API_KEY,"
+echo "                   ANTHROPIC_API_KEY, OPENAI_API_KEY"
+echo "   Every key is mounted; a provider not listed above holds 'placeholder'"
+echo "   and is simply unused. Confirm what arrived with 'printenv' in the"
+echo "   terminal — model discovery currently reads the Gemini manifest only,"
+echo "   so 'models' will not list another vendor even with a real key set."
+echo ""
+echo "📋 Rotate a secret, or adopt a new provider:"
 echo "   echo -n 'new-value' | gcloud secrets versions add ${SECRET_GEMINI_FLASH} \\"
 echo "       --project=${PROJECT_ID} --data-file=-"
 echo "   (then redeploy, or the running revision keeps the old pinned version)"
+echo ""
+echo "   Secrets: ${SECRET_GEMINI_FLASH}, ${SECRET_GEMINI_PRO},"
+echo "            ${SECRET_ANTHROPIC}, ${SECRET_OPENAI}"
 echo ""
