@@ -18,6 +18,13 @@
 
 Plan: `docs/specs/model_interchange_gemini_3_8_flash.md`.
 
+**Outcome: accepted.** Committed as `9b43aa5`. The operator's verdict after
+comparing artifacts from their own runs — *"outputs are as good or better than
+3.5"* — which matches the probe: indistinguishable output, roughly 30% faster.
+The framework's interchange machinery held; the only code that had to change for
+the swap itself was one JSON block, and everything else in this entry is either
+a gap the comparison exposed or a stale name it tripped over.
+
 ---
 
 ## Problem
@@ -338,17 +345,28 @@ decision from this swap, and nothing here changed it.
 - **The heavy tier**, and therefore the projector's model. Stage B, with the
   `stepstate-medium-2` baseline to be judged against — rejections being the
   number that matters.
-- **`_NATIVE_TIER` in `threat_intel_ingester`.** The probe surfaced that this
-  light-manifest plugin pins `tier="heavy"` on its native PDF path
-  (`tool.py:290`), so in production that path runs on **3.1 Pro**, not on the
-  light model; only its chunked-text fallback is `tier="light"`. The probe
-  measured the two Flash models on that path because only a light client was
-  connected and the dispatcher falls back when the preferred tier is absent — a
-  valid comparison of the two models on that work, but **not what production
-  does there**. Whether a light-manifest plugin should pin heavy for its main
-  path is a real question, and not one to settle inside a model swap.
 - **Per-tier `output_budget` / `file_handling`.** See Decisions.
 - **Any prompt change.** Prompt tokens have to stay identical or a model
   comparison means nothing.
 - **Phase 4 (`normalize_flow_map`)**, untouched and still the projector's next
   piece of work.
+
+## What the next session picks up
+
+None of these block anything; all were surfaced here and deliberately left.
+
+1. **Stage B** — heavy tier `gemini-3.1-pro-preview` → 3.8 Flash, kept separate
+   so a regression stays attributable to a tier. Judge it against the
+   `stepstate-medium-2` baseline; **rejections is the number that matters**, and
+   `model_served` now makes that comparison rest on what ran.
+2. **Heavy's `fallback_model_id`** still names `gemini-3.5-flash`, which no tier
+   runs as primary. Harmless — a live GA endpoint — retarget with Stage B.
+3. **Four heavy plugins pass no `QueryHints` at all** and so run at Gemini's
+   default `medium` rather than `high`. A cost decision on the expensive tier,
+   not a swap decision.
+4. **The ingester's `medium` thinking is unsettled.** It bought no extra IOCs and
+   ~40% latency on a dense synthetic corpus — the worst case for justifying it.
+   The argument is ambiguous prose, which this corpus does not test. One run
+   against a genuine report settles it either way.
+5. **Per-tier `output_budget` / `file_handling`** stays shared until two models
+   are shown to need different numbers. 3.8 Flash and 3.1 Pro do not.
