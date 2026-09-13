@@ -13,14 +13,16 @@ from __future__ import annotations
 import pytest
 
 from framework.llm.backends.base import DocumentPart
-from framework.llm.client import (
-    LLMDispatcher,
-    MCPLLMClient,
-    TierScopedLLMClient,
+from framework.llm.clients.gemini import (
+    GeminiClient,
     _build_config,
     _finish_reason,
     _model_version,
     _usage,
+)
+from framework.llm.dispatcher import (
+    LLMDispatcher,
+    TierScopedLLMClient,
 )
 from framework.llm.providers import (
     TierSpec,
@@ -34,7 +36,12 @@ from framework.plugins.protocol import ArtifactRef, LLMResponse, QueryHints
 
 
 class FakeClient:
-    """Stand-in for MCPLLMClient that records what it was asked to do."""
+    """Stand-in for a provider client that records what it was asked to do.
+
+    Implements only the public model-client interface. It used to need a
+    ``_build_prompt`` because the dispatcher called it; Stage 1 removed that
+    reach-through, so this is now a fake of the protocol and nothing else.
+    """
 
     def __init__(self, model_id: str, connected: bool = True,
                  fail_with: str | None = None):
@@ -62,8 +69,20 @@ class FakeClient:
             return LLMResponse(ok=False, error=self._fail_with)
         return LLMResponse(ok=True, text=f"answer from {self.model_id}")
 
-    def _build_prompt(self, prompt, grounding_data=None):
-        return prompt
+    def query_with_document(self, prompt, doc, system_context=None,
+                            max_tokens=8192, hints=None):
+        self.calls.append(
+            {"kind": "document", "max_tokens": max_tokens, "hints": hints,
+             "doc": doc}
+        )
+        if self._fail_with:
+            return LLMResponse(ok=False, error=self._fail_with)
+        return LLMResponse(ok=True, text=f"answer from {self.model_id}")
+
+    def with_model(self, model_id):
+        rebound = FakeClient(model_id, connected=self.connected)
+        rebound.total_tokens_used = self.total_tokens_used
+        return rebound
 
 
 def _specs() -> dict[str, TierSpec]:
@@ -453,18 +472,16 @@ class _FakeGenaiClient:
         self.models = type("M", (), {"generate_content": lambda _self, **kw: response})()
 
 
-class _FakeDocClient:
-    """Enough of MCPLLMClient for the document execution path."""
+def _doc_client(response) -> GeminiClient:
+    """A GeminiClient wired to a canned SDK response.
 
-    def __init__(self, response):
-        self.model_id = "pro"
-        self.max_retries = 0
-        self._total_tokens_used = 0
-        self._genai_client = _FakeGenaiClient(response)
-
-    @staticmethod
-    def _is_retriable(exc):
-        return False
+    The document path is a method on the provider client since Stage 1, so
+    these exercise it there rather than on the dispatcher.
+    """
+    client = GeminiClient(model_id="pro", max_retries=0)
+    client._connected = True
+    client._genai_client = _FakeGenaiClient(response)
+    return client
 
 
 class TestTruncationIsVisible:
@@ -485,8 +502,7 @@ class TestTruncationIsVisible:
 
     @staticmethod
     def _run(response):
-        return LLMDispatcher._execute_document_query(
-            client=_FakeDocClient(response),
+        return _doc_client(response).query_with_document(
             prompt="p",
             doc=DocumentPart(mime_type="application/pdf", inline_bytes=b"%PDF"),
             system_context=None,
@@ -526,10 +542,9 @@ class TestServedModelIsRecorded:
         assert _model_version(_FakeSDKResponse(model_version="")) is None
 
     def test_document_query_records_configured_and_served_separately(self):
-        result = LLMDispatcher._execute_document_query(
-            client=_FakeDocClient(
-                _FakeSDKResponse("STOP", _FakeUsage(), "gemini-3.1-pro-001")
-            ),
+        result = _doc_client(
+            _FakeSDKResponse("STOP", _FakeUsage(), "gemini-3.1-pro-001")
+        ).query_with_document(
             prompt="p",
             doc=DocumentPart(mime_type="application/pdf", inline_bytes=b"%PDF"),
             system_context=None,
@@ -539,7 +554,7 @@ class TestServedModelIsRecorded:
         assert result.model_version == "gemini-3.1-pro-001"   # served
 
     def test_text_query_carries_the_served_version(self):
-        client = MCPLLMClient(model_id="flash")
+        client = GeminiClient(model_id="flash")
         client._connected = True
         client._genai_client = _FakeGenaiClient(
             _FakeSDKResponse("STOP", _FakeUsage(), "gemini-3.8-flash-001")
@@ -550,7 +565,7 @@ class TestServedModelIsRecorded:
         assert result.model_version == "gemini-3.8-flash-001"
 
     def test_a_provider_that_reports_nothing_leaves_it_none(self):
-        client = MCPLLMClient(model_id="flash")
+        client = GeminiClient(model_id="flash")
         client._connected = True
         client._genai_client = _FakeGenaiClient(
             _FakeSDKResponse("STOP", _FakeUsage())
@@ -776,11 +791,35 @@ class TestRetiredModelFallback:
     def test_no_fallback_when_tier_declares_none(self, clients):
         d = LLMDispatcher(clients=clients, tier_specs=_specs())
         # light declares no fallback_model_id
-        assert d._retry_on_retired_model(clients["light"], "404 NOT_FOUND") is None
+        failed = LLMResponse(ok=False, error="404 NOT_FOUND")
+        assert d._retry_on_retired_model(clients["light"], failed) is None
 
     def test_non_not_found_errors_do_not_substitute(self, clients):
         d = LLMDispatcher(clients=clients, tier_specs=_specs())
-        assert d._retry_on_retired_model(clients["heavy"], "500 INTERNAL") is None
+        failed = LLMResponse(ok=False, error="500 INTERNAL")
+        assert d._retry_on_retired_model(clients["heavy"], failed) is None
+
+    def test_a_classified_error_kind_is_preferred_over_the_text(self, clients):
+        """A client that classified its own failure decides the routing.
+
+        The error text here says nothing about a retired model; error_kind
+        does. Routing on the enum is what keeps the next provider's exception
+        vocabulary out of the dispatcher.
+        """
+        d = LLMDispatcher(clients=clients, tier_specs=_specs())
+        failed = LLMResponse(
+            ok=False, error="the provider said something else entirely",
+            error_kind="model_not_found",
+        )
+        substitute = d._retry_on_retired_model(clients["heavy"], failed)
+        assert substitute is not None
+        assert substitute.model_id == "flash"
+
+    def test_an_unclassified_failure_still_falls_back_to_the_text(self, clients):
+        """error_kind is additive: a client that sets none keeps working."""
+        d = LLMDispatcher(clients=clients, tier_specs=_specs())
+        failed = LLMResponse(ok=False, error="404 NOT_FOUND")
+        assert d._retry_on_retired_model(clients["heavy"], failed) is not None
 
     def test_multimodal_retries_on_a_retired_model(self, clients, monkeypatch):
         clients["heavy"]._fail_with = "404 NOT_FOUND"
@@ -794,29 +833,35 @@ class TestRetiredModelFallback:
         assert result.ok
         assert substitute.calls[0]["kind"] == "multimodal"
 
-    def test_document_query_retries_on_a_retired_model(self, clients, monkeypatch):
-        """The document path defaults to the Preview model, so it needs this most."""
+    def test_document_query_retries_on_a_retired_model(self, clients):
+        """The document path defaults to the Preview model, so it needs this most.
+
+        No monkeypatching: the whole path runs, from the heavy client's 404
+        through with_model() to the substitute serving the retry. The
+        substitute a FakeClient returns carries no failure, so a second
+        attempt that reaches it succeeds.
+        """
+        clients["heavy"]._fail_with = "404 NOT_FOUND"
         d = LLMDispatcher(clients=clients, tier_specs=_specs())
-        substitute = FakeClient("flash")
-        monkeypatch.setattr(d, "_retry_on_retired_model", lambda c, e: substitute)
-
-        attempts = []
-
-        def fake_exec(client, prompt, doc, system_context, max_tokens, hints=None):
-            attempts.append(client)
-            if len(attempts) == 1:
-                return LLMResponse(ok=False, error="404 NOT_FOUND")
-            return LLMResponse(ok=True, text="ok")
-
-        monkeypatch.setattr(d, "_execute_document_query", fake_exec)
         art = ArtifactRef(
             "a1", "pdf_report", "", metadata={"mime_type": "application/pdf"},
         )
         result = d.query_with_document("p", art)
 
         assert result.ok
-        assert attempts[0] is clients["heavy"]
-        assert attempts[1] is substitute
+        assert clients["heavy"].calls[0]["kind"] == "document"
+        # The tier was rebound to the fallback model for the rest of the session.
+        assert d._clients["heavy"].model_id == "flash"
+
+    def test_the_substitute_carries_the_spend_forward(self, clients):
+        """total_tokens_used sums over the live clients, so a substitute that
+        started at zero would undercount the session."""
+        clients["heavy"]._fail_with = "404 NOT_FOUND"
+        clients["heavy"].total_tokens_used = 1234
+        d = LLMDispatcher(clients=clients, tier_specs=_specs())
+        d.query_text("p", hints=QueryHints(tier="heavy"))
+
+        assert d._clients["heavy"].total_tokens_used == 1234
 
 
 # ---------------------------------------------------------------------------
@@ -871,7 +916,7 @@ class TestTransientErrorClassification:
     """
 
     def _retriable(self, message: str) -> bool:
-        return MCPLLMClient._is_retriable(Exception(message))
+        return GeminiClient._is_retriable(Exception(message))
 
     def test_gateway_timeout_retries(self):
         assert self._retriable(

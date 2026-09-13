@@ -59,7 +59,11 @@ eventmill_v01/
 │   │
 │   ├── llm/                            # LLM Orchestration
 │   │   ├── __init__.py
-│   │   ├── client.py                   # MCPLLMClient, LLMDispatcher (routes by QueryHints)
+│   │   ├── dispatcher.py               # LLMDispatcher (routes by QueryHints), TierScopedLLMClient
+│   │   ├── model_client.py             # LLMModelClient protocol, error_kind vocabulary
+│   │   ├── clients/                    # One client per provider, each owning its SDK
+│   │   │   ├── __init__.py
+│   │   │   └── gemini.py               # GeminiClient — google.genai
 │   │   ├── backends/                   # Provider-neutral request parts
 │   │   │   ├── __init__.py
 │   │   │   └── base.py                 # DocumentPart

@@ -1,28 +1,26 @@
-"""Stage 0 of the multi-provider plan — the provider seam, pinned before it moves.
+"""The provider seam — pinned in Stage 0, held ever since.
 
 Plan: ``docs/specs/multi_provider_llm_clients.md``.
 
-Two groups of tests here, and the split is the point.
+Two groups of tests here, and the split is still the point.
 
-**Group A passes today.** Routing, clamping, tier fallback and capability checks
-already work against a client that exposes nothing but the public model-client
-interface. That is the part of ``LLMDispatcher`` which is genuinely
-provider-neutral, and these tests exist so a refactor cannot quietly break it.
+**Group A** — routing, clamping, tier fallback and capability checks against a
+client that exposes nothing but the public model-client interface. This is the
+genuinely provider-neutral part of ``LLMDispatcher``, and these exist so a
+refactor cannot quietly break it.
 
-**Group B is expected to fail today**, and is marked ``xfail(strict=True)`` with
-the exact coupling each one is waiting on. These are the paths where the
-dispatcher reaches through the interface into a Gemini client's privates —
-``_build_prompt``, ``_genai_client``, ``transport`` — or constructs an
-``MCPLLMClient`` by name. When Stage 1 moves that code into ``GeminiClient``,
-strict xfail turns the unexpected pass into a failure, so the markers have to
-come off deliberately. **Removing them is Stage 1's definition of done.**
+**Group B** — the paths where the dispatcher used to reach through the
+interface into a Gemini client's privates (``_build_prompt``, ``_genai_client``,
+``transport``) or construct ``MCPLLMClient`` by name. All seven were
+``xfail(strict=True)`` through Stage 0; Stage 1 moved that code into
+``GeminiClient`` and the markers came off. They now guard the split rather than
+describe the leak.
 
-``PublicOnlyClient`` is the instrument. Unlike ``FakeClient`` in
-``test_llm_dispatcher.py`` — which has to implement ``_build_prompt`` to work at
-all, itself evidence of the leak — this one implements only what the
-``LLMModelClient`` protocol will declare. Any private attribute the dispatcher
-reaches for raises ``AttributeError``, which is what ``raises=AttributeError``
-below is asserting: the tests fail for the stated reason, not an unrelated one.
+``PublicOnlyClient`` is the instrument. It implements only what the
+``LLMModelClient`` protocol declares, so any private attribute the dispatcher
+reaches for raises ``AttributeError`` — which is what makes these tests worth
+keeping now that they pass. A dispatcher that works against this fake works
+against a provider client that shares no code with Gemini.
 """
 
 from __future__ import annotations
@@ -34,7 +32,7 @@ from pathlib import Path
 import pytest
 
 from framework.llm.backends.base import DocumentPart
-from framework.llm.client import LLMDispatcher
+from framework.llm.dispatcher import LLMDispatcher
 from framework.llm.providers import TierSpec
 from framework.plugins.protocol import ArtifactRef, LLMResponse, QueryHints
 
@@ -81,8 +79,8 @@ class PublicOnlyClient:
     def with_model(self, model_id: str) -> "PublicOnlyClient":
         """Rebind to another model id, carrying the live session forward.
 
-        The operation ``_retry_on_retired_model`` open-codes today by cloning
-        four private attributes of an ``MCPLLMClient``.
+        ``_retry_on_retired_model`` used to open-code this by cloning four
+        private attributes of an ``MCPLLMClient``.
         """
         rebound = PublicOnlyClient(
             model_id=model_id,
@@ -127,9 +125,8 @@ class PublicOnlyClient:
                             hints=None) -> LLMResponse:
         """Take a resolved DocumentPart and decide the ingestion path itself.
 
-        The dispatcher does this on the client's behalf today, in
-        ``LLMDispatcher._execute_document_query`` — a staticmethod that builds
-        Gemini ``Part`` objects from another object's private SDK handle.
+        The dispatcher used to do this on the client's behalf, building Gemini
+        ``Part`` objects from another object's private SDK handle.
         """
         failed = self._record(
             "document", max_tokens=max_tokens, hints=hints, doc=doc, prompt=prompt,
@@ -263,25 +260,20 @@ class TestPublicInterfaceIsEnoughToday:
 
 
 # ---------------------------------------------------------------------------
-# Group B — the seam, as it must look after Stage 1
+# Group B — the seam, as Stage 1 made it
 # ---------------------------------------------------------------------------
 
 
 class TestDocumentPathBelongsToTheClient:
-    """``_execute_document_query`` must become a method on the provider client.
+    """The document path belongs to the provider client.
 
-    Today it is ``LLMDispatcher._execute_document_query`` (``client.py:1167``),
-    a staticmethod that builds ``genai_types.Part`` objects out of
-    ``client._genai_client``. The dispatcher's job is to resolve the artifact
-    into a ``DocumentPart``, run the PDF guard and clamp the budget — not to
-    know that one vendor reads ``gs://`` and another needs bytes.
+    It used to be ``LLMDispatcher._execute_document_query``, a staticmethod
+    that built ``genai_types.Part`` objects out of ``client._genai_client``.
+    The dispatcher's job is to resolve the artifact into a ``DocumentPart``,
+    run the PDF guard and clamp the budget — not to know that one vendor reads
+    ``gs://`` and another needs bytes.
     """
 
-    @pytest.mark.xfail(
-        strict=True, raises=AttributeError,
-        reason="Stage 1: query_with_document calls client._build_prompt "
-               "(client.py:981) before reaching the client's public interface",
-    )
     def test_document_query_reaches_the_client_through_its_interface(
         self, dispatcher, clients, pdf_artifact,
     ):
@@ -292,11 +284,6 @@ class TestDocumentPathBelongsToTheClient:
         assert result.text == "document from fake-light"
         assert clients["light"].calls[0]["kind"] == "document"
 
-    @pytest.mark.xfail(
-        strict=True, raises=AttributeError,
-        reason="Stage 1: same _build_prompt reach-through; grounding data has "
-               "to arrive as an argument, not via a private method on a client",
-    )
     def test_grounding_data_reaches_the_client_on_the_document_path(
         self, dispatcher, clients, pdf_artifact,
     ):
@@ -306,12 +293,6 @@ class TestDocumentPathBelongsToTheClient:
         )
         assert clients["light"].calls[0]["kind"] == "document"
 
-    @pytest.mark.xfail(
-        strict=True, raises=AttributeError,
-        reason="Stage 1: the dispatcher chooses the gs:// ingestion path "
-               "itself in _execute_document_query instead of handing the "
-               "client a DocumentPart and letting it decide",
-    )
     def test_the_client_decides_the_ingestion_path(
         self, dispatcher, clients, pdf_artifact,
     ):
@@ -327,8 +308,7 @@ class TestDocumentPathBelongsToTheClient:
         """The one document-path decision that is *not* the client's.
 
         Refusing an oversized PDF is a policy call made from the manifest, and
-        it has to happen before any provider is asked to do work. This passes
-        today and must keep passing after the split.
+        it has to happen before any provider is asked to do work.
         """
         huge = ArtifactRef(
             artifact_id="art-huge", artifact_type="pdf_report", file_path="",
@@ -346,18 +326,13 @@ class TestDocumentPathBelongsToTheClient:
 class TestRetiredModelRetryStaysWithinTheProvider:
     """``_retry_on_retired_model`` must not name a provider class.
 
-    Today it constructs ``MCPLLMClient`` directly (``client.py:759``) and
-    copies ``_genai_client``, ``_api_key_env_var``, ``_connected`` and
-    ``_total_tokens_used`` across to reuse the live session. A factory that
-    returns a fresh client loses all four, which is why the replacement is a
-    ``with_model()`` operation on the client rather than a lookup.
+    It used to construct ``MCPLLMClient`` directly and copy ``_genai_client``,
+    ``_api_key_env_var``, ``_connected`` and ``_total_tokens_used`` across to
+    reuse the live session. A factory returning a fresh client loses all four,
+    which is why the replacement is a ``with_model()`` operation on the client
+    rather than a lookup.
     """
 
-    @pytest.mark.xfail(
-        strict=True, raises=AttributeError,
-        reason="Stage 1: builds MCPLLMClient(transport=client.transport, ...) "
-               "and clones its private SDK handle",
-    )
     def test_the_substitute_is_the_same_provider_client(self):
         client = PublicOnlyClient(
             "fake-light", "light",
@@ -373,11 +348,6 @@ class TestRetiredModelRetryStaysWithinTheProvider:
         assert substitute.model_id == "fake-light-ga"
         assert result.ok
 
-    @pytest.mark.xfail(
-        strict=True, raises=AttributeError,
-        reason="Stage 1: same construction; the spend carried forward is a "
-               "copy of a private counter rather than a client operation",
-    )
     def test_the_substitute_carries_the_session_spend_forward(self):
         client = PublicOnlyClient(
             "fake-light", "light",
@@ -399,19 +369,9 @@ class TestDispatcherCarriesNoVendorSdk:
     drifting back in during Stage 3 or Stage 5.
     """
 
-    @pytest.mark.xfail(
-        strict=True, raises=ModuleNotFoundError,
-        reason="Stage 1: framework/llm/client.py becomes dispatcher.py once "
-               "the Gemini code leaves it",
-    )
     def test_the_dispatcher_module_exists_under_its_real_name(self):
         importlib.import_module("framework.llm.dispatcher")
 
-    @pytest.mark.xfail(
-        strict=True, raises=FileNotFoundError,
-        reason="Stage 1: same rename; today the dispatcher lives in client.py "
-               "and imports google.genai at module scope",
-    )
     def test_the_dispatcher_imports_no_vendor_sdk(self):
         source = (REPO_ROOT / "framework" / "llm" / "dispatcher.py").read_text(
             encoding="utf-8",
@@ -421,17 +381,6 @@ class TestDispatcherCarriesNoVendorSdk:
             f"dispatcher.py imports vendor SDKs: "
             f"{sorted(imported & VENDOR_SDK_ROOTS)}"
         )
-
-    def test_the_current_dispatcher_module_does_import_one(self):
-        """Pins why the two above fail, so they cannot fail for another reason.
-
-        Delete this with the xfail markers in Stage 1 — it asserts the defect,
-        not the requirement.
-        """
-        source = (REPO_ROOT / "framework" / "llm" / "client.py").read_text(
-            encoding="utf-8",
-        )
-        assert "google" in _imported_roots(source)
 
 
 def _imported_roots(source: str) -> set[str]:

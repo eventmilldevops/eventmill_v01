@@ -97,8 +97,9 @@ needs no code in the plugin. `LLMDispatcher` stays plugin-agnostic.
 
 `framework/llm/providers/gcp_gemini.json` is the **single source of truth** for
 model ids, token limits, per-tier capabilities and PDF page cost. Do not hardcode
-any of those elsewhere. `framework/llm/client.py` reads it — for tier caps, native
-document capability, and PDF page cost alike — rather than repeating any of it.
+any of those elsewhere. `framework/llm/clients/gemini.py` reads it — for tier
+caps, native document capability, and PDF page cost alike — rather than
+repeating any of it.
 
 The two tiers are **capacity-identical** (1,048,576 in / 65,536 out). Tier means
 reasoning depth and cost, never how much fits — any logic that picks a tier from
@@ -132,7 +133,9 @@ and is silently wrong, which is why the deploy scripts guard it.
 |---|---|
 | Plugin contract, error codes, timeout classes | `framework/plugins/protocol.py` |
 | Manifest fields and validation | `framework/plugins/loader.py`, `docs/specs/manifest_schema.json` |
-| Tier routing, clamping, fallback | `framework/llm/client.py` |
+| Tier routing, clamping, fallback | `framework/llm/dispatcher.py` |
+| What a provider client must implement | `framework/llm/model_client.py` |
+| Gemini SDK calls, request/response shape, error classification | `framework/llm/clients/gemini.py` |
 | Model facts | `framework/llm/providers/gcp_gemini.json` |
 | Document profiling, page-range batching plan | `framework/documents/profile.py`, `framework/documents/pdf_split.py` |
 | Normative plugin spec | `docs/specs/tool_plugin_spec.md` |

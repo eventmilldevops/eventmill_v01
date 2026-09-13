@@ -86,6 +86,15 @@ class LLMResponse:
     # differ and a provider-side version change is invisible without this.
     # None when the provider reports nothing.
     model_version: str | None = None
+    # Provider-neutral classification of a failure, from the closed vocabulary
+    # in framework/llm/model_client.py. The client that owns the provider's
+    # exceptions classifies them; the dispatcher routes on this rather than on
+    # one vendor's error text. None when the failure was not classified.
+    error_kind: str | None = None
+    # Provider manifest id that served (or failed) the request, e.g.
+    # "gcp_gemini". Recorded so a cross-provider comparison rests on what
+    # actually ran.
+    provider_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -288,7 +288,7 @@ think it says:
   path already travelled from is allowed on its own, and says so.
 - **Too many components.** Prompt size grows with the map, and a large map at a
   high `thinking_level` can run into the request deadline — 180 s, set by the
-  client timeout in `framework/llm/client.py`, which the SDK also sends to Google
+  client timeout in `framework/llm/clients/gemini.py`, which the SDK also sends to Google
   as the server deadline. Shrink the map before reducing reasoning depth.
 
 ## Notes on mitigation ids

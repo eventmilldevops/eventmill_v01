@@ -29,12 +29,13 @@ from ..session.models import Pillar, ToolExecution, ToolExecutionStatus
 from ..plugins.loader import PluginLoader, LoadedPlugin
 from ..routing.router import Router, RouterConfig
 from ..artifacts.registry import ArtifactRegistry, create_artifact_registration_callback
-from ..llm.client import (
+from ..llm.clients.gemini import GeminiClient
+from ..llm.dispatcher import (
     ContextBuilder,
     LLMDispatcher,
-    MCPLLMClient,
     TierScopedLLMClient,
 )
+from ..llm.model_client import LLMModelClient
 from ..llm.providers import load_tier_specs
 from ..plugins.protocol import (
     ArtifactRef,
@@ -343,7 +344,7 @@ class EventMillShell(cmd.Cmd):
         # Initialize components
         self.session_manager = SessionManager(self.workspace_path)
         self.plugin_loader = PluginLoader(self.plugins_path)
-        self.llm_client: MCPLLMClient | LLMDispatcher | None = None
+        self.llm_client: LLMModelClient | LLMDispatcher | None = None
         self.router: Router | None = None
         self.artifact_registry: ArtifactRegistry | None = None
         self.context_builder = ContextBuilder()
@@ -405,7 +406,7 @@ class EventMillShell(cmd.Cmd):
         every tool collapsing onto Flash.
 
         One key may reach Flash but not the Pro preview. That binds cleanly —
-        MCPLLMClient.connect() does no entitlement check — and surfaces as
+        GeminiClient.connect() does no entitlement check — and surfaces as
         PERMISSION_DENIED on first use, which LLMDispatcher._is_access_error
         catches and falls back to the other tier.
         """
@@ -3441,7 +3442,7 @@ class EventMillShell(cmd.Cmd):
         
         if not model_id:
             # No model specified — connect ALL available models as a tiered pair
-            connected_clients: dict[str, MCPLLMClient] = {}
+            connected_clients: dict[str, LLMModelClient] = {}
             failed: list[str] = []
 
             for m in self._available_models:
@@ -3449,8 +3450,10 @@ class EventMillShell(cmd.Cmd):
                 if not api_key:
                     failed.append(f"  ✗ {m['name']}: {m['env_var']} not set")
                     continue
-                client = MCPLLMClient(model_id=m["id"], transport=transport)
-                client._api_key_env_var = m["env_var"]
+                client = GeminiClient(
+                    model_id=m["id"], transport=transport,
+                    tier=m["tier"], api_key_env_var=m["env_var"],
+                )
                 if client.connect(api_key=api_key):
                     connected_clients[m["tier"]] = client
                     print(f"  ✓ {m['name']} ({m['id']})")
@@ -3497,11 +3500,12 @@ class EventMillShell(cmd.Cmd):
             print(f"  API key not found in {selected_model['env_var']}")
             return
 
-        primary_client = MCPLLMClient(
+        primary_client = GeminiClient(
             model_id=selected_model["id"],
             transport=transport,
+            tier=selected_model["tier"],
+            api_key_env_var=selected_model["env_var"],
         )
-        primary_client._api_key_env_var = selected_model["env_var"]
 
         if not primary_client.connect(api_key=api_key):
             print(f"  ✗ Failed to connect to {selected_model['name']}")
@@ -3513,18 +3517,22 @@ class EventMillShell(cmd.Cmd):
         print(f"    Tier: {selected_model['tier']}")
 
         # Silently try to connect the other tier for quota fallback
-        connected_clients: dict[str, MCPLLMClient] = {selected_model["tier"]: primary_client}
+        connected_clients: dict[str, LLMModelClient] = {
+            selected_model["tier"]: primary_client
+        }
         other_models = [m for m in self._available_models if m["tier"] != selected_model["tier"]]
         for m in other_models:
             other_key = os.environ.get(m["env_var"], "")
             if other_key:
-                fallback_client = MCPLLMClient(model_id=m["id"], transport=transport)
-                fallback_client._api_key_env_var = m["env_var"]
+                fallback_client = GeminiClient(
+                    model_id=m["id"], transport=transport,
+                    tier=m["tier"], api_key_env_var=m["env_var"],
+                )
                 if fallback_client.connect(api_key=other_key):
                     connected_clients[m["tier"]] = fallback_client
                     print(f"  ✓ {m['name']} available as quota fallback")
 
-        # Always dispatch, even with a single client. A bare MCPLLMClient
+        # Always dispatch, even with a single client. A bare client
         # skips token clamping, the PDF context guard, the retired-model
         # retry, and native document handling entirely.
         self.llm_client = LLMDispatcher(
@@ -3842,7 +3850,7 @@ class EventMillShell(cmd.Cmd):
         if isinstance(self.llm_client, LLMDispatcher):
             c = self.llm_client._clients.get(model["tier"])
             return "✓ connected" if (c and c.connected) else ""
-        if isinstance(self.llm_client, MCPLLMClient):
+        if isinstance(self.llm_client, GeminiClient):
             return "✓ connected" if (self.llm_client.model_id == model["id"] and self.llm_client.connected) else ""
         return ""
 

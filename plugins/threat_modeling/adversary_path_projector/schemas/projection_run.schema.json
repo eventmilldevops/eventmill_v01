@@ -88,7 +88,7 @@
         },
         "model_served": {
           "type": ["string", "null"],
-          "description": "The id the API reports having served the request (response.model_version, captured by framework/llm/client.py since schema_version 3). An alias resolves to a dated build, so this is the only field that shows a provider-side version change inside one model name — the confound that would otherwise be invisible when comparing two models over the same flow map. Null on records written before schema_version 3, and whenever the provider reports nothing."
+          "description": "The id the API reports having served the request (response.model_version, captured by the provider client since schema_version 3). An alias resolves to a dated build, so this is the only field that shows a provider-side version change inside one model name — the confound that would otherwise be invisible when comparing two models over the same flow map. Null on records written before schema_version 3, and whenever the provider reports nothing."
         },
         "tier": { "type": "string" },
         "thinking_level": {
