@@ -300,9 +300,69 @@ reproduced 82/82 non-technique recall on the probe corpus.
 
 Change log: `docs/change_log/2026-09-13-provider-seam-stage-1.md`.
 
+### Stage 2a — three providers reachable, one bound — **DONE 2026-09-13/14**
+
+Inserted after Stage 1 from the operator's framing: *"only gemini light and
+heavy need to work with the other modules; the first goal is to confirm the
+keys load and we can make client connections."* That splits cleanly from the
+rekey and was worth having first, because it makes Stage 2 land against
+providers already known to be reachable rather than against assumptions.
+
+The deliverable is **configurable and provably reachable, not bindable**.
+`LLMDispatcher._clients` is untouched and still holds Gemini alone — while it
+is keyed by tier, an `AnthropicClient` under `"heavy"` would evict Gemini Pro
+and route every heavy plugin to a vendor nobody chose. A test enforces it.
+
+Landed: `anthropic.json` / `openai.json` with both tiers
+(`claude-sonnet-5`/`claude-opus-5`, `gpt-5.6-terra`/`gpt-5.6-sol`);
+`factory.py` with `PROVIDER_CLIENTS` and the first Python reader of
+`EVENTMILL_LLM_PROVIDERS`; `AnthropicClient` and `OpenAIClient` (text path);
+`probe()` on the protocol and all three clients; the `providers` and
+`providers probe` commands; provider-qualified `EVENTMILL_MODEL_*` overrides.
+
+Two findings worth carrying forward into Stage 2:
+
+- **`connect()` proves nothing.** Every client builds an SDK handle without a
+  network call, so a wrong key connects cleanly and fails at first use. That is
+  why `probe()` exists and why the CLI never reports reachability from `connect`.
+- **A ping budget must come from the manifest's thinking reserve.** Reasoning is
+  spent from the output budget and the spend varies between identical calls, so
+  a flat small budget makes a healthy model report as broken on some runs only.
+
+Change logs: `2026-09-13-three-provider-connectivity-probe.md`,
+`2026-09-13-three-provider-clients.md`,
+`2026-09-14-llm-sdks-to-current-stable.md`.
+
+This absorbs the text-path half of Stages 3 and 4; what remains there is the
+document and multimodal work, which no module needs yet.
+
+#### Sequencing decision, 2026-09-14: google-genai stays on 1.x until after Stage 2
+
+The Anthropic and OpenAI SDKs were moved to current stable
+(`anthropic>=1.5.0,<2.0.0`, `openai>=3.13.0,<4.0.0`) on the operator's
+principle that net-new code should not start on a deprecated major.
+**`google-genai` is deliberately excluded and stays `>=1.69.0,<2.0.0`.**
+
+It is the one component that is not net-new: `GeminiClient` carries every
+module, and its 1.x controls — `media_resolution`, `thinking_level`, the
+response readers, the error classifiers, the native document path — are what
+the whole suite and both live verification sessions were run against. Moving to
+2.x is a migration with a real blast radius, not a specifier edit.
+
+Doing it *after* the rekey is the cheaper order: once `_clients` is keyed by
+`(provider_id, tier)` and another provider can be bound, a Gemini regression is
+visible against a working comparison rather than being the only thing running.
+
+Note that the deployed container has been running google-genai 2.x *by
+accident* — the requirement was unbounded until 2026-09-14 — so "Gemini is on
+1.x" became true of the image only at the next build after that pin.
+
 ### Stage 2 — generalise construction, and make the client map two-dimensional
 
 The largest stage, and the one the concurrency requirement reshapes.
+**Stage 2a landed the construction half** (`factory.py`, both manifests, both
+clients, `EVENTMILL_LLM_PROVIDERS`); what remains below is the rekey, the
+scoping wrapper's `default_provider`, and the accessor threading.
 
 **Construction.** `PROVIDER_CLIENTS` registry in `factory.py`.
 `EVENTMILL_LLM_PROVIDERS` — **plural, space-separated, default `gcp_gemini`** —
@@ -339,12 +399,21 @@ This is large enough to split if it gets unwieldy — the `(provider_id, tier)`
 rekey is separable from the accessor threading, and the rekey is the half that
 must land first.
 
-### Stage 3 — `OpenAIClient`
+### Stage 3 — `OpenAIClient` — **text path DONE in Stage 2a**
 
-`openai.json`, plus the SDK in a new `llm-openai` extra. Implementation order
-follows the census: **text first, then structured output, then documents, and
-images last** — nothing consumes `query_multimodal`, so it is implemented for
-interface completeness and nothing is gated on it.
+`openai.json`, the client, the `llm-openai` extra and the Responses API
+construction all landed with Stage 2a; both tiers are verified live. The SDK
+went straight to current stable (`>=3.13.0,<4.0.0`), so the "1.58.1 has no
+`client.responses`" constraint that shaped the original plan no longer applies.
+
+**Outstanding:** structured output (`text.format`), documents (`input_file`
+plus the dispatcher-side byte materialisation below), and images. Nothing
+consumes `query_multimodal`, so it stays last and nothing is gated on it. Both
+unimplemented methods currently return a declared `bad_request` naming this
+stage rather than a wrong answer.
+
+Implementation order follows the census: **text first, then structured output,
+then documents, and images last**.
 
 The client owns Responses API construction, `reasoning.effort`, `text.format`,
 `input_file`, status and usage parsing, exception → `error_kind`, and
@@ -356,15 +425,24 @@ Portable hints map inside the client: `thinking_level` → `reasoning.effort` wh
 there is a defensible equivalent, and a logged diagnostic where there is not.
 Neither mapping appears in the dispatcher.
 
-### Stage 4 — `AnthropicClient`
+### Stage 4 — `AnthropicClient` — **text path DONE in Stage 2a**
 
-New client, manifest, registry entry, `llm-anthropic` extra, tests. **If this
-stage touches `dispatcher.py`, `TierScopedLLMClient`, any plugin, or any prompt,
-the abstraction is in the wrong place and that is the finding.** Anthropic is the
-honest test precisely because it is third.
+Client, manifest, registry entry, `llm-anthropic` extra and tests landed with
+Stage 2a; both tiers verified live on `anthropic>=1.5.0,<2.0.0`.
 
-Its PDF limits are the tightest of the three and will exercise
-`_pdf_context_overflow` in a way Gemini never has.
+**The abstraction held.** This stage's own test was: *if it touches
+`dispatcher.py`, `TierScopedLLMClient`, any plugin, or any prompt, the
+abstraction is in the wrong place.* It touched none of them. The only framework
+files that changed were additive — `probe()` on the protocol, and the provider
+accessors gaining the per-tier `thinking_levels` every provider turned out to
+need. That is the honest result, and it is worth more than it looks, because
+Anthropic was written third against an interface shaped by the first two.
+
+**Outstanding:** the document path. Its PDF limits are the tightest of the three
+(100 pages / 32 MB against Gemini's 1000 / 50 MB, already recorded in
+`anthropic.json`) and will exercise `_pdf_context_overflow` in a way Gemini
+never has — but only once the guard reads the *active* provider's limits rather
+than Gemini's, which is Stage 2 accessor work.
 
 ### Stage 5 — CLI selection, runtime override, and normalised diagnostics
 
