@@ -176,6 +176,13 @@ The `llm-openai` extra pins `>=1.66` so the SDK is not the blocker twice.
   compiles, and none of the lines this change adds exceeds 88 characters —
   `shell.py`'s 68 over-length lines are all pre-existing.
 
+## Verified on Cloud Run — 2026-09-14
+
+The operator ran `providers probe` in the deployed container: all six tier
+clients green, latencies matching the local runs. Keys arrive through Secret
+Manager, all three SDKs are in the image, and each configured model returns a
+completion. Detail: `2026-09-14-cloud-run-three-provider-verification.md`.
+
 ## Not done here
 
 - **Stage 2's `(provider_id, tier)` rekey** — the next piece, and the one that

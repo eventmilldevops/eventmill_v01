@@ -113,6 +113,12 @@ with its own live verification, and is left as a decision for the operator.
 - Declared ranges checked against the installed versions programmatically;
   zero mismatches.
 
+## Verified on Cloud Run — 2026-09-14
+
+Confirmed in the deployed container: both Anthropic tiers and both OpenAI tiers
+authenticate and ping. The AFC line under `gcp_gemini` confirms the image is on
+google-genai 2.x, which is now declared rather than drifted into.
+
 ## Not done here
 
 - The `h11`/`httpcore` resolver warning is pre-existing and unrelated to Event

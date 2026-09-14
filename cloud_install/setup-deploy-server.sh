@@ -104,12 +104,26 @@ export CLOUD_RUN_REGION=""
 export GCS_LOG_BUCKET=""
 
 # Secret names in GCP Secret Manager
-# Dual Gemini keys — display names match the env vars for traceability
+# Dual Gemini keys — display names match the env vars for traceability.
+# Anthropic and OpenAI take one key each: neither vendor splits keys by tier.
+# All four are mounted on every deployment, the unadopted ones holding the
+# literal "placeholder", so the revision shape is identical everywhere and
+# adopting a vendor is a secret version plus a restart rather than a redeploy.
 export EVENTMILL_SECRET_GEMINI_FLASH="eventmill-gemini-flash-api"
 export EVENTMILL_SECRET_GEMINI_PRO="eventmill-gemini-pro-api"
+export EVENTMILL_SECRET_ANTHROPIC="eventmill-anthropic-api"
+export EVENTMILL_SECRET_OPENAI="eventmill-openai-api"
 export EVENTMILL_SECRET_GCS_SA="eventmill-gcs-sa"
 export EVENTMILL_SECRET_TTYD_USER="eventmill-ttyd-user"
 export EVENTMILL_SECRET_TTYD_CRED="eventmill-ttyd-cred"
+
+# Providers this deployment intends to use, space-separated.
+# Known ids: gcp_gemini anthropic openai — an unknown one is refused, not
+# ignored, because a typo would otherwise deploy with that provider silently
+# absent. Only the providers named here must hold real key values; the rest
+# stay on "placeholder" and are reported as not-in-use rather than as a fault.
+# A key can be verified before adoption with 'providers probe <id>'.
+export EVENTMILL_LLM_PROVIDERS="gcp_gemini"
 
 # ttyd web terminal credentials (used by deploy-cloudrun.sh quick deploy only)
 export TTYD_USERNAME="analyst"

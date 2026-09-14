@@ -79,17 +79,46 @@ and imports no vendor SDK — `tests/framework/test_provider_seam.py` enforces
 that with an `ast` walk over its imports. Adding a provider means a new file
 under `clients/` and a new manifest under `providers/`, and nothing else.
 
-Gemini is still the only implemented provider and the only one the runtime
-binds. Plan: `docs/specs/multi_provider_llm_clients.md`.
+**Three providers are implemented and any combination can be bound at once**
+(2026-09-14). Plan: `docs/specs/multi_provider_llm_clients.md`.
 
-Two tiers, declared in `framework/llm/providers/gcp_gemini.json`. That file is
-the single source of truth for model ids, token limits and capabilities; do not
-hardcode any of them elsewhere.
+| Provider | light | heavy | Key env var(s) | Input | Output |
+|---|---|---|---|---|---|
+| `gcp_gemini` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` | `GEMINI_FLASH_API_KEY`, `GEMINI_PRO_API_KEY` | 1,048,576 | 65,536 |
+| `anthropic` | `claude-sonnet-5` | `claude-opus-5` | `ANTHROPIC_API_KEY` | 1,000,000 | 128,000 |
+| `openai` | `gpt-5.6-terra` | `gpt-5.6-sol` | `OPENAI_API_KEY` | 400,000 | 128,000 |
 
-| Tier | Model | Input | Output |
-|---|---|---|---|
-| light | `gemini-3.8-flash` | 1,048,576 | 65,536 |
-| heavy | `gemini-3.1-pro-preview` | 1,048,576 | 65,536 |
+Each provider's manifest under `framework/llm/providers/` is the single source
+of truth for its model ids, token limits, accepted thinking levels and
+capabilities; do not hardcode any of them elsewhere. **The three do not share
+numbers** — Anthropic and OpenAI cap output at 128,000 against Gemini's 65,536,
+so anything that reads one provider's limits for another is wrong.
+
+Only Gemini splits keys by tier, so bulk Flash work cannot consume Pro quota;
+the other two issue one key per account.
+
+`EVENTMILL_LLM_PROVIDERS` (space-separated, default `gcp_gemini`) names which
+providers a session may bind. **A mounted key is not a bound provider.**
+`providers` shows what is configured and keyed; `providers probe` proves
+reachability with two cheap phases — a model listing and a few-token ping — and
+works on a provider that is keyed but not yet named in that variable, so a key
+can be verified before it is adopted.
+
+`connect` cannot answer reachability: every client builds an SDK handle without
+a network call, so a wrong key connects cleanly and fails at first use.
+
+**`LLMDispatcher._clients` is keyed by `(provider_id, tier)`.** Keyed by tier
+alone it could not hold two vendors at once — a second provider's client under
+`"heavy"` evicted the first. A tier-keyed dict is still accepted and normalised
+from each client's own `provider_id`, so older call sites keep working.
+
+**Automatic cross-provider fallback is forbidden and enforced.**
+`_fallback_client` answers "the other connected tier *of the same provider*". A
+quota failure must never move a session to a vendor nobody selected — the data
+would go somewhere unchosen and the output would be unattributable. Deliberate
+selection is the requirement; silent failover is the hazard. Provider choice
+rides `TierScopedLLMClient(default_provider=...)`, never `QueryHints`, so a
+plugin cannot override an operator's selection.
 
 **The tiers are capacity-identical.** Tier selects reasoning depth and cost, and
 nothing else. Any logic that picks a tier based on how much data there is, is
