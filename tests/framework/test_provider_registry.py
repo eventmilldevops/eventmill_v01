@@ -30,6 +30,14 @@ from framework.llm.providers import (
 
 ALL_PROVIDERS = ("gcp_gemini", "anthropic", "openai")
 
+# One vendor under several provider ids. These reach different models on a
+# different key from "openai", so they bind and are attributed independently,
+# but they are the same lab — which is why vendor is a separate field from
+# provider_id and why nothing may infer one from the other.
+DAYBREAK_PROVIDERS = ("openai_daybreak_red", "openai_daybreak_blue")
+
+EVERY_PROVIDER = ALL_PROVIDERS + DAYBREAK_PROVIDERS
+
 # What each provider's manifest is expected to declare. Wired to the models the
 # operator chose, so a silent manifest edit fails here rather than at a vendor.
 EXPECTED_TIERS = {
@@ -57,10 +65,10 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "EVENTMILL_MODEL_LIGHT", "EVENTMILL_MODEL_HEAVY",
         "EVENTMILL_MAX_OUTPUT_LIGHT", "EVENTMILL_MAX_OUTPUT_HEAVY",
         "GEMINI_API_KEY", "GEMINI_FLASH_API_KEY", "GEMINI_PRO_API_KEY",
-        "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_DAYBREAK_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
-    for provider in ALL_PROVIDERS:
+    for provider in EVERY_PROVIDER:
         token = provider.upper()
         for tier in ("LIGHT", "HEAVY"):
             monkeypatch.delenv(f"EVENTMILL_MODEL_{token}_{tier}", raising=False)
@@ -248,9 +256,7 @@ class TestConfiguredProviders:
         That is the failure this deployment has actually had.
         """
         assert factory.configured_providers("") == factory.known_providers()
-        assert set(factory.configured_providers("")) == {
-            "gcp_gemini", "anthropic", "openai",
-        }
+        assert set(factory.configured_providers("")) == set(EVERY_PROVIDER)
 
     def test_the_default_order_puts_gemini_first(self) -> None:
         # The first entry serves any tool that names no provider, so the

@@ -1,5 +1,6 @@
 {
   "provider_id": "anthropic",
+  "vendor": "anthropic",
   "display_name": "Anthropic Claude",
   "_verified": "2026-09-13: tier ids, output caps and context windows read from the Models API (models.retrieve) and the output cap confirmed by an over-limit 400. Both tiers pinged clean. Context window is reported by the provider, not assumed.",
   "tiers": {

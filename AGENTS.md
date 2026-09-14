@@ -22,8 +22,9 @@ demonstration).
 | Gemini, Anthropic, OpenAI clients | done; all six tier clients verified live on Cloud Run 2026-09-13 |
 | `(provider_id, tier)` routing, no cross-vendor fallback | done |
 | `connect` binds every configured provider; `use <provider> [for <tool>]` | done |
-| `EVENTMILL_LLM_PROVIDERS` defaults to all three everywhere | done |
-| Projector run record names the vendor + hashes the prompt (schema v4) | done |
+| `EVENTMILL_LLM_PROVIDERS` defaults to every known provider everywhere | done |
+| Daybreak Red + Blue as their own providers; `vendor` split from `provider_id` | done 2026-09-14 (`llm_5`), manifests UNVERIFIED |
+| Projector run record names provider **and** vendor, hashes the prompt (schema v5) | done |
 | Group summary: recurrence per provider, agreement across them | done |
 | **The live three-vendor run** | **next — Stage E of the projector plan** |
 
@@ -137,9 +138,18 @@ Only Gemini splits keys by tier, so bulk Flash work cannot consume Pro quota;
 the other two issue one key per account.
 
 `EVENTMILL_LLM_PROVIDERS` (space-separated) names which providers a session may
-bind; every deploy path and `.env.example` default it to **all three**, because
-a provider whose key is unset or still `placeholder` is skipped at startup
-anyway. **A mounted key is not a bound provider** — but with all three named,
+bind; every deploy path and `.env.example` default it to **every known
+provider**, because one whose key is unset or still `placeholder` is skipped at
+startup anyway.
+
+**A provider is not a vendor.** `openai`, `openai_daybreak_red` and
+`openai_daybreak_blue` are three providers reaching one lab on two credentials,
+so `vendor_of()` and `LLMResponse.vendor` answer the question `provider_id`
+used to. Anything counting how far a finding's support extends must count
+vendors; anything comparing two models counts providers. Both Daybreak colours
+declare their single model under **both** tiers — see
+`docs/change_log/2026-09-14-daybreak-providers.md` for why one tier would have
+let `_fallback_client` answer a Red run with something else. **A mounted key is not a bound provider** — but with all three named,
 a *real* key is, which is the point: adopting a vendor is a secret version and
 a restart, with no variable to remember.
 `providers` shows what is configured and keyed; `providers probe` proves
@@ -151,7 +161,7 @@ can be verified before it is adopted.
 a network call, so a wrong key connects cleanly and fails at first use.
 
 `connect` binds **every** configured provider whose key is present and is not
-the placeholder — six clients when all three are named. The first entry of
+the placeholder — ten clients when all five are named. The first entry of
 `EVENTMILL_LLM_PROVIDERS` is the session default and serves every tool that
 names no provider. `connect <model_id>` is the single-provider form: it binds
 that model's provider only, including its other tier for quota fallback.

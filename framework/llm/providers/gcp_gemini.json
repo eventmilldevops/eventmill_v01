@@ -1,5 +1,6 @@
 {
   "provider_id": "gcp_gemini",
+  "vendor": "google",
   "display_name": "Google Gemini (GCP)",
   "tiers": {
     "light": {

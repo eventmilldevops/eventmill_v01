@@ -1,0 +1,93 @@
+{
+  "provider_id": "openai_daybreak_blue",
+  "vendor": "openai",
+  "display_name": "OpenAI Daybreak Blue",
+  "_verified": "UNVERIFIED — every value below is documented or inherited from openai.json, none of it probed. The model alias, the token limits, the accepted reasoning levels and the capability list must each be confirmed with 'providers probe openai_daybreak_blue' and a live call before this manifest is treated the way openai.json's _verified block is treated. gpt-5.6 rejects reasoning_effort 'minimal' outright; whether this model shares that is unknown.",
+  "_vendor_note": "A separate provider id, not a tier of 'openai'. It reaches a different model on a different key, so it binds, routes, and is attributed independently — but it is the same vendor, which is what 'vendor' above records. Anything reasoning about how far a finding's support extends must count vendors, not provider ids, or one lab's two models read as two independent opinions.",
+  "tiers": {
+    "light": {
+      "model_id": "gpt-daybreak-blue-latest",
+      "display_name": "Daybreak Blue",
+      "fallback_model_id": "",
+      "api_key_env": "OPENAI_DAYBREAK_API_KEY",
+      "max_output_tokens": 128000,
+      "max_context_tokens": 1050000,
+      "cost_tier": "high",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "capabilities": [
+        "text",
+        "structured_output",
+        "deep_reasoning"
+      ],
+      "_note": "Both tiers name the same model on purpose. This provider is one model, and declaring it under both tiers is what lets a light-tier plugin and a heavy-tier plugin reach it alike — with one tier declared, a light-tier plugin would land here only through _route's take-any-connected-tier fallback, which works by accident rather than by intent. It also makes LLMDispatcher._fallback_client harmless: the other tier of this provider is this same model on this same key, so a quota or access failure costs one wasted retry and then fails honestly, instead of silently substituting a different model mid-comparison.",
+      "_capabilities_note": "Deliberately short. multimodal_image, function_calling and any document capability are omitted rather than assumed — an unverified capability token here is a promise the router will act on. Add them once probed."
+    },
+    "heavy": {
+      "model_id": "gpt-daybreak-blue-latest",
+      "display_name": "Daybreak Blue",
+      "fallback_model_id": "",
+      "_fallback_note": "Empty on both tiers. openai.json's heavy tier falls back to Terra when Sol is retired; there is no equivalent here, because the only correct substitute for this model is this model. A comparison run that silently answered from something else would be worse than a failed run.",
+      "api_key_env": "OPENAI_DAYBREAK_API_KEY",
+      "max_output_tokens": 128000,
+      "max_context_tokens": 1050000,
+      "cost_tier": "high",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "capabilities": [
+        "text",
+        "structured_output",
+        "deep_reasoning"
+      ]
+    }
+  },
+  "request_constraints": {
+    "_note": "Inherited from openai.json because the transport is the same Responses API through the same SDK. Each of these was verified against gpt-5.6, NOT against this model.",
+    "sampling_params": false,
+    "reasoning_effort_minimal": false,
+    "store": false,
+    "_store_note": "store=false is sent on every request. This platform handles incident data, so a no-retention posture is a declared property of the client, not an incidental default."
+  },
+  "file_handling": {
+    "application/pdf": {
+      "max_pages": 100,
+      "max_size_mb": 32,
+      "tokens_per_page": 1500,
+      "tokens_per_page_by_resolution": {
+        "low": 1500,
+        "medium": 1500,
+        "high": 1500
+      },
+      "default_media_resolution": "medium",
+      "ingestion_paths": [
+        "inline_bytes",
+        "files_api"
+      ],
+      "preferred_ingestion": "files_api",
+      "_note": "Placeholder limits, NOT verified — no OpenAI document path exists yet and nothing reads this. Present so the PDF guard reads this provider's own block rather than falling through to another vendor's. No capability tier advertises a document type, so the guard is unreachable from here."
+    }
+  },
+  "output_budget": {
+    "_note": "Reasoning tokens are completion tokens and come out of max_output_tokens on this transport. Sizing a reply against the full cap truncates it; the cap is a ceiling rather than a charge, so reserving generously costs nothing unless spent.",
+    "default_thinking_level": "medium",
+    "thinking_reserve_tokens": {
+      "low": 4096,
+      "medium": 16384,
+      "high": 32768
+    }
+  },
+  "document_strategies": {
+    "application/pdf": "extract_text",
+    "application/json": "extract_text",
+    "text/csv": "extract_text",
+    "text/plain": "extract_text",
+    "text/html": "extract_text",
+    "default": "extract_and_chunk"
+  }
+}

@@ -1059,7 +1059,12 @@ class TestProjectPathsValidation:
         )
         assert not result.ok
         assert result.error_code == "LLM_UNAVAILABLE"
-        assert "GEMINI_PRO_API_KEY" in result.message
+        # Provider-neutral since five providers became bindable: naming one
+        # vendor's key sent an operator to set a key they may not use, for a
+        # provider that may not even be the one they had configured.
+        assert "providers" in result.message
+        assert "connect" in result.message
+        assert "GEMINI" not in result.message.upper()
 
     def test_invalid_flow_map_blocks_before_the_llm(self, plugin_instance,
                                                    sample_flow_map):
@@ -1687,7 +1692,7 @@ class TestStepState:
         schema = json.loads(
             (PLUGIN_DIR / "schemas" / "projection_run.schema.json").read_text())
         jsonschema.validate(record, schema)
-        assert record["run"]["schema_version"] == 4
+        assert record["run"]["schema_version"] == 5
         assert record["model"]["max_tokens"] == _tool_mod.PROJECTION_MAX_TOKENS
         step = record["sampled"]["paths"][0]["steps"][0]
         assert step["access_after"] == "code_execution"

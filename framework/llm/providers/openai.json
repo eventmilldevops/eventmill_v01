@@ -1,5 +1,6 @@
 {
   "provider_id": "openai",
+  "vendor": "openai",
   "display_name": "OpenAI GPT",
   "_verified": "2026-09-13: tier ids confirmed present in models.list and both pinged clean. max_output_tokens read from the provider's own over-limit 400 ('This model supports at most 128000 completion tokens'). reasoning_effort 'minimal' is REJECTED by both tiers ('does not support minimal with this model'); 'low' works. temperature is rejected — only the default is accepted. max_context_tokens is NOT verified: this provider exposes no context window through models.retrieve, which returns id/created/owned_by only.",
   "tiers": {

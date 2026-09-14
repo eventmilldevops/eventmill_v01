@@ -86,7 +86,15 @@ THINKING_LEVEL_ENV_OVERRIDE = "EVENTMILL_PROJECTION_THINKING"
 #    unreadable one, and a cross-vendor comparison means nothing unless the
 #    prompt was the same — which was previously an argument rather than a fact
 #    on the record.
-RUN_RECORD_SCHEMA_VERSION = 4
+# 5: model.vendor — which lab served the run, which stopped being the same
+#    question as model.provider once one vendor became reachable under more
+#    than one provider id. Recorded but not yet counted: _summarize_run_group
+#    still grades agreement across provider ids, which is right if a lab's two
+#    models genuinely disagree and overstates independence if they track each
+#    other. Which of those is true is an empirical question, so the field is
+#    captured first and the grading decided on the evidence. A v4 record
+#    carries no vendor and must not be given one by guesswork at read time.
+RUN_RECORD_SCHEMA_VERSION = 5
 
 # Output cap for the projection call: 48K (48 x 1024). Step state roughly
 # triples the size of a step, and the assessment sets out to show what deep
@@ -3510,9 +3518,11 @@ class AdversaryPathProjector:
                 ok=False,
                 error_code="LLM_UNAVAILABLE",
                 message=(
-                    "project_paths needs an LLM. Set GEMINI_PRO_API_KEY (see "
-                    ".env.example) and run 'connect', or use 'profile_actor' and "
-                    "'validate_flow_map' for the deterministic groundwork."
+                    "project_paths needs an LLM. Set at least one provider's "
+                    "key (see .env.example) and run 'connect' — 'providers' "
+                    "lists what is configured and which keys are missing. Or "
+                    "use 'profile_actor' and 'validate_flow_map' for the "
+                    "deterministic groundwork, neither of which needs a model."
                 ),
             )
 
@@ -3768,6 +3778,10 @@ class AdversaryPathProjector:
                 # with several providers bound, a record that quietly claims
                 # Gemini is not an incomplete measurement but a false one.
                 "provider": getattr(response, "provider_id", None),
+                # Two providers can be one vendor. Read from the response for
+                # the same reason as provider: with several bound at once, a
+                # derived value is a guess and a guess here reads as evidence.
+                "vendor": getattr(response, "vendor", None),
                 "model_configured": getattr(response, "model_used", None),
                 "model_served": getattr(response, "model_version", None),
                 "tier": "heavy",

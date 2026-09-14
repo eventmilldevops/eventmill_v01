@@ -128,7 +128,7 @@ export EVENTMILL_SECRET_TTYD_CRED="eventmill-ttyd-cred"
 # Manager never binds, and the symptom is a vendor that is simply missing
 # rather than an error. Adopting a vendor is a secret version plus a restart.
 # A key can be verified before adoption with 'providers probe <id>'.
-export EVENTMILL_LLM_PROVIDERS="gcp_gemini anthropic openai"
+export EVENTMILL_LLM_PROVIDERS="gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue"
 
 # ttyd web terminal credentials (used by deploy-cloudrun.sh quick deploy only)
 export TTYD_USERNAME="analyst"

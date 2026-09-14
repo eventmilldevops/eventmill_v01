@@ -15,6 +15,7 @@
 #   # by tier, so a single key serves both tiers of that provider.
 #   export ANTHROPIC_API_KEY="your-key"     # (optional)
 #   export OPENAI_API_KEY="your-key"        # (optional)
+#   export OPENAI_DAYBREAK_API_KEY="your-key"  # (optional, both Daybreak ids)
 #
 #   bash cloud_install/deploy-cloudrun.sh
 #
@@ -97,7 +98,8 @@ key_state() {
     # $1 = env var name
     if [ -n "${!1:-}" ]; then echo "set"; else echo "not set"; fi
 }
-for var in GEMINI_FLASH_API_KEY GEMINI_PRO_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY; do
+for var in GEMINI_FLASH_API_KEY GEMINI_PRO_API_KEY ANTHROPIC_API_KEY \
+           OPENAI_API_KEY OPENAI_DAYBREAK_API_KEY; do
     printf '   %-22s %s\n' "${var}" "$(key_state "${var}")"
 done
 
@@ -153,7 +155,8 @@ gcloud run deploy "${SERVICE_NAME}" \
     --set-env-vars="GEMINI_PRO_API_KEY=${GEMINI_PRO_API_KEY:-}" \
     --set-env-vars="ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
     --set-env-vars="OPENAI_API_KEY=${OPENAI_API_KEY:-}" \
-    --set-env-vars="EVENTMILL_LLM_PROVIDERS=${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai}" \
+    --set-env-vars="OPENAI_DAYBREAK_API_KEY=${OPENAI_DAYBREAK_API_KEY:-}" \
+    --set-env-vars="EVENTMILL_LLM_PROVIDERS=${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue}" \
     --set-env-vars="EVENTMILL_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX:-${PROJECT_ID}-eventmill}" \
     --set-env-vars="GCS_LOG_BUCKET=${GCS_LOG_BUCKET:-}" \
     --set-env-vars="EVENTMILL_LOG_LEVEL=${EVENTMILL_LOG_LEVEL:-INFO}" \

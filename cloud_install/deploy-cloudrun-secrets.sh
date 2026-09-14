@@ -130,6 +130,12 @@ SECRET_GEMINI_FLASH="${EVENTMILL_SECRET_GEMINI_FLASH:-eventmill-gemini-flash-api
 SECRET_GEMINI_PRO="${EVENTMILL_SECRET_GEMINI_PRO:-eventmill-gemini-pro-api}"
 SECRET_ANTHROPIC="${EVENTMILL_SECRET_ANTHROPIC:-eventmill-anthropic-api}"
 SECRET_OPENAI="${EVENTMILL_SECRET_OPENAI:-eventmill-openai-api}"
+# One secret, two providers. openai_daybreak_red and openai_daybreak_blue are
+# one credential reaching two models, so they share this. The name's
+# "anthropic" substring is a storage label from how the secret was created; it
+# holds an OpenAI key and is mounted to the OpenAI transport. Override the name
+# here rather than correcting it in code if that is ever renamed.
+SECRET_OPENAI_DAYBREAK="${EVENTMILL_SECRET_OPENAI_DAYBREAK:-eventmill-anthropic-daybreak}"
 SECRET_TTYD_USER="${EVENTMILL_SECRET_TTYD_USER:-eventmill-ttyd-user}"
 SECRET_TTYD_CRED="${EVENTMILL_SECRET_TTYD_CRED:-eventmill-ttyd-cred}"
 
@@ -146,7 +152,7 @@ SECRET_TTYD_CRED="${EVENTMILL_SECRET_TTYD_CRED:-eventmill-ttyd-cred}"
 # So adoption is now decided by whether a key holds a real value, which is
 # already where the operator's real decision lives, and this variable stops
 # being a second switch that has to agree with it.
-LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai}"
+LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue}"
 
 SA_NAME="${EVENTMILL_SA_NAME:-eventmill-runner}"
 
@@ -253,6 +259,7 @@ LLM_SECRETS=(
     "${SECRET_GEMINI_PRO}"
     "${SECRET_ANTHROPIC}"
     "${SECRET_OPENAI}"
+    "${SECRET_OPENAI_DAYBREAK}"
 )
 
 # The typo guard stays: an unknown id is refused rather than ignored, because
@@ -260,9 +267,11 @@ LLM_SECRETS=(
 for _provider in ${LLM_PROVIDERS}; do
     case "${_provider}" in
         gcp_gemini|anthropic|openai) ;;
+        openai_daybreak_red|openai_daybreak_blue) ;;
         *)
             echo "ERROR: unknown provider '${_provider}' in EVENTMILL_LLM_PROVIDERS."
             echo "       Known: gcp_gemini anthropic openai"
+            echo "              openai_daybreak_red openai_daybreak_blue"
             echo ""
             echo "  Refused rather than ignored: a typo here would deploy with"
             echo "  that provider silently absent, which looks like a working"
@@ -303,6 +312,7 @@ SECRET_MOUNTS="GEMINI_FLASH_API_KEY=${SECRET_GEMINI_FLASH}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},GEMINI_PRO_API_KEY=${SECRET_GEMINI_PRO}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},ANTHROPIC_API_KEY=${SECRET_ANTHROPIC}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},OPENAI_API_KEY=${SECRET_OPENAI}:latest"
+SECRET_MOUNTS="${SECRET_MOUNTS},OPENAI_DAYBREAK_API_KEY=${SECRET_OPENAI_DAYBREAK}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},TTYD_USERNAME=${SECRET_TTYD_USER}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},TTYD_PASSWORD=${SECRET_TTYD_CRED}:latest"
 

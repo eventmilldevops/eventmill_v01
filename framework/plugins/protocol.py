@@ -95,6 +95,13 @@ class LLMResponse:
     # "gcp_gemini". Recorded so a cross-provider comparison rests on what
     # actually ran.
     provider_id: str | None = None
+    # Which lab's model that provider reaches, e.g. "openai". Not the same
+    # question as provider_id: one vendor can be two providers once a
+    # specialist model is adopted alongside its lab's general one, and a
+    # reader counting how far a finding's support extends must count these
+    # rather than provider ids. Filled by the dispatcher from the provider
+    # manifest, so a client does not have to remember to set it.
+    vendor: str | None = None
 
 
 # ---------------------------------------------------------------------------

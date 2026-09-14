@@ -35,6 +35,7 @@ from .providers import (
     load_tier_specs,
     pdf_handling,
     tokens_per_pdf_page,
+    vendor_of,
 )
 
 logger = logging.getLogger("eventmill.framework.llm")
@@ -327,7 +328,7 @@ class LLMDispatcher:
     def _attributed(
         self, result: LLMResponse, client: LLMModelClient,
     ) -> LLMResponse:
-        """Ensure the response names the provider that served it.
+        """Ensure the response names the provider and vendor that served it.
 
         Each client stamps its own provider_id and this does not override one.
         It is a backstop: with several vendors bound concurrently, a response
@@ -338,10 +339,22 @@ class LLMDispatcher:
         Attributing to the routed client is correct even after a tier change or
         a retired-model substitution: both stay within the same provider by
         construction, so the vendor is unchanged either way.
+
+        Vendor is derived here rather than stamped by the client, because it is
+        a property of the provider manifest rather than of the SDK session —
+        one client class serves several providers, and asking each of them to
+        remember which lab it is speaking for is how attribution drifts. Two
+        providers can be one vendor, so the two fields answer different
+        questions and a reader needs both.
         """
-        if result.provider_id:
+        provider = result.provider_id or _provider_of(client)
+        if result.provider_id and result.vendor:
             return result
-        return replace(result, provider_id=_provider_of(client))
+        return replace(
+            result,
+            provider_id=provider,
+            vendor=result.vendor or vendor_of(provider),
+        )
 
     def _locate(self, client: LLMModelClient) -> tuple[str, str] | None:
         """Reverse-lookup the (provider_id, tier) a client is registered under."""

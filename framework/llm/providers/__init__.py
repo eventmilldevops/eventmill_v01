@@ -108,7 +108,7 @@ def manifest_path(provider_id: str = DEFAULT_PROVIDER_ID) -> Path:
     return Path(__file__).parent / f"{provider_id}.json"
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=16)
 def load_provider_manifest(
     provider_id: str = DEFAULT_PROVIDER_ID,
 ) -> dict[str, Any] | None:
@@ -130,6 +130,23 @@ def load_provider_manifest(
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Provider manifest %s unreadable: %s", path, e)
     return None
+
+
+def vendor_of(provider_id: str = DEFAULT_PROVIDER_ID) -> str:
+    """Which lab's model a provider serves.
+
+    Deliberately distinct from provider_id. Two providers can reach two
+    different models on two different keys and still be one vendor — which is
+    what happens the moment a lab's specialist model is adopted alongside its
+    general one. Anything measuring how far a finding's support extends has to
+    count these rather than provider ids, or one lab's two models read as two
+    independent opinions.
+
+    Falls back to the provider id, which is the right answer for every
+    provider that is its own vendor and for a manifest that cannot be read.
+    """
+    manifest = load_provider_manifest(provider_id) or {}
+    return str(manifest.get("vendor") or "") or provider_id
 
 
 def load_tier_specs(
@@ -334,4 +351,5 @@ __all__ = [
     "max_output_tokens_for_tier",
     "thinking_reserve_tokens",
     "tokens_per_pdf_page",
+    "vendor_of",
 ]

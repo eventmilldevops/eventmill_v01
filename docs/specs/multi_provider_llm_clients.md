@@ -583,6 +583,51 @@ nothing.
 
 ---
 
+### Stage 7 — a specialist model as its own provider — **DONE 2026-09-14** (`llm_5`)
+
+**Decision: Daybreak Red and Blue are two providers, not two tiers of one.**
+
+The three-vendor shape held, so this adds to it rather than reshaping it. Each
+colour is an ordinary provider with its own manifest, its own model declared
+under **both** tiers, and a shared credential in `OPENAI_DAYBREAK_API_KEY`.
+
+Two tiers on one model is the load-bearing choice. One tier would have made
+every `for tier in ("light", "heavy")` loop handle a case no other provider
+produces, left light-tier plugins reaching the provider only through `_route`'s
+take-any-connected-tier fallback, and — the real hazard — made
+`_fallback_client` able to answer a Red run with a different model on a 429,
+since it returns the other tier of the same provider. With both tiers on one
+model that fallback is a wasted retry and then an honest failure.
+
+Red-as-heavy / Blue-as-light was rejected outright: the projector hardcodes
+`tier="heavy"`, so Red would always win, and the same fallback would silently
+substitute Blue mid-comparison.
+
+**What this forced.** `OpenAIClient.provider_id` was a class attribute, so a
+second provider on the same class would have misattributed every response and
+read `openai.json` for capabilities, reasoning levels and ping budget no matter
+which model it was talking to. `provider_id` is now a constructor argument on
+all three clients, passed by both construction paths. The dispatcher needed no
+change — the shell already keys its client map by explicit `(provider_id, tier)`.
+
+**Vendor became a separate field.** Three provider ids now reach one lab, so
+`vendor` is declared per manifest, resolved by `vendor_of()`, and stamped onto
+`LLMResponse.vendor` by `_attributed` — centrally, because a client asked to
+remember which lab it speaks for is the drift this stage just finished
+removing. `_agreement_grade` still counts provider ids: whether a lab's two
+models are one opinion or two is empirical, and the field is recorded now so
+that can be decided on evidence.
+
+Deploy wiring covers all six `cloud_install/` surfaces plus `.env.example` and
+both Compose files; the registry drift guards in
+`tests/framework/test_provider_registry.py` enforce the agreement.
+
+Both manifests are marked `UNVERIFIED` — aliases, limits and accepted reasoning
+levels are documented or inherited, not probed. `providers probe` settles them.
+Change log: `docs/change_log/2026-09-14-daybreak-providers.md`.
+
+---
+
 # Part 2 — module-by-module assessment
 
 ## Why module by module
