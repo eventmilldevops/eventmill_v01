@@ -253,9 +253,14 @@ class TestPublicInterfaceIsEnoughToday:
         assert dispatcher.supports_native_document("application/x-pcap") is False
 
     def test_connected_models_reads_only_public_attributes(self, dispatcher):
+        # provider_id rides along since the (provider_id, tier) rekey: with two
+        # vendors bound, "heavy" alone no longer identifies a model, and a run
+        # record that cannot name its provider is uninterpretable afterwards.
         assert dispatcher.connected_models() == [
-            {"tier": "light", "model_id": "fake-light"},
-            {"tier": "heavy", "model_id": "fake-heavy"},
+            {"provider_id": "fake_provider", "tier": "light",
+             "model_id": "fake-light"},
+            {"provider_id": "fake_provider", "tier": "heavy",
+             "model_id": "fake-heavy"},
         ]
 
 
@@ -343,7 +348,7 @@ class TestRetiredModelRetryStaysWithinTheProvider:
         )
         result = dispatcher.query_text("x", hints=QueryHints(tier="light"))
 
-        substitute = dispatcher._clients["light"]
+        substitute = dispatcher.client_at("light")
         assert type(substitute) is type(client)
         assert substitute.model_id == "fake-light-ga"
         assert result.ok
@@ -359,7 +364,7 @@ class TestRetiredModelRetryStaysWithinTheProvider:
         )
         dispatcher.query_text("x", hints=QueryHints(tier="light"))
 
-        assert dispatcher._clients["light"].total_tokens_used == 4242
+        assert dispatcher.client_at("light").total_tokens_used == 4242
 
 
 class TestDispatcherCarriesNoVendorSdk:

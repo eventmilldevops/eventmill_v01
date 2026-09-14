@@ -29,6 +29,7 @@ from .model_client import (
     compose_prompt,
 )
 from .providers import (
+    DEFAULT_PROVIDER_ID,
     TierSpec,
     default_media_resolution,
     load_tier_specs,
@@ -49,6 +50,55 @@ _NATIVE_CAPABILITY_BY_MIME = {
 # Used only by the string-matching fallback, for a client that classified
 # nothing; a client that sets error_kind never reaches it.
 _HTTP_404_RE = re.compile(r"(?:^|[\s:\[(])404(?=[\s:,\])]|$)")
+
+
+def _provider_of(client: LLMModelClient) -> str:
+    """Provider a client belongs to, defaulting for a fake that declares none."""
+    return getattr(client, "provider_id", None) or DEFAULT_PROVIDER_ID
+
+
+def _by_provider_tier(
+    clients: dict[Any, LLMModelClient],
+) -> dict[tuple[str, str], LLMModelClient]:
+    """Normalise a client map to (provider_id, tier) keys.
+
+    Accepts the tier-keyed form every caller used before providers were
+    separable — unambiguous, because the client carries its own provider_id.
+    Keeping both shapes valid is what let this change stay inside the
+    dispatcher instead of rippling through the shell and the suite.
+    """
+    out: dict[tuple[str, str], LLMModelClient] = {}
+    for key, client in clients.items():
+        if isinstance(key, tuple):
+            out[(str(key[0]), str(key[1]))] = client
+        else:
+            out[(_provider_of(client), str(key))] = client
+    return out
+
+
+def _specs_by_provider_tier(
+    specs: dict[Any, TierSpec],
+    providers: tuple[str, ...] = (),
+) -> dict[tuple[str, str], TierSpec]:
+    """Normalise a tier-spec map to (provider_id, tier) keys.
+
+    A tier-keyed dict means "the specs for this dispatcher's clients", so it is
+    attached to the providers actually bound rather than to whatever
+    provider_id the spec objects happen to carry. Those two can disagree — a
+    caller building TierSpec values by hand gets the default provider_id while
+    its clients declare their own — and a mismatch is invisible: every lookup
+    misses, so clamping silently falls back to defaults and a retired-model
+    retry quietly stops happening.
+    """
+    out: dict[tuple[str, str], TierSpec] = {}
+    for key, spec in specs.items():
+        if isinstance(key, tuple):
+            out[(str(key[0]), str(key[1]))] = spec
+            continue
+        targets = providers or (getattr(spec, "provider_id", DEFAULT_PROVIDER_ID),)
+        for provider_id in targets:
+            out.setdefault((provider_id, str(key)), spec)
+    return out
 
 
 class LLMDispatcher:
@@ -74,18 +124,47 @@ class LLMDispatcher:
     so a heavy-tier plugin still runs when only Flash is bound.
     """
 
-    def __init__(self, clients: dict[str, LLMModelClient],
+    # Read by TierScopedLLMClient to decide whether it may pass a provider
+    # scope down. Duck-typed rather than an isinstance check, so a test fake
+    # can opt in or out without importing this class.
+    accepts_provider_scope = True
+
+    def __init__(self, clients: dict[Any, LLMModelClient],
                  preferred_tier: str | None = None,
-                 tier_specs: dict[str, TierSpec] | None = None) -> None:
-        self._clients = clients
+                 tier_specs: dict[Any, TierSpec] | None = None,
+                 preferred_provider: str | None = None) -> None:
+        # Keyed by (provider_id, tier). Keyed by tier alone it could not
+        # express two vendors bound at once: registering an Anthropic client
+        # under "heavy" would evict Gemini Pro and send every heavy plugin to
+        # a provider nobody selected.
+        #
+        # A tier-keyed dict is still accepted and normalised, because each
+        # client already knows its own provider_id — so every existing caller
+        # keeps working and the change stays inside this class.
+        self._clients = _by_provider_tier(clients)
         # When set, this tier is preferred for callers that pass no hints.
         # Lets explicit 'connect gemini-3.8-flash' keep Flash as primary.
         self._preferred_tier = preferred_tier
-        # Per-tier capability specs from the provider manifest. Used to clamp
-        # max_tokens to what the selected model can actually emit.
-        self._tier_specs = (
-            tier_specs if tier_specs is not None else load_tier_specs()
-        )
+        # The provider serving callers that name none. First one bound unless
+        # stated, so a single-provider session behaves exactly as before.
+        self._preferred_provider = preferred_provider
+        # Capability specs per (provider_id, tier), used to clamp max_tokens
+        # to what the selected model can actually emit. Loaded per provider
+        # when not supplied, so a second vendor's caps are never read off the
+        # first vendor's manifest.
+        if tier_specs is not None:
+            self._tier_specs = _specs_by_provider_tier(
+                tier_specs, providers=tuple(dict.fromkeys(
+                    p for p, _ in self._clients
+                )),
+            )
+        else:
+            self._tier_specs = {}
+            for provider_id in dict.fromkeys(p for p, _ in self._clients):
+                for tier, spec in load_tier_specs(provider_id).items():
+                    self._tier_specs[(provider_id, tier)] = spec
+            if not self._tier_specs:
+                self._tier_specs = _specs_by_provider_tier(load_tier_specs())
         # Output caps keyed by model id, so clamping follows the model that
         # actually runs — an EVENTMILL_MODEL_* override or a retired-model
         # substitution changes the model without changing the tier.
@@ -106,22 +185,62 @@ class LLMDispatcher:
 
     @property
     def model_id(self) -> str:
-        parts = [c.model_id for tier in ("light", "heavy")
-                 if (c := self._clients.get(tier)) and c.connected]
+        parts = [c.model_id
+                 for provider_id in self.bound_providers()
+                 for tier in ("light", "heavy")
+                 if (c := self._clients.get((provider_id, tier))) and c.connected]
         return " + ".join(parts) if parts else "disconnected"
 
     @property
     def total_tokens_used(self) -> int:
         return sum(c.total_tokens_used for c in self._clients.values())
 
+    def bound_providers(self) -> tuple[str, ...]:
+        """Providers with at least one connected client, in bind order."""
+        return tuple(dict.fromkeys(
+            provider_id for (provider_id, _), c in self._clients.items()
+            if c.connected
+        ))
+
+    @property
+    def default_provider(self) -> str | None:
+        """Provider serving callers that name none.
+
+        The one explicitly preferred if it is actually bound, else the first
+        bound. With a single provider this is that provider, which is why a
+        one-vendor session is unaffected by any of this.
+        """
+        bound = self.bound_providers()
+        if self._preferred_provider and self._preferred_provider in bound:
+            return self._preferred_provider
+        return bound[0] if bound else None
+
+    def client_at(
+        self, tier: str, provider: str | None = None,
+    ) -> LLMModelClient | None:
+        """The client registered for a tier of a provider, if any.
+
+        The supported way to ask what is bound where. Callers used to index
+        the client map by tier directly, which stopped meaning anything once
+        two vendors could hold the same tier at once.
+        """
+        selected = provider or self.default_provider
+        if selected is None:
+            return None
+        return self._clients.get((selected, tier))
+
     def connected_models(self) -> list[dict[str, str]]:
-        return [{"tier": tier, "model_id": c.model_id}
-                for tier, c in self._clients.items() if c.connected]
+        # provider_id rides along because with two vendors bound, "heavy" no
+        # longer identifies a model — and a run record that cannot say which
+        # provider served it is not interpretable afterwards.
+        return [{"provider_id": provider_id, "tier": tier, "model_id": c.model_id}
+                for (provider_id, tier), c in self._clients.items() if c.connected]
 
     # --- Routing ---------------------------------------------------------------
 
     def _route(self, max_tokens: int, hints: QueryHints | None = None,
-               document_mime: str | None = None) -> LLMModelClient:
+               document_mime: str | None = None,
+               provider: str | None = None) -> LLMModelClient:
         """Select the appropriate client based on hints + capabilities.
 
         Routing priority:
@@ -150,46 +269,101 @@ class LLMDispatcher:
             # cheap default; anything needing depth says so in its manifest.
             order = ("light", "heavy")
 
+        # Provider is resolved before tier, and never falls through to
+        # another vendor. An operator running a module on Anthropic to compare
+        # it against Gemini gets Anthropic or an error — silently answering
+        # from the other vendor would make the comparison meaningless and the
+        # output unattributable.
+        selected = provider or self.default_provider
+        if selected is None:
+            raise RuntimeError("No LLM client connected — run 'connect' first")
+        if provider and provider not in self.bound_providers():
+            raise RuntimeError(
+                f"Provider {provider!r} is not bound — bound: "
+                f"{', '.join(self.bound_providers()) or 'none'}"
+            )
+
         if document_mime:
-            order = self._prefer_native_capable(order, document_mime)
+            order = self._prefer_native_capable(order, document_mime, selected)
 
         for tier in order:
-            c = self._clients.get(tier)
+            c = self._clients.get((selected, tier))
             if c and c.connected:
                 return c
-        # Nothing in the preferred order is connected. Accept any connected
-        # client rather than failing (e.g. a legacy single-key setup).
-        for c in self._clients.values():
-            if c.connected:
+        # No tier of the selected provider is in the preferred order. Take any
+        # connected tier of that same provider rather than failing (e.g. a
+        # legacy single-key setup, or a manifest declaring one tier).
+        for (provider_id, _), c in self._clients.items():
+            if provider_id == selected and c.connected:
                 return c
-        raise RuntimeError("No LLM client connected — run 'connect' first")
+        raise RuntimeError(
+            f"No connected client for provider {selected!r} — run 'connect' first"
+        )
 
     def _prefer_native_capable(
-        self, order: tuple[str, ...], document_mime: str,
+        self, order: tuple[str, ...], document_mime: str, provider: str,
     ) -> tuple[str, ...]:
         """Move tiers that natively handle this MIME type to the front.
 
         Relative order within each group is preserved, so this only breaks
         ties — it never overrides an explicit tier choice that is capable.
+        Scoped to one provider: native support is a property of a model, and
+        Gemini reading PDFs natively says nothing about another vendor's tier.
         """
         capability = _NATIVE_CAPABILITY_BY_MIME.get(document_mime)
         if not capability or not self._tier_specs:
             return order
         capable = [
             t for t in order
-            if capability in (self._tier_specs[t].capabilities
-                              if t in self._tier_specs else ())
+            if capability in (
+                self._tier_specs[(provider, t)].capabilities
+                if (provider, t) in self._tier_specs else ()
+            )
         ]
         if not capable:
             return order
         return tuple(capable) + tuple(t for t in order if t not in capable)
 
-    def _tier_of(self, client: LLMModelClient) -> str | None:
-        """Reverse-lookup the tier a client is registered under."""
-        for tier, c in self._clients.items():
+    def _attributed(
+        self, result: LLMResponse, client: LLMModelClient,
+    ) -> LLMResponse:
+        """Ensure the response names the provider that served it.
+
+        Each client stamps its own provider_id and this does not override one.
+        It is a backstop: with several vendors bound concurrently, a response
+        that cannot say who produced it is not interpretable afterwards, and a
+        client that simply forgot would produce unattributable output rather
+        than an error. Too important to leave to every client getting it right.
+
+        Attributing to the routed client is correct even after a tier change or
+        a retired-model substitution: both stay within the same provider by
+        construction, so the vendor is unchanged either way.
+        """
+        if result.provider_id:
+            return result
+        return replace(result, provider_id=_provider_of(client))
+
+    def _locate(self, client: LLMModelClient) -> tuple[str, str] | None:
+        """Reverse-lookup the (provider_id, tier) a client is registered under."""
+        for key, c in self._clients.items():
             if c is client:
-                return tier
+                return key
         return None
+
+    def _tier_of(self, client: LLMModelClient) -> str | None:
+        """Tier a client is registered under, without its provider."""
+        located = self._locate(client)
+        return located[1] if located else None
+
+    def _spec_of(self, client: LLMModelClient) -> TierSpec | None:
+        """Tier spec for a client, looked up by its own provider and tier.
+
+        Looking this up by tier alone would read a second vendor's caps off
+        the first vendor's manifest — and the two are not interchangeable:
+        Anthropic and OpenAI cap output at 128k against Gemini's 65,536.
+        """
+        located = self._locate(client)
+        return self._tier_specs.get(located) if located else None
 
     def _output_cap(self, client: LLMModelClient) -> int | None:
         """Output-token cap of the model this client actually runs.
@@ -202,8 +376,8 @@ class LLMDispatcher:
         cap = self._caps_by_model.get(client.model_id)
         if cap:
             return cap
-        tier = self._tier_of(client)
-        spec = self._tier_specs.get(tier) if tier else None
+        spec = self._spec_of(client)
+        tier = spec.tier if spec else None
         if spec is None:
             return None
         if client.model_id != spec.model_id:
@@ -224,8 +398,7 @@ class LLMDispatcher:
         cap = self._context_by_model.get(client.model_id)
         if cap:
             return cap
-        tier = self._tier_of(client)
-        spec = self._tier_specs.get(tier) if tier else None
+        spec = self._spec_of(client)
         return spec.max_context_tokens if spec else 1_048_576
 
     def _clamp_tokens(self, client: LLMModelClient, max_tokens: int) -> int:
@@ -312,8 +485,9 @@ class LLMDispatcher:
         """
         if self._kind_of(result) != "model_not_found":
             return None
-        tier = self._tier_of(client)
-        spec = self._tier_specs.get(tier) if tier else None
+        located = self._locate(client)
+        spec = self._tier_specs.get(located) if located else None
+        tier = located[1] if located else None
         if not spec or not spec.fallback_model_id:
             return None
         if spec.fallback_model_id == client.model_id:
@@ -336,17 +510,36 @@ class LLMDispatcher:
         # started at zero would undercount the session.
         substitute = client.with_model(spec.fallback_model_id)
         # Register it so subsequent calls in this session skip the failed id.
-        if tier:
-            self._clients[tier] = substitute
+        # Under its own (provider, tier), so a retired model on one vendor
+        # cannot displace another vendor's client at the same tier.
+        if located:
+            self._clients[located] = substitute
         return substitute
 
     def _fallback_client(self, primary: LLMModelClient) -> LLMModelClient | None:
-        """Return the other connected tier, or None if unavailable."""
-        for tier, c in self._clients.items():
+        """Return the other connected tier **of the same provider**, or None.
+
+        This is the one place the data-handling boundary lives. A quota
+        failure must never move a session to another vendor: nobody chose it,
+        investigation data would reach a provider the operator did not select,
+        and the output would be unattributable afterwards.
+
+        Deliberate provider selection is the requirement; silent failover is
+        the hazard. The two differ by who decided and whether it is recorded,
+        which is why this method is three lines of constraint rather than a
+        policy spanning the design.
+        """
+        located = self._locate(primary)
+        provider = located[0] if located else _provider_of(primary)
+        for (provider_id, tier), c in self._clients.items():
+            if provider_id != provider:
+                continue
             if c is not primary and c.connected:
                 logger.warning(
-                    "Tier change: %s (%s) → %s (%s) after quota exhaustion",
-                    self._tier_of(primary), primary.model_id, tier, c.model_id,
+                    "Tier change within %s: %s (%s) → %s (%s) after quota "
+                    "exhaustion", provider,
+                    located[1] if located else "?", primary.model_id,
+                    tier, c.model_id,
                 )
                 return c
         return None
@@ -360,9 +553,10 @@ class LLMDispatcher:
         max_tokens: int = 4096,
         grounding_data: list[str] | None = None,
         hints: QueryHints | None = None,
+        provider: str | None = None,
     ) -> LLMResponse:
         try:
-            client = self._route(max_tokens, hints=hints)
+            client = self._route(max_tokens, hints=hints, provider=provider)
         except RuntimeError as e:
             return LLMResponse(ok=False, error=str(e))
         result = client.query_text(
@@ -402,7 +596,7 @@ class LLMDispatcher:
                     grounding_data=grounding_data,
                     hints=hints,
                 )
-        return result
+        return self._attributed(result, client)
 
     def query_multimodal(
         self,
@@ -412,9 +606,10 @@ class LLMDispatcher:
         system_context: str | None = None,
         max_tokens: int = 4096,
         hints: QueryHints | None = None,
+        provider: str | None = None,
     ) -> LLMResponse:
         try:
-            client = self._route(max_tokens, hints=hints)
+            client = self._route(max_tokens, hints=hints, provider=provider)
         except RuntimeError as e:
             return LLMResponse(ok=False, error=str(e))
         result = client.query_multimodal(
@@ -457,7 +652,7 @@ class LLMDispatcher:
                     max_tokens=self._clamp_tokens(substitute, max_tokens),
                     hints=hints,
                 )
-        return result
+        return self._attributed(result, client)
 
     def query_with_document(
         self,
@@ -467,6 +662,7 @@ class LLMDispatcher:
         max_tokens: int = 8192,
         grounding_data: list[str] | None = None,
         hints: QueryHints | None = None,
+        provider: str | None = None,
     ) -> LLMResponse:
         """Query with a document artifact.
 
@@ -488,7 +684,10 @@ class LLMDispatcher:
             hints = replace(hints, media_resolution=default_media_resolution())
 
         try:
-            client = self._route(max_tokens, hints=hints, document_mime=mime_type)
+            client = self._route(
+                max_tokens, hints=hints, document_mime=mime_type,
+                provider=provider,
+            )
         except RuntimeError as e:
             return LLMResponse(ok=False, error=str(e))
 
@@ -541,7 +740,7 @@ class LLMDispatcher:
                     max_tokens=self._clamp_tokens(substitute, max_tokens),
                     hints=hints,
                 )
-        return result
+        return self._attributed(result, client)
 
     def _pdf_context_overflow(
         self, client: LLMModelClient, artifact: ArtifactRef,
@@ -694,8 +893,7 @@ class LLMDispatcher:
         capability = _NATIVE_CAPABILITY_BY_MIME.get(mime_type)
         if not capability:
             return False
-        tier = self._tier_of(client)
-        spec = self._tier_specs.get(tier) if tier else None
+        spec = self._spec_of(client)
         if spec is None:
             return True
         return capability in spec.capabilities
@@ -713,13 +911,33 @@ class TierScopedLLMClient:
     stays plugin-agnostic, and no existing plugin call site has to change.
     """
 
-    def __init__(self, inner: LLMQueryInterface, default_tier: str = "light"):
+    def __init__(self, inner: LLMQueryInterface, default_tier: str = "light",
+                 default_provider: str | None = None):
         self._inner = inner
         # "none" means the plugin declares no LLM work; treat any incidental
         # call as light rather than silently promoting it to Pro.
         self.default_tier = (
             default_tier if default_tier in ("light", "heavy") else "light"
         )
+        # Provider for this execution, when the operator selected one. This is
+        # the right home for it and QueryHints is not: hints are plugin-facing,
+        # so a provider field there would put vendor choice in plugin code and
+        # let a plugin override an operator's A/B selection — which would make
+        # the comparison unattributable and break "the analysis tools do not
+        # change". None means the dispatcher's session default serves.
+        self.default_provider = default_provider
+
+    def _provider_kwargs(self) -> dict[str, str]:
+        """Provider scope to pass inward, if there is one and it is accepted.
+
+        Duck-typed on the inner object, because TierScopedLLMClient also wraps
+        bare clients and test fakes whose query methods take no provider.
+        """
+        if not self.default_provider:
+            return {}
+        if not getattr(self._inner, "accepts_provider_scope", False):
+            return {}
+        return {"provider": self.default_provider}
 
     def _with_default(self, hints: QueryHints | None) -> QueryHints:
         """Fill in the manifest tier when the caller expressed no opinion.
@@ -764,6 +982,7 @@ class TierScopedLLMClient:
             max_tokens=max_tokens,
             grounding_data=grounding_data,
             hints=self._with_default(hints),
+            **self._provider_kwargs(),
         )
 
     def query_multimodal(
@@ -782,6 +1001,7 @@ class TierScopedLLMClient:
             system_context=system_context,
             max_tokens=max_tokens,
             hints=self._with_default(hints),
+            **self._provider_kwargs(),
         )
 
     def query_with_document(
@@ -811,6 +1031,7 @@ class TierScopedLLMClient:
             max_tokens=max_tokens,
             grounding_data=grounding_data,
             hints=resolved,
+            **self._provider_kwargs(),
         )
 
     def supports_native_document(self, mime_type: str) -> bool:

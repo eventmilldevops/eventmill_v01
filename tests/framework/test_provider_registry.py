@@ -465,11 +465,14 @@ class TestOnlyGeminiIsBoundForToolExecution:
         shell.do_connect("")
         assert isinstance(shell.llm_client, LLMDispatcher)
         bound = shell.llm_client._clients
-        assert set(bound) == {"light", "heavy"}
-        for tier, client in bound.items():
-            assert client.provider_id == "gcp_gemini", (
+        # Keyed by (provider_id, tier) since the rekey — which is exactly what
+        # makes this assertion possible to state rather than merely hope for.
+        assert set(bound) == {("gcp_gemini", "light"), ("gcp_gemini", "heavy")}
+        for (provider_id, tier), client in bound.items():
+            assert client.provider_id == "gcp_gemini" == provider_id, (
                 f"{tier} bound to {client.provider_id} — plugin routing hijacked"
             )
+        assert shell.llm_client.bound_providers() == ("gcp_gemini",)
 
     def test_probing_another_provider_does_not_bind_it(
         self, shell: EventMillShell, monkeypatch: pytest.MonkeyPatch,

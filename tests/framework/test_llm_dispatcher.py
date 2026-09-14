@@ -645,7 +645,7 @@ class TestPdfContextGuard:
 
     def _check(self, dispatcher, pages, resolution):
         return dispatcher._pdf_context_overflow(
-            dispatcher._clients["heavy"],
+            dispatcher.client_at("heavy"),
             self._artifact(pages),
             QueryHints(media_resolution=resolution),
         )
@@ -681,7 +681,7 @@ class TestPdfContextGuard:
             },
         )
         r = dispatcher._pdf_context_overflow(
-            dispatcher._clients["heavy"], art, QueryHints(),
+            dispatcher.client_at("heavy"), art, QueryHints(),
         )
         assert r is not None and not r.ok
         assert r.fallback_reason == "pdf_exceeds_provider_size_limit"
@@ -739,7 +739,7 @@ class TestPdfContextGuard:
             metadata={"mime_type": "application/pdf"},
         )
         result = dispatcher._pdf_context_overflow(
-            dispatcher._clients["heavy"], art, QueryHints(media_resolution="high"),
+            dispatcher.client_at("heavy"), art, QueryHints(media_resolution="high"),
         )
         assert result is None
 
@@ -851,7 +851,7 @@ class TestRetiredModelFallback:
         assert result.ok
         assert clients["heavy"].calls[0]["kind"] == "document"
         # The tier was rebound to the fallback model for the rest of the session.
-        assert d._clients["heavy"].model_id == "flash"
+        assert d.client_at("heavy").model_id == "flash"
 
     def test_the_substitute_carries_the_spend_forward(self, clients):
         """total_tokens_used sums over the live clients, so a substitute that
@@ -861,7 +861,7 @@ class TestRetiredModelFallback:
         d = LLMDispatcher(clients=clients, tier_specs=_specs())
         d.query_text("p", hints=QueryHints(tier="heavy"))
 
-        assert d._clients["heavy"].total_tokens_used == 1234
+        assert d.client_at("heavy").total_tokens_used == 1234
 
 
 # ---------------------------------------------------------------------------

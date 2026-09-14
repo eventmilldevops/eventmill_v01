@@ -3986,7 +3986,11 @@ class EventMillShell(cmd.Cmd):
         if self.llm_client is None:
             return ""
         if isinstance(self.llm_client, LLMDispatcher):
-            c = self.llm_client._clients.get(model["tier"])
+            # Provider-qualified: with two vendors bound, a tier alone no
+            # longer identifies a client.
+            c = self.llm_client.client_at(
+                model["tier"], model.get("provider", DEFAULT_PROVIDER_ID),
+            )
             return "✓ connected" if (c and c.connected) else ""
         if isinstance(self.llm_client, GeminiClient):
             return "✓ connected" if (self.llm_client.model_id == model["id"] and self.llm_client.connected) else ""
