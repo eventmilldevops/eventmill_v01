@@ -486,6 +486,56 @@ class TestOnlyGeminiIsBoundForToolExecution:
 
         assert shell.llm_client._clients == before
 
+    def test_the_image_installs_every_provider_sdk(self) -> None:
+        """The container must carry an SDK for every provider it can configure.
+
+        Observed on Cloud Run 2026-09-14: 'providers probe anthropic' reported
+        "anthropic package not installed". The keys had arrived — the failure
+        came from build_clients' connect step, which runs only after the key
+        check passes — but Dockerfile.cloudrun installed four extras and
+        neither LLM one. google-genai is a base dependency, so Gemini worked
+        and hid the gap.
+
+        Correct in source, absent in the environment: the same failure class as
+        the .env model pin. This is the cheap guard against a third instance.
+        """
+        import tomllib
+
+        pyproject = tomllib.loads(
+            Path("pyproject.toml").read_text(encoding="utf-8")
+        )
+        extras = set(pyproject["project"]["optional-dependencies"])
+        llm_extras = {e for e in extras if e.startswith("llm-")}
+        assert llm_extras, "no llm-* extras declared"
+
+        dockerfile = Path("cloud_install/Dockerfile.cloudrun")
+        if not dockerfile.exists():  # pragma: no cover — repo layout guard
+            pytest.skip("cloud run Dockerfile not present")
+        text = dockerfile.read_text(encoding="utf-8")
+        for extra in sorted(llm_extras):
+            assert extra in text, (
+                f"{extra} is declared but the Cloud Run image never installs "
+                f"it — that provider will report 'package not installed'"
+            )
+
+    def test_the_ci_path_mounts_every_provider_secret(self) -> None:
+        """cloudbuild.yaml must mount what deploy-cloudrun-secrets.sh mounts.
+
+        The two deploy paths duplicate the secret list, so they drift silently:
+        a key present via one path and absent via the other looks like a
+        working deployment until a provider is probed.
+        """
+        cloudbuild = Path("cloud_install/cloudbuild.yaml")
+        if not cloudbuild.exists():  # pragma: no cover — repo layout guard
+            pytest.skip("cloudbuild.yaml not present")
+        text = cloudbuild.read_text(encoding="utf-8")
+        for provider_id in factory.known_providers():
+            for env_var in factory.key_env_vars(provider_id):
+                assert env_var in text, (
+                    f"{env_var} is never mounted by the CI deploy path"
+                )
+        assert factory.PROVIDERS_ENV in text
+
     def test_the_providers_table_names_every_known_provider(
         self, shell: EventMillShell, capsys: pytest.CaptureFixture,
     ) -> None:
