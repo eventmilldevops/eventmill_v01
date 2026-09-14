@@ -66,7 +66,11 @@ _EFFORT_BY_LEVEL = {
 _ASSUMED_CAPABILITIES = ("text", "multimodal_image")
 
 
-def _effort(hints: QueryHints | None, tier: str | None) -> str | None:
+def _effort(
+    hints: QueryHints | None,
+    tier: str | None,
+    provider_id: str = PROVIDER_ID,
+) -> str | None:
     """Map portable hints onto this provider's reasoning control.
 
     Clamped to what the tier declares it accepts: a level the provider rejects
@@ -83,7 +87,7 @@ def _effort(hints: QueryHints | None, tier: str | None) -> str | None:
     if effort is None:
         logger.warning("Ignoring unknown thinking_level %r", level)
         return None
-    accepted = accepted_thinking_levels(tier or "light", PROVIDER_ID)
+    accepted = accepted_thinking_levels(tier or "light", provider_id)
     if accepted and effort not in accepted:
         logger.warning(
             "%s does not accept reasoning_effort %r — using %r",
@@ -128,6 +132,7 @@ class OpenAIClient:
         api_key_env_var: str | None = "OPENAI_API_KEY",
         max_retries: int = 3,
         timeout: float = 180.0,
+        provider_id: str | None = None,
     ):
         """Initialize the OpenAI client.
 
@@ -139,7 +144,13 @@ class OpenAIClient:
             max_retries: Retries the SDK performs on 429/5xx.
             timeout: Per-request timeout in seconds, matching the other two
                 clients' 180 s.
+            provider_id: Provider id this client answers as. Defaults to
+                "openai". A second provider served by the same SDK and the
+                same class — a specialist model on its own key — passes its
+                own id here, because every manifest lookup this client makes
+                and every response it stamps reads this rather than the class.
         """
+        self.provider_id = provider_id or PROVIDER_ID
         self.model_id = model_id
         self.tier = tier
         self.max_retries = max_retries
@@ -209,6 +220,7 @@ class OpenAIClient:
             api_key_env_var=self._api_key_env_var,
             max_retries=self.max_retries,
             timeout=self.timeout,
+            provider_id=self.provider_id,
         )
         substitute._sdk_client = self._sdk_client
         substitute._connected = self._connected
@@ -364,7 +376,7 @@ class OpenAIClient:
         }
         if system_context:
             request["instructions"] = system_context
-        effort = _effort(hints, self.tier)
+        effort = _effort(hints, self.tier, self.provider_id)
         if effort:
             request["reasoning"] = {"effort": effort}
 

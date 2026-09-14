@@ -10,6 +10,40 @@ terminal (ttyd) on Cloud Run.
 
 ---
 
+## Where the work stands — 2026-09-14
+
+Branch `llm_multi`. **Three LLM providers bind concurrently and a tool can be
+pointed at any of them.** Plan: `docs/specs/multi_provider_llm_clients.md`
+(Part 1, the framework) and `docs/specs/projector_three_vendor_run.md` (the
+demonstration).
+
+| | State |
+|---|---|
+| Gemini, Anthropic, OpenAI clients | done; all six tier clients verified live on Cloud Run 2026-09-13 |
+| `(provider_id, tier)` routing, no cross-vendor fallback | done |
+| `connect` binds every configured provider; `use <provider> [for <tool>]` | done |
+| `EVENTMILL_LLM_PROVIDERS` defaults to all three everywhere | done |
+| Projector run record names the vendor + hashes the prompt (schema v4) | done |
+| Group summary: recurrence per provider, agreement across them | done |
+| **The live three-vendor run** | **next — Stage E of the projector plan** |
+
+**The two things most likely to bite next:**
+
+1. **The PDF guard reads Gemini's limits whatever provider is selected**
+   (`pdf_handling()` / `tokens_per_pdf_page()` called with no `provider_id`).
+   Anthropic's are 100 pages / 32 MB against Gemini's 1000 / 50 MB. A wrong
+   answer, not a missing feature — and it gates the two document modules.
+   It is **not** on the projector's path, which is why the projector went first.
+2. **`run --file_path C:\Users\...` silently loses its backslashes.**
+   `_parse_flag_payload` uses `shlex.split` in POSIX mode, so the path arrives
+   as `C:Usersdleecemap.json` and the tool reports `ARTIFACT_UNREADABLE` naming
+   the mangled path. Quote it, or use forward slashes. Unfixed.
+
+Read `docs/change_log/` newest-first for how any of it got that way; the five
+entries dated 2026-09-14 are this thread.
+
+---
+
 ## Commands
 
 Python >= 3.11 (`pyproject.toml` targets 3.11; the container uses 3.12).
@@ -30,11 +64,16 @@ python scripts/generate_tool_catalog.py  # regenerate the tool catalog
 Run the shell locally: `python -m framework.cli.shell` (or the `eventmill`
 console script).
 
-Verified as of 2026-08-23: `pytest` (376 passing), `validate_manifests.py`,
-and `validate_schemas.py` (32 valid) all run. `ruff`, `black` and `mypy` are in
-the `dev` extra but were **not installed** in the environment they were checked
-from, so they are still unconfirmed — install with `pip install -e ".[dev]"`
-before trusting a clean lint.
+Verified as of 2026-09-14: `pytest` (**1095 passing**, 0 skipped, 0 xfailed) and
+`validate_schemas.py` (34 valid) both run. `ruff`, `black` and `mypy` are in the
+`dev` extra but are still **not installed** in the environment this was checked
+from, so a clean lint remains unconfirmed — install with
+`pip install -e ".[dev]"` before claiming one.
+
+On Windows, prefix the `scripts/` validators with `PYTHONIOENCODING=utf-8`;
+they print ✓/✗ and crash on cp1252 otherwise. The same trap applies to reading
+any repo JSON or Markdown from Python — pass `encoding="utf-8"` explicitly, or
+em dashes come back as mojibake and you will "fix" a file that was fine.
 
 > **`validate_manifests.py` currently exits non-zero with 15 errors**, all
 > `'stable' is not one of ['experimental','verified','core','deprecated']`.

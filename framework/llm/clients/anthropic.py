@@ -125,6 +125,7 @@ class AnthropicClient:
         api_key_env_var: str | None = "ANTHROPIC_API_KEY",
         max_retries: int = 3,
         timeout: float = 180.0,
+        provider_id: str | None = None,
     ):
         """Initialize the Anthropic client.
 
@@ -137,7 +138,12 @@ class AnthropicClient:
             timeout: Per-request timeout in seconds, matching the Gemini
                 client's 180 s so a slow heavy-tier call behaves the same way
                 whichever provider serves it.
+            provider_id: Provider id this client answers as. Defaults to
+                "anthropic". Every manifest lookup this client makes and every
+                response it stamps reads this rather than the class, so a
+                second provider served by the same class passes its own id.
         """
+        self.provider_id = provider_id or PROVIDER_ID
         self.model_id = model_id
         self.tier = tier
         self.max_retries = max_retries
@@ -207,6 +213,7 @@ class AnthropicClient:
             api_key_env_var=self._api_key_env_var,
             max_retries=self.max_retries,
             timeout=self.timeout,
+            provider_id=self.provider_id,
         )
         substitute._sdk_client = self._sdk_client
         substitute._connected = self._connected

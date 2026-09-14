@@ -83,28 +83,44 @@ under that; it is what downstream reasoning actually sees.
 Plugins receive a read-only `ExecutionContext`. The one write they may perform is
 `context.register_artifact()`.
 
-### LLM tier selection
+### LLM provider and tier selection
 
-Tier precedence, in order: **per-call `QueryHints` > manifest `model_tier` >
-light.** Output size never selects a tier — the two tiers are capacity-identical,
-so plugin manifests are what drive model selection. A `QueryHints` whose `tier`
-is `None` expresses no opinion and falls through to the manifest default; that is
-why `tier` defaults to `None` rather than `"light"`.
+Two independent choices, made by two different people, and keeping them apart is
+the point:
+
+| | Chosen by | Carried on |
+|---|---|---|
+| **tier** — reasoning depth and cost | the plugin, via its manifest | `QueryHints` > manifest `model_tier` > light |
+| **provider** — which vendor answers | the operator, via `use` | `TierScopedLLMClient(default_provider=…)` |
+
+Output size never selects a tier — within a provider the two tiers are
+capacity-identical, so plugin manifests are what drive model selection. A
+`QueryHints` whose `tier` is `None` expresses no opinion and falls through to the
+manifest default; that is why `tier` defaults to `None` rather than `"light"`.
 
 `TierScopedLLMClient` wraps the shared dispatcher once per plugin execution and
-supplies the manifest's tier when a call passes no hints — so the common case
-needs no code in the plugin. `LLMDispatcher` stays plugin-agnostic.
+supplies both the manifest's tier and the operator's provider when a call passes
+no hints — so the common case needs no code in the plugin. `LLMDispatcher` stays
+plugin-agnostic. **`QueryHints` has no `provider` field and must not gain one:**
+that would put vendor choice in plugin code and let a plugin override an
+operator's A/B selection. A test asserts the wrapper exposes no `provider`
+parameter to the plugin at all.
 
-`framework/llm/providers/gcp_gemini.json` is the **single source of truth** for
-model ids, token limits, per-tier capabilities and PDF page cost. Do not hardcode
-any of those elsewhere. `framework/llm/clients/gemini.py` reads it — for tier
-caps, native document capability, and PDF page cost alike — rather than
-repeating any of it.
+`framework/llm/providers/<provider_id>.json` is the **single source of truth per
+vendor** for model ids, token limits, per-tier capabilities and PDF page cost. Do
+not hardcode any of those elsewhere, and **never read one provider's limits for
+another** — Anthropic's output cap is 128,000 against Gemini's 65,536, and its
+PDF limits are 100 pages / 32 MB against 1000 / 50 MB. Each client reads its own.
 
-The two tiers are **capacity-identical** (1,048,576 in / 65,536 out). Tier means
-reasoning depth and cost, never how much fits — any logic that picks a tier from
-data size is wrong by construction. See AGENTS.md for the rest, including why PDF
-page cost is not a constant.
+Within a provider the two tiers are **capacity-identical** (Gemini: 1,048,576 in
+/ 65,536 out). Tier means reasoning depth and cost, never how much fits — any
+logic that picks a tier from data size is wrong by construction. See AGENTS.md
+for the rest, including why PDF page cost is not a constant.
+
+**Automatic cross-provider fallback is forbidden** and enforced in
+`_fallback_client`, which answers only "the other connected tier of the same
+provider". Deliberate selection is the requirement; silent failover would send
+investigation data to a vendor nobody chose and leave the output unattributable.
 
 ### Local vs Cloud Run
 
@@ -133,10 +149,12 @@ and is silently wrong, which is why the deploy scripts guard it.
 |---|---|
 | Plugin contract, error codes, timeout classes | `framework/plugins/protocol.py` |
 | Manifest fields and validation | `framework/plugins/loader.py`, `docs/specs/manifest_schema.json` |
-| Tier routing, clamping, fallback | `framework/llm/dispatcher.py` |
+| Provider + tier routing, clamping, same-provider fallback | `framework/llm/dispatcher.py` |
+| Which providers exist, are configured, are keyed | `framework/llm/factory.py` |
 | What a provider client must implement | `framework/llm/model_client.py` |
-| Gemini SDK calls, request/response shape, error classification | `framework/llm/clients/gemini.py` |
-| Model facts | `framework/llm/providers/gcp_gemini.json` |
+| A vendor's SDK calls, request/response shape, error classification | `framework/llm/clients/{gemini,anthropic,openai}.py` |
+| Model facts, per vendor | `framework/llm/providers/<provider_id>.json` |
+| Choosing a vendor per module | `do_use` in `framework/cli/shell.py` |
 | Document profiling, page-range batching plan | `framework/documents/profile.py`, `framework/documents/pdf_split.py` |
 | Normative plugin spec | `docs/specs/tool_plugin_spec.md` |
 | How to write a plugin | `docs/guides/plugin_development.md` |

@@ -52,6 +52,17 @@ PROVIDER_SECRETS: dict[str, tuple[str, ...]] = {
     "openai": ("eventmill-openai-api",),
 }
 
+# What to pip install to get a provider's SDK. Not derivable from the provider
+# id: google-genai is a base dependency rather than an extra, and one SDK can
+# serve several providers — a specialist model on its own key is still the
+# openai package. Deriving it from the id told operators to install extras that
+# do not exist.
+PROVIDER_SDK_INSTALL: dict[str, str] = {
+    "gcp_gemini": "eventmill",
+    "anthropic": "eventmill[llm-anthropic]",
+    "openai": "eventmill[llm-openai]",
+}
+
 PROVIDERS_ENV = "EVENTMILL_LLM_PROVIDERS"
 
 # The value an unadopted provider's secret holds. provision-gcp-project.sh
@@ -181,6 +192,16 @@ def available_providers(raw: str | None = None) -> tuple[str, ...]:
     return tuple(out)
 
 
+def sdk_install_target(provider_id: str) -> str:
+    """Pip target that installs this provider's SDK, for an ImportError message.
+
+    Falls back to the everything extra for a provider the map has not been
+    told about: an install line that over-installs is recoverable, one naming
+    an extra that does not exist is not.
+    """
+    return PROVIDER_SDK_INSTALL.get(provider_id, "eventmill[all]")
+
+
 def client_class(provider_id: str) -> type:
     """Import and return a provider's client class.
 
@@ -219,7 +240,7 @@ def build_clients(
     except ImportError as e:
         failures.append(
             f"{provider_id}: SDK not installed ({e}) — "
-            f"pip install 'eventmill[llm-{provider_id.replace('gcp_', '')}]'"
+            f"pip install '{sdk_install_target(provider_id)}'"
         )
         return clients, failures
 
@@ -243,6 +264,7 @@ def build_clients(
             continue
         client = cls(
             model_id=spec.model_id, tier=tier, api_key_env_var=spec.api_key_env,
+            provider_id=provider_id,
         )
         if not connect:
             clients[tier] = client
@@ -260,6 +282,7 @@ __all__ = [
     "PLACEHOLDER",
     "PROVIDERS_ENV",
     "PROVIDER_CLIENTS",
+    "PROVIDER_SDK_INSTALL",
     "PROVIDER_SECRETS",
     "UnknownProviderError",
     "available_providers",
@@ -270,4 +293,5 @@ __all__ = [
     "known_providers",
     "missing_keys",
     "provider_status",
+    "sdk_install_target",
 ]

@@ -59,17 +59,22 @@ eventmill_v01/
 │   │
 │   ├── llm/                            # LLM Orchestration
 │   │   ├── __init__.py
-│   │   ├── dispatcher.py               # LLMDispatcher (routes by QueryHints), TierScopedLLMClient
-│   │   ├── model_client.py             # LLMModelClient protocol, error_kind vocabulary
+│   │   ├── dispatcher.py               # LLMDispatcher (keyed by (provider_id, tier)), TierScopedLLMClient
+│   │   ├── factory.py                  # Provider registry: known / configured / available
+│   │   ├── model_client.py             # LLMModelClient protocol, probe(), error_kind vocabulary
 │   │   ├── clients/                    # One client per provider, each owning its SDK
 │   │   │   ├── __init__.py
-│   │   │   └── gemini.py               # GeminiClient — google.genai
+│   │   │   ├── gemini.py               # GeminiClient — google.genai
+│   │   │   ├── anthropic.py            # AnthropicClient — output_config.effort
+│   │   │   └── openai.py               # OpenAIClient — Responses API, store=False
 │   │   ├── backends/                   # Provider-neutral request parts
 │   │   │   ├── __init__.py
 │   │   │   └── base.py                 # DocumentPart
-│   │   └── providers/                  # Declarative capability manifests
+│   │   └── providers/                  # Declarative capability manifests, one per vendor
 │   │       ├── __init__.py
-│   │       └── gcp_gemini.json         # Gemini tiers, file handling, document strategies
+│   │       ├── gcp_gemini.json         # Gemini tiers, file handling, document strategies
+│   │       ├── anthropic.json          # Anthropic tiers, 128k output cap, 100-page PDF limit
+│   │       └── openai.json             # OpenAI tiers, 128k output cap
 │   │
 │   ├── artifacts/                      # Artifact Registry
 │   │   ├── __init__.py
@@ -161,8 +166,9 @@ eventmill_v01/
 | **CLI** | User I/O, command dispatch | Session state, tool catalog | User commands to session manager |
 | **Session Manager** | Session lifecycle, SQLite | — | Session DB (sessions, artifacts, tool_executions) |
 | **Router** | Pillar selection, tool filtering | Plugin registry, session state, config | Routing decisions (logged, not persisted) |
-| **LLM Dispatcher** | Model routing, native doc dispatch | QueryHints, provider manifest | GenAI SDK calls (external) |
-| **LLM Backend** | Provider SDK connection, retry logic | API keys, model capabilities | API requests (external) |
+| **LLM Dispatcher** | Routing by (provider, tier), native doc dispatch, output clamping | QueryHints, operator provider scope, per-provider manifests | Provider SDK calls (external) |
+| **Provider Registry** | Which providers are known, configured and keyed; builds their clients | `EVENTMILL_LLM_PROVIDERS`, key env vars | Client instances (in-memory) |
+| **LLM Client** | One per vendor: SDK calls, request shape, error classification | API keys, model capabilities | API requests (external) |
 | **Artifact Registry** | Artifact tracking, immutability | Storage backend | Session DB (artifacts table) |
 | **Plugin Loader** | Discovery, validation, import | Plugin directories, manifest files | Plugin registry (in-memory) |
 | **Plugin Executor** | Timeout enforcement, context injection | Plugin registry, session state | Session DB (tool_executions), artifact registry |

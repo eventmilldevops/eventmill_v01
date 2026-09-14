@@ -157,6 +157,7 @@ class GeminiClient:
         max_retries: int = 3,
         tier: str | None = None,
         api_key_env_var: str | None = None,
+        provider_id: str | None = None,
     ):
         """Initialize the Gemini client.
 
@@ -167,7 +168,12 @@ class GeminiClient:
             max_retries: Maximum retry attempts for failed queries.
             tier: Tier this client is bound to, for capability lookups.
             api_key_env_var: Environment variable holding this model's key.
+            provider_id: Provider id this client answers as. Defaults to the
+                framework default. Every manifest lookup this client makes and
+                every response it stamps reads this rather than the class, so a
+                second provider served by the same class passes its own id.
         """
+        self.provider_id = provider_id or DEFAULT_PROVIDER_ID
         self.model_id = model_id
         self.transport = transport
         self.endpoint = endpoint
@@ -247,6 +253,7 @@ class GeminiClient:
             max_retries=self.max_retries,
             tier=self.tier,
             api_key_env_var=self._api_key_env_var,
+            provider_id=self.provider_id,
         )
         substitute._genai_client = self._genai_client
         substitute._connected = self._connected

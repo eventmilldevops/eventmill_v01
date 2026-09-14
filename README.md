@@ -59,24 +59,36 @@ Event Mill uses a three-layer architecture:
 | `cloud_investigation` | Cloud audit log analysis | Post-MVP |
 | `risk_assessment` | Risk scoring, control effectiveness | Post-MVP |
 
-### Model Tiers
+### Providers and model tiers
 
 Every LLM call is routed to one of two tiers, declared per plugin as
-`model_tier` in its manifest:
+`model_tier` in its manifest. Three providers can be bound at once, each
+offering both tiers:
 
-| Tier | Model | Used for |
-|------|-------|----------|
-| `light` | `gemini-3.8-flash` | Bulk work — pattern summarization, IOC extraction, chunked reads |
-| `heavy` | `gemini-3.1-pro-preview` | Deep reasoning — threat modeling, risk assessment, synthesis |
+| Provider | `light` | `heavy` |
+|---|---|---|
+| `gcp_gemini` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
+| `anthropic` | `claude-sonnet-5` | `claude-opus-5` |
+| `openai` | `gpt-5.6-terra` | `gpt-5.6-sol` |
 
-Both models accept 1,048,576 input and 65,536 output tokens, so the tier is a
-choice about reasoning depth and cost, not about how much fits. A plugin can
+`light` is bulk work — pattern summarization, IOC extraction, chunked reads.
+`heavy` is deep reasoning — threat modeling, risk assessment, synthesis. Within
+a provider the two tiers are capacity-identical, so **the tier is a choice
+about reasoning depth and cost, never about how much fits**. A plugin can
 override its manifest default per call with `QueryHints`, and the framework
 clamps output requests to what the selected model can actually emit.
 
-Model ids, token limits, and per-tier capabilities live in
-`framework/llm/providers/gcp_gemini.json` — one declarative source rather than
-values scattered through the code.
+**Which vendor serves a tool is an operator decision, never a plugin's.**
+`use <provider>` sets the session default and `use <provider> for <tool_name>`
+overrides one module, which is how the same tool can be run on the same input
+past two vendors and compared — the prompt stays byte-identical across the
+swap and every response records the provider that served it. Automatic
+failover between vendors is deliberately not offered: it would send
+investigation data to a provider nobody selected and leave the result
+unattributable.
+
+Model ids, token limits, and per-tier capabilities live in one declarative
+manifest per provider under `framework/llm/providers/` rather than in code.
 
 ---
 
@@ -103,16 +115,27 @@ pip install -e ".[dev,plugins-log-analysis]"
 cp .env.example .env
 ```
 
-Event Mill talks to Google Gemini. Set one API key per tier so high-volume
-light-tier traffic cannot exhaust the heavy tier's quota:
+Event Mill talks to Gemini, Anthropic and OpenAI. Only Gemini splits keys by
+tier, so that high-volume light-tier traffic cannot exhaust the heavy tier's
+quota; the other two issue one key per account:
 
 ```bash
 GEMINI_FLASH_API_KEY=...   # light tier
 GEMINI_PRO_API_KEY=...     # heavy tier
+ANTHROPIC_API_KEY=...      # both tiers
+OPENAI_API_KEY=...         # both tiers
 ```
 
-A single `GEMINI_API_KEY` also works and binds to the light tier. Keys are
-available from [Google AI Studio](https://aistudio.google.com/apikey).
+**You need only one of them.** `EVENTMILL_LLM_PROVIDERS` names the providers a
+session may bind and defaults to all three; a provider whose key is absent is
+skipped at startup and reported as dormant, so setting one key and leaving the
+rest is a normal, working configuration. `connect` says which vendors bound and
+which did not.
+
+A single `GEMINI_API_KEY` also works and binds to **both** Gemini tiers, so
+plugin manifests still drive model selection rather than every tool collapsing
+onto Flash. Gemini keys come from
+[Google AI Studio](https://aistudio.google.com/apikey).
 
 ### Running
 
@@ -137,6 +160,8 @@ tools               # list available plugins and the name to invoke them by
 help <tool_name>    # show a tool's arguments
 run <tool_name> ... # run a tool
 ask: <question>     # ask the LLM about the current session
+providers           # which LLM providers are configured, keyed and bound
+use <provider>      # choose the vendor that serves tools this session
 ```
 
 `files` lists what a pillar can reach. On a large store, narrow it rather than

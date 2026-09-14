@@ -446,10 +446,10 @@ class EventMillShell(cmd.Cmd):
         try:
             cls = llm_factory.client_class(provider_id)
         except ImportError as e:
-            extra = provider_id.replace("gcp_", "")
+            target = llm_factory.sdk_install_target(provider_id)
             failures.append(
                 f"  ✗ {model['name']}: {provider_id} SDK not installed ({e}) — "
-                f"pip install 'eventmill[llm-{extra}]'"
+                f"pip install '{target}'"
             )
             return None
         except llm_factory.UnknownProviderError as e:
@@ -460,6 +460,7 @@ class EventMillShell(cmd.Cmd):
             model_id=model["id"],
             tier=model["tier"],
             api_key_env_var=model["env_var"],
+            provider_id=provider_id,
         )
         if not client.connect(api_key=api_key):
             failures.append(

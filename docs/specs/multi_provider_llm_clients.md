@@ -359,29 +359,39 @@ accident* — the requirement was unbounded until 2026-09-14 — so "Gemini is o
 
 ### Stage 2 — generalise construction, and make the client map two-dimensional
 
+**Construction DONE (2a), rekey DONE (`71df426`), scoping DONE (`edb5649`).
+Only the accessor threading is outstanding** — see the end of this stage.
+
 The largest stage, and the one the concurrency requirement reshapes.
-**Stage 2a landed the construction half** (`factory.py`, both manifests, both
-clients, `EVENTMILL_LLM_PROVIDERS`); what remains below is the rekey, the
-scoping wrapper's `default_provider`, and the accessor threading.
 
 **Construction.** `PROVIDER_CLIENTS` registry in `factory.py`.
-`EVENTMILL_LLM_PROVIDERS` — **plural, space-separated, default `gcp_gemini`** —
-names which providers a session may bind. A provider is *available* when it is
-listed and its key env var is set; listing one whose key is absent is a named
-warning at startup, not a failure, because a placeholder-seeded deployment is
-the expected steady state (see Stage 6).
+`EVENTMILL_LLM_PROVIDERS` — **plural, space-separated, defaulting to all three
+known providers** — names which providers a session may bind. A provider is
+*available* when it is listed and its key env var holds a real value; listing
+one whose key is absent or still holds `placeholder` is reported as dormant at
+`connect`, not a failure, because a placeholder-seeded deployment is the
+expected steady state (see Stage 6).
 
-**Keying.** `LLMDispatcher._clients` moves to `(provider_id, tier)` per decision
-8. `_route()` resolves provider then tier; `_tier_of` becomes
-`_locate(client) -> (provider_id, tier)`; `connected_models()` reports both.
-`_fallback_client` is constrained to the same provider, with a test asserting a
-quota failure never crosses vendors.
+> The default changed from `gcp_gemini` to all three on 2026-09-14, on the
+> operator's call: *"Working infra remains a priority, field users will forget
+> workarounds like setting variables."* Naming a provider whose key is absent
+> costs nothing; not naming one whose key is present costs a vendor that never
+> binds, with no error. Change log:
+> `2026-09-14-all-providers-configured-by-default.md`.
 
-**Scoping.** `TierScopedLLMClient` gains `default_provider`, set from the
-execution scope in `shell.py:2782` per decision 9. With one provider bound this
-is a no-op and behaviour is identical.
+**Keying — DONE `71df426`.** `LLMDispatcher._clients` moves to
+`(provider_id, tier)` per decision 8. `_route()` resolves provider then tier;
+`_tier_of` becomes `_locate(client) -> (provider_id, tier)`;
+`connected_models()` reports both. `_fallback_client` is constrained to the
+same provider, with a test asserting a quota failure never crosses vendors.
 
-**Provider-qualified accessors.** Thread `provider_id` through every accessor in
+**Scoping — DONE `edb5649`.** `TierScopedLLMClient` gains `default_provider`,
+set from the execution scope in `shell.py` per decision 9, resolved per-tool
+then session-default then `None`. With one provider bound this is a no-op and
+behaviour is identical.
+
+**Provider-qualified accessors — OUTSTANDING, and the largest remaining item in
+Part 1.** Thread `provider_id` through every accessor in
 `providers/__init__.py` and the dispatcher's four unqualified calls
 (`pdf_handling()`, `tokens_per_pdf_page()`, and the two in the PDF guard).
 Per-tier `output_budget` / `file_handling` override.
@@ -444,13 +454,21 @@ Anthropic was written third against an interface shaped by the first two.
 never has — but only once the guard reads the *active* provider's limits rather
 than Gemini's, which is Stage 2 accessor work.
 
-### Stage 5 — CLI selection, runtime override, and normalised diagnostics
+### Stage 5 — CLI selection, runtime override, and normalised diagnostics — **DONE 2026-09-14** (`edb5649`)
 
-Rework `_discover_models` and `do_connect` to be provider-driven.
-`_discover_models` currently gates on `spec.api_key_env` from the Gemini
-manifest alone (`shell.py:418`), so until this lands a mounted
-`ANTHROPIC_API_KEY` is invisible — correct in source, inert in the environment,
-which is the 09-12 failure mode exactly.
+Change logs: `2026-09-14-connect-binds-every-provider.md` (the binding half) and
+`2026-09-14-use-provider-per-module.md` (the selection half).
+
+`_discover_models` and `do_connect` are provider-driven: discovery walks every
+configured provider's manifest and `connect` builds each tier through
+`factory.client_class()`, so a real `ANTHROPIC_API_KEY` now binds and appears in
+`models`. A key that is unset or holds `placeholder` is skipped and named as
+dormant — silence was the 09-12 failure mode, and the third instance of it was
+`EVENTMILL_LLM_PROVIDERS` itself being unset locally.
+
+One thing this stage did **not** do, recorded so it is not mistaken for an
+oversight: `providers` still cannot report which SDK versions the process is
+running. That remains the next obvious diagnostic improvement.
 
 - `models` lists every **bound** provider's tiers, provider-qualified.
 - `connect` binds all available providers and prints **provider, tier, model and
@@ -477,6 +495,17 @@ from two vendors.
 three concurrently, the CLI shows and overrides them per module, every response
 and run record names the provider that served it, and all nine modules execute
 without plugin changes.
+
+**Status 2026-09-14 — four of five clauses met.** Three providers bind
+concurrently and are verified on Cloud Run; `models`, `providers`, `connect`
+and `use <provider> [for <tool>]` are in; every `LLMResponse` carries
+`provider_id` and the projector's run record reads it rather than assuming
+(`RUN_RECORD_SCHEMA_VERSION` 4). What is **not** yet demonstrated is the last
+clause: only `adversary_path_projector` has been exercised on a second vendor,
+and only offline. The remaining code gap is the provider-qualified accessors in
+Stage 2 — most sharply the PDF guard, which still reads Gemini's 1000-page /
+50 MB limits whatever provider is selected, and which gates the two document
+modules (items 7 and 8 in Part 2's order).
 
 ### Stage 6 — deployment — **secret wiring DONE 2026-09-13** (`52e3a10`)
 

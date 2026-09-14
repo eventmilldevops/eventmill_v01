@@ -507,10 +507,20 @@ The `LLMResponse` includes diagnostic fields that help with debugging:
   is the only field that shows a provider-side version change inside one model
   name. Record it alongside `model_used` in anything meant to be compared across
   models
+- **`provider_id`** — which vendor served the request (`gcp_gemini`,
+  `anthropic`, `openai`). Several providers can be bound at once and the
+  operator chooses which serves a given tool, so **anything a plugin records
+  for later comparison must carry this**: without it, two results from one
+  session are not a weaker measurement but an unreadable one
 - **`transport_path`** — how the document was ingested (`gs_uri`, `inline_bytes`, `text`)
 - **`fallback_reason`** — why the preferred path wasn’t used (if applicable)
 
-Plugins MAY log these for diagnostics but MUST NOT branch on specific model names.
+Plugins MAY log these for diagnostics but MUST NOT branch on specific model or
+provider names. **A plugin cannot choose its provider and must not try**: that
+is an operator decision made with `use <provider> [for <tool>]`, and the scoped
+client a plugin receives exposes no `provider` argument at all. `QueryHints` has
+no `provider` field for the same reason — one there would let a plugin override
+an operator's A/B selection.
 
 ## Routing Integration
 
