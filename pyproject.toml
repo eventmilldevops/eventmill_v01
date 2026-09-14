@@ -41,7 +41,15 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # 1.69+ required for GenerateContentConfig.media_resolution and
     # ThinkingConfig.thinking_level (Gemini 3.x controls).
-    "google-genai>=1.69.0",
+    #
+    # Ceiling at the next major, because an unbounded range is how the
+    # deployed container ended up on 2.x while every test and every live
+    # verification ran against 1.69 — the image builds clean and the skew is
+    # invisible until an SDK-shaped symptom appears (it surfaced as a runtime
+    # AFC warning that 1.69 does not emit). Moving to 2.x is a deliberate
+    # piece of work: read the changelog, then re-run the live Gemini checks,
+    # because this is the provider every module depends on.
+    "google-genai>=1.69.0,<2.0.0",
     # Framework, not plugin: the dispatcher's PDF context guard and the
     # shell's artifact registration both need a page count.
     "pypdf>=4.0.0",
@@ -79,13 +87,23 @@ plugins-threat-modeling = []
 # whose extra is not installed must not break a session on one whose extra is —
 # framework/llm/factory.py imports clients lazily for exactly that reason.
 llm-anthropic = [
-    "anthropic>=0.111.0",
+    # Ceiling at 1.0: AnthropicClient was written and verified against 0.111.0,
+    # and 1.x is a documented breaking change (httpx2, awaited async raw
+    # responses, removed deprecated parameters). Without the ceiling the image
+    # installs 1.x while the dev venv stays on 0.x.
+    "anthropic>=0.111.0,<1.0.0",
 ]
 llm-openai = [
-    # 1.58.1 has no client.responses; the Responses API landed in 1.66. The
-    # client currently uses chat.completions, which works on either, but the
-    # floor is set where Stage 3 needs it so the SDK is not the blocker twice.
-    "openai>=1.66",
+    # Floor is what OpenAIClient was verified against, not what a later stage
+    # will want: it uses chat.completions, which works on 1.58.1. Declaring
+    # >=1.66 (where client.responses arrives) would have been a requirement the
+    # code does not yet have, and would have *upgraded* a developer sitting on
+    # the verified version away from it. Stage 3 raises this floor at the point
+    # it moves to the Responses API.
+    #
+    # Ceiling at 2.0 for the same reason as the other two — unbounded, this
+    # resolves to 3.x, two majors past anything exercised here.
+    "openai>=1.58.1,<2.0.0",
 ]
 all = [
     "eventmill[dev,gcp,plugins-log-analysis,plugins-network-forensics,plugins-threat-modeling,llm-anthropic,llm-openai]",

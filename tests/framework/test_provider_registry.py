@@ -518,6 +518,47 @@ class TestOnlyGeminiIsBoundForToolExecution:
                 f"it — that provider will report 'package not installed'"
             )
 
+    def test_every_llm_sdk_declares_an_upper_bound(self) -> None:
+        """No vendor SDK may float to an untested major version.
+
+        Observed 2026-09-14: `google-genai>=1.69.0` with no ceiling meant the
+        Cloud Run image installed 2.x while every test and every live
+        verification ran against 1.69. The image built clean and the skew was
+        invisible until an SDK-shaped symptom appeared. The two extras added
+        the day before carried the same latent bug — unbounded, they resolve
+        to anthropic 1.x and openai 3.x.
+
+        The SDK is the one dependency whose behaviour IS the product here, so
+        an unbounded range is a silent-failure generator rather than a
+        convenience.
+        """
+        import tomllib
+
+        from packaging.requirements import Requirement
+
+        pyproject = tomllib.loads(
+            Path("pyproject.toml").read_text(encoding="utf-8")
+        )
+        declared = list(pyproject["project"]["dependencies"])
+        for extra, items in pyproject["project"]["optional-dependencies"].items():
+            if extra.startswith("llm-"):
+                declared += items
+
+        sdk_names = {"google-genai", "anthropic", "openai"}
+        seen = set()
+        for raw in declared:
+            req = Requirement(raw)
+            if req.name not in sdk_names:
+                continue
+            seen.add(req.name)
+            operators = {s.operator for s in req.specifier}
+            assert operators & {"<", "<=", "==", "~="}, (
+                f"{req.name} has no upper bound ({req.specifier}) — a build "
+                f"will silently install an untested major version"
+            )
+
+        assert "google-genai" in seen, "the Gemini SDK is no longer declared"
+
     def test_the_ci_path_mounts_every_provider_secret(self) -> None:
         """cloudbuild.yaml must mount what deploy-cloudrun-secrets.sh mounts.
 
