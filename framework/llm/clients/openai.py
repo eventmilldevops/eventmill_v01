@@ -15,19 +15,17 @@ assumed (2026-09-13):
   assuming its own vocabulary is portable.
 * Sampling parameters are rejected: ``temperature=0.3`` is a 400, "Only the
   default (1) value is supported".
-* Reasoning tokens are completion tokens and come out of
-  ``max_completion_tokens``. Measured: at a 64-token cap the model spent all 64
-  on reasoning and returned empty content with ``finish_reason="length"``.
+* Reasoning tokens are output tokens and come out of ``max_output_tokens``.
+  Measured: at a 64-token cap the model spent all 64 on reasoning and returned
+  empty content, reported as incomplete with reason ``max_output_tokens``.
 * The provider reports no context window. ``models.retrieve`` returns
   ``id``/``created``/``owned_by`` only, so the manifest's
   ``max_context_tokens`` is documented rather than probed and is marked as such.
 
-**API surface.** This uses ``chat.completions``, not the Responses API the plan
-specifies, because the installed SDK is 1.58.1 and ``client.responses`` does not
-exist before 1.66. ``store=False`` is sent on every request either way — this
+**API surface.** The Responses API, which is what the plan specifies and what
+the current SDK leads with. ``store=False`` is sent on every request: this
 platform handles incident data, so a no-retention posture is a declared
-property of the client, not an incidental default. Stage 3 moves the surface
-once the SDK floor rises; nothing outside this module is affected.
+property of the client, not an incidental default.
 
 Text only for now. ``query_multimodal`` and ``query_with_document`` return a
 declared failure rather than a wrong answer — no module consumes either path.
@@ -100,22 +98,22 @@ def _usage(response: Any) -> dict[str, int] | None:
     u = getattr(response, "usage", None)
     if not u:
         return None
-    prompt = getattr(u, "prompt_tokens", 0) or 0
-    completion = getattr(u, "completion_tokens", 0) or 0
-    details = getattr(u, "completion_tokens_details", None)
+    prompt = getattr(u, "input_tokens", 0) or 0
+    completion = getattr(u, "output_tokens", 0) or 0
+    details = getattr(u, "output_tokens_details", None)
     reasoning = getattr(details, "reasoning_tokens", 0) if details else 0
     return {
         "prompt_tokens": prompt,
         "completion_tokens": completion,
         # Reported separately here, unlike Anthropic. Reasoning is included in
-        # completion_tokens, so this is a breakdown rather than an addition.
+        # output_tokens, so this is a breakdown rather than an addition.
         "thinking_tokens": reasoning or 0,
         "total_tokens": getattr(u, "total_tokens", 0) or (prompt + completion),
     }
 
 
 class OpenAIClient:
-    """LLM client for OpenAI models via chat completions.
+    """LLM client for OpenAI models via the Responses API.
 
     Implements LLMModelClient. Plugins never hold one of these directly —
     they receive a TierScopedLLMClient wrapping the shared LLMDispatcher.
@@ -355,29 +353,28 @@ class OpenAIClient:
             return self._failure("OpenAI session not established", "access")
 
         full_prompt = compose_prompt(prompt, grounding_data)
-        messages: list[dict[str, str]] = []
-        if system_context:
-            messages.append({"role": "system", "content": system_context})
-        messages.append({"role": "user", "content": full_prompt})
-
         request: dict[str, Any] = {
             "model": self.model_id,
-            "messages": messages,
-            "max_completion_tokens": max_tokens,
+            "input": full_prompt,
+            "max_output_tokens": max_tokens,
             # Incident data: never retained provider-side. Declared, not default.
+            # The Responses API stores by default, so this is load-bearing here
+            # in a way it was not on the older completions surface.
             "store": False,
         }
+        if system_context:
+            request["instructions"] = system_context
         effort = _effort(hints, self.tier)
         if effort:
-            request["reasoning_effort"] = effort
+            request["reasoning"] = {"effort": effort}
 
         logger.debug(
-            "OpenAI query: %d chars prompt, max_completion_tokens=%d, effort=%s",
+            "OpenAI query: %d chars prompt, max_output_tokens=%d, effort=%s",
             len(full_prompt), max_tokens, effort or "default",
         )
 
         try:
-            response = self._sdk_client.chat.completions.create(**request)
+            response = self._sdk_client.responses.create(**request)
         except Exception as e:
             kind = self.classify_error(e)
             if kind == "quota":
@@ -392,30 +389,37 @@ class OpenAIClient:
         if usage:
             self._total_tokens_used += usage["total_tokens"]
 
-        choices = getattr(response, "choices", None) or []
-        if not choices:
+        status = getattr(response, "status", None)
+        details = getattr(response, "incomplete_details", None)
+        reason = getattr(details, "reason", None) if details else None
+
+        # The Responses API reports failure on the object rather than raising,
+        # so a caller reading output_text alone treats a refusal as an answer.
+        if status == "failed":
+            err = getattr(response, "error", None)
+            message = getattr(err, "message", None) or "provider reported failure"
             return self._failure(
-                "provider returned no choices", "other", token_usage=usage,
+                message, self.classify_error(message),
+                finish_reason=status, token_usage=usage,
             )
-        choice = choices[0]
-        finish = getattr(choice, "finish_reason", None)
-        if finish == "content_filter":
+        if reason == "content_filter":
             return self._failure(
                 "provider filtered the response", "content_filtered",
-                finish_reason=finish, token_usage=usage,
+                finish_reason=reason, token_usage=usage,
             )
 
         return LLMResponse(
             ok=True,
-            text=getattr(choice.message, "content", None) or "",
+            text=getattr(response, "output_text", None) or "",
             model_used=self.model_id,
             model_version=getattr(response, "model", None),
             provider_id=self.provider_id,
             token_usage=usage,
-            finish_reason=finish,
-            # "length" is this provider's spelling of Gemini's MAX_TOKENS. With
-            # no content behind it, reasoning consumed the whole budget.
-            truncated=finish == "length",
+            finish_reason=reason or status,
+            # "max_output_tokens" is this provider's spelling of Gemini's
+            # MAX_TOKENS. With no content behind it, reasoning consumed the
+            # whole budget.
+            truncated=reason == "max_output_tokens",
         )
 
     def query_multimodal(

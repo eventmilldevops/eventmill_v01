@@ -87,23 +87,20 @@ plugins-threat-modeling = []
 # whose extra is not installed must not break a session on one whose extra is —
 # framework/llm/factory.py imports clients lazily for exactly that reason.
 llm-anthropic = [
-    # Ceiling at 1.0: AnthropicClient was written and verified against 0.111.0,
-    # and 1.x is a documented breaking change (httpx2, awaited async raw
-    # responses, removed deprecated parameters). Without the ceiling the image
-    # installs 1.x while the dev venv stays on 0.x.
-    "anthropic>=0.111.0,<1.0.0",
+    # Current stable. 0.x is legacy with deprecated surface, and there is no
+    # reason for net-new code to start there — the 1.x move cost nothing here
+    # (no httpx objects cross the SDK boundary, no with_raw_response, no Text
+    # Completions, no sampling parameters), and both tiers were re-verified
+    # live against 1.5.0. Ceiling at the next major, per the rule below.
+    "anthropic>=1.5.0,<2.0.0",
 ]
 llm-openai = [
-    # Floor is what OpenAIClient was verified against, not what a later stage
-    # will want: it uses chat.completions, which works on 1.58.1. Declaring
-    # >=1.66 (where client.responses arrives) would have been a requirement the
-    # code does not yet have, and would have *upgraded* a developer sitting on
-    # the verified version away from it. Stage 3 raises this floor at the point
-    # it moves to the Responses API.
-    #
-    # Ceiling at 2.0 for the same reason as the other two — unbounded, this
-    # resolves to 3.x, two majors past anything exercised here.
-    "openai>=1.58.1,<2.0.0",
+    # Current stable, and the reason OpenAIClient uses the Responses API rather
+    # than chat.completions: the surface the plan specifies is simply present
+    # here. Re-verified live against 3.13.0, including that store=False is
+    # honoured — the Responses API stores by default, so that flag is
+    # load-bearing for incident data in a way it was not on the old surface.
+    "openai>=3.13.0,<4.0.0",
 ]
 all = [
     "eventmill[dev,gcp,plugins-log-analysis,plugins-network-forensics,plugins-threat-modeling,llm-anthropic,llm-openai]",
