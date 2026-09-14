@@ -626,7 +626,32 @@
     },
     "recurrence_threshold": {
       "type": ["integer", "null"],
-      "description": "Runs a route must appear in to be called recurring — half the successful runs, rounded up. Null when the group has fewer than three successful runs, where recurrence means nothing."
+      "description": "Runs a route must appear in to be called recurring — half the successful runs, rounded up. Null when the group has fewer than three successful runs, where recurrence means nothing. In a group mixing providers this is the group-wide figure and is NOT what decides 'recurring': see runs_by_provider, which carries the per-provider threshold actually applied."
+    },
+    "providers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Every provider that served a run in this group, in the order first seen. 'unknown' covers records written before run-record schema_version 4, where the provider was a hardcoded constant, and runs that died before a response. One entry means a single-vendor group, which reports exactly as it did before providers could be mixed."
+    },
+    "provider_count": {
+      "type": "integer",
+      "description": "How many providers served runs in this group. Above one, recurrence is a within-provider statistic and 'agreement' carries the cross-vendor question."
+    },
+    "runs_by_provider": {
+      "type": "object",
+      "description": "Per provider: how many runs it served, how many succeeded, and the recurrence threshold applied to it. The threshold is per provider because recurrence measures one model's sampling variance; a group-wide denominator would let three samples from one vendor outvote two other vendors.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "runs": { "type": "integer" },
+          "succeeded": { "type": "integer" },
+          "recurrence_threshold": { "type": ["integer", "null"] }
+        }
+      }
+    },
+    "unanimous_route_count": {
+      "type": "integer",
+      "description": "How many routes every provider in the group found at least once. In a single-provider group this is 0 — there was nothing to agree with."
     },
     "recurrence_countable": {
       "type": "boolean",
@@ -650,7 +675,25 @@
           "runs": { "type": "array", "items": { "type": "integer" }, "description": "Which runs of the group found this route, numbered 1..N across the whole group in the order the runs happened. Deliberately not the record's own run_index, which restarts at 1 in each invocation: a group assembled from several batches — the way to cover many runs without one invocation hitting the timeout — would otherwise count repeated indices as one run." },
           "run_count": { "type": "integer" },
           "variant_count": { "type": "integer", "description": "Paths that walked this route, across all runs. More than one means near-duplicates were collapsed." },
-          "recurring": { "type": "boolean", "description": "Found in at least half the successful runs, in a group of three or more. Says the route came back, not that it is likely or confirmed." },
+          "recurring": { "type": "boolean", "description": "At least one provider found this route in at least half of ITS OWN successful runs, in a group of three or more. With one provider bound that is the old definition exactly. Says the route came back, not that it is likely or confirmed. Deliberately true when only one of several vendors kept finding it: the tool exists to surface credible paths nobody has considered, so 'agreement' grades that support rather than suppressing the route." },
+          "by_provider": {
+            "type": "object",
+            "description": "Per provider: which runs of ITS OWN found this route, and whether that met that provider's recurrence threshold. The denominator is per provider because recurrence measures one model's sampling variance.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "runs": { "type": "array", "items": { "type": "integer" } },
+                "run_count": { "type": "integer" },
+                "recurring": { "type": "boolean" }
+              }
+            }
+          },
+          "providers_finding_it": { "type": "integer", "description": "How many providers found this route in at least one run. Never weighted by run count — three samples from one vendor must not outvote two vendors." },
+          "agreement": {
+            "type": "string",
+            "enum": ["unanimous", "majority", "partial", "single"],
+            "description": "How far support extends across the providers in the group, counted in vendors and not in runs. 'unanimous' every provider found it; 'majority' a strict majority did; 'partial' fewer; 'single' the group had only one provider, so there was nothing to compare against. With two providers there is no majority tier — a strict majority of two is two."
+          },
           "representative": {
             "type": "object",
             "description": "The single variant shown for this route: the one with the most (component, technique) pairs in common with the others, ties going to the earliest run. Triage needs the distinct choices, not every near-duplicate.",

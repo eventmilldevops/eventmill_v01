@@ -2273,6 +2273,12 @@ def _build_scenario_seeds(
 # still listed with their counts, and nothing is called recurring.
 MIN_RUNS_FOR_RECURRENCE = 3
 
+# A record written before schema_version 4 names no provider, and one whose run
+# died before a response names none either. Both are grouped under this rather
+# than guessed at: a v3 record's provider really is unknown, because the field
+# it would have come from was a hardcoded constant.
+UNKNOWN_PROVIDER = "unknown"
+
 
 # Pre-intrusion tactics: work done before, or without, a foothold. A step like
 # Reconnaissance against a CDN compromises nothing and moves the attacker
@@ -2342,6 +2348,74 @@ def _representative_index(variants: list[dict[str, Any]]) -> int:
     return best_index
 
 
+def _group_confounds(records: list[dict[str, Any]]) -> list[str]:
+    """Differences within a group that would make a comparison misleading.
+
+    Warnings, never refusals. A group deliberately varying one knob — the same
+    map at two thinking levels, say — is a legitimate experiment, and refusing
+    it would remove the ability to record one. But the same variation arrived
+    at by accident silently turns "these vendors disagree" into "these vendors
+    were asked different questions", so it has to be said out loud.
+
+    prompt_sha256 is the strongest of these and subsumes most of the others: if
+    it differs, the models were not asked the same thing, whatever the
+    individual settings say.
+    """
+    warnings: list[str] = []
+
+    def _spread(label: str, values: list[Any]) -> None:
+        seen = sorted({str(v) for v in values if v not in (None, "")})
+        if len(seen) > 1:
+            warnings.append(
+                f"Runs in this group differ in {label}: {', '.join(seen)}. "
+                f"They were not all asked the same question, so differences "
+                f"between them are not attributable to the provider alone."
+            )
+
+    _spread("thinking_level",
+            [(r.get("model") or {}).get("thinking_level") for r in records])
+    _spread("max_paths",
+            [(r.get("model") or {}).get("max_paths") for r in records])
+    _spread("software_scope",
+            [(r.get("model") or {}).get("software_scope") for r in records])
+
+    prompts = {
+        str((r.get("run") or {}).get("prompt_sha256") or "") for r in records
+    }
+    prompts.discard("")
+    if len(prompts) > 1:
+        warnings.append(
+            f"Runs in this group were given {len(prompts)} different prompts "
+            f"({', '.join(sorted(p[:12] for p in prompts))}). A cross-provider "
+            f"comparison rests on the prompt being identical; this one is not."
+        )
+    return warnings
+
+
+def _agreement_grade(found_by: int, voting: int) -> str:
+    """How far a route's support extends across the vendors in the group.
+
+    Never averaged with recurrence, and never weighted by run count: three
+    samples from one vendor must not outvote two vendors, or the provider that
+    happens to be cheapest to run decides the finding.
+
+    With two providers there is no majority tier — a strict majority of two is
+    two — so a route either has both or is partial.
+    """
+    if voting <= 1:
+        return "single"
+    if found_by >= voting:
+        return "unanimous"
+    if found_by * 2 > voting:
+        return "majority"
+    return "partial"
+
+
+def _provider_of_record(record: dict[str, Any]) -> str:
+    """Which vendor served a run, or UNKNOWN_PROVIDER when the record cannot say."""
+    return str((record.get("model") or {}).get("provider") or "") or UNKNOWN_PROVIDER
+
+
 def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Count routes across a group's records and pick one variant of each.
 
@@ -2349,9 +2423,47 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
     that, because a group that mixes them is an operator error rather than a
     finding. Failed runs count toward the group's size but contribute no paths:
     they are part of what the group cost, not part of what it found.
+
+    A group MAY mix providers — running one flow map past three vendors is the
+    point of binding them concurrently — and that splits one number into two:
+
+      recurrence  does this model keep finding the route?   per provider
+      agreement   does it survive a change of reasoner?     across providers
+
+    Keeping them apart is the whole of it. Counted over the group as a whole,
+    three samples from one vendor would outvote two other vendors, and the
+    cheapest provider to run would decide the finding. A route is therefore
+    "recurring" when at least one provider kept finding it — which for a
+    single-provider group is exactly the old definition, arithmetic included —
+    and its agreement grade says how far that support extends.
     """
     successful = [r for r in records if r.get("sampled")]
     run_total = len(records)
+
+    # Every provider seen, in the order they first appear, so a group that has
+    # not been near a second vendor reads exactly as it always did.
+    providers: list[str] = []
+    for record in records:
+        provider = _provider_of_record(record)
+        if provider not in providers:
+            providers.append(provider)
+
+    # Agreement is measured only over providers that actually produced a
+    # projection: a vendor whose every run died cannot agree or disagree, and
+    # counting it would silently make unanimity unreachable.
+    voting = [p for p in providers if any(
+        _provider_of_record(r) == p for r in successful
+    )]
+    successful_by_provider = {
+        p: [r for r in successful if _provider_of_record(r) == p] for p in voting
+    }
+    thresholds = {
+        p: (len(rs) + 1) // 2 for p, rs in successful_by_provider.items()
+    }
+    countable_by_provider = {
+        p: len(rs) >= MIN_RUNS_FOR_RECURRENCE
+        for p, rs in successful_by_provider.items()
+    }
 
     # Runs are numbered within the group, never by the run_index a record
     # carries: that restarts at 1 in every invocation, so a group built from two
@@ -2368,6 +2480,7 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "run_index": ordinal,
                 "run_id": record["run"].get("run_id", ""),
                 "record_file": record["run"].get("record_file", ""),
+                "provider": _provider_of_record(record),
                 "path": path,
             })
 
@@ -2378,6 +2491,26 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
     summaries: list[dict[str, Any]] = []
     for signature, variants in routes.items():
         runs_with_route = sorted({v["run_index"] for v in variants})
+        # Recurrence, per provider. The denominator is that vendor's own
+        # successful runs, because this measures one model's sampling variance
+        # and always did — the group-wide denominator was only ever right
+        # because a group was always one vendor.
+        by_provider: dict[str, dict[str, Any]] = {}
+        for provider in voting:
+            found_in = sorted({
+                v["run_index"] for v in variants if v["provider"] == provider
+            })
+            by_provider[provider] = {
+                "runs": found_in,
+                "run_count": len(found_in),
+                "recurring": bool(
+                    countable_by_provider[provider]
+                    and len(found_in) >= thresholds[provider]
+                ),
+            }
+        providers_finding_it = sum(
+            1 for entry in by_provider.values() if entry["run_count"]
+        )
         index = _representative_index(variants)
         chosen = variants[index]
         pairs_per_variant = [_pair_set(v["path"]) for v in variants]
@@ -2397,7 +2530,12 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
             "runs": runs_with_route,
             "run_count": len(runs_with_route),
             "variant_count": len(variants),
-            "recurring": countable and len(runs_with_route) >= threshold,
+            # At least one provider kept finding it. With one provider bound
+            # this is the old expression exactly, denominator included.
+            "recurring": any(e["recurring"] for e in by_provider.values()),
+            "by_provider": by_provider,
+            "providers_finding_it": providers_finding_it,
+            "agreement": _agreement_grade(providers_finding_it, len(voting)),
             "representative": {
                 "run_index": chosen["run_index"],
                 "record_file": chosen.get("record_file", ""),
@@ -2416,10 +2554,16 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
             "state_gaps": sum(1 for s in steps if s.get("state_check") == "gap"),
         })
 
-    # Recurring first, then by how many runs found it, then by route, so the
-    # reader meets the findings before the one-offs and the order is stable.
+    # Recurring first, then by how many VENDORS found it, then by how many runs
+    # did, then by route. The vendor term sits above the run term deliberately:
+    # a route two vendors found twice each is a stronger finding than one a
+    # single vendor found five times. With one provider bound every route
+    # scores 1 there, so the order is unchanged from before.
     summaries.sort(
-        key=lambda s: (not s["recurring"], -s["run_count"], s["route"])
+        key=lambda s: (
+            not s["recurring"], -s["providers_finding_it"],
+            -s["run_count"], s["route"],
+        )
     )
     return {
         "run_count": run_total,
@@ -2427,8 +2571,26 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
         "failed": run_total - len(successful),
         "recurrence_threshold": threshold if countable else None,
         "recurrence_countable": countable,
+        "providers": providers,
+        "provider_count": len(providers),
+        "runs_by_provider": {
+            provider: {
+                "runs": sum(
+                    1 for r in records if _provider_of_record(r) == provider
+                ),
+                "succeeded": len(successful_by_provider.get(provider, [])),
+                "recurrence_threshold": (
+                    thresholds[provider]
+                    if countable_by_provider.get(provider) else None
+                ),
+            }
+            for provider in providers
+        },
         "route_count": len(summaries),
         "recurring_route_count": sum(1 for s in summaries if s["recurring"]),
+        "unanimous_route_count": sum(
+            1 for s in summaries if s["agreement"] == "unanimous"
+        ),
         "routes": summaries,
     }
 
@@ -2504,6 +2666,39 @@ def _hinge_assumption(route: dict[str, Any]) -> str:
     return assumptions[-1].get("assumption", "")
 
 
+def _repetition_sentence(
+    data: dict[str, Any], succeeded: int, mixed: bool,
+) -> str:
+    """What repetition means here — which differs once vendors are mixed.
+
+    With one provider, "found in N of M runs" is the whole test. With several,
+    the group-wide figure is not what decides recurrence and quoting it would
+    tell the reader to apply a threshold the summary did not use.
+    """
+    if not mixed:
+        return (
+            f"Repetition is the evidence. A route found once is a suggestion; a "
+            f"route found in {data.get('recurrence_threshold') or 'most'} or "
+            f"more of {succeeded} runs is a pattern worth testing. This is not "
+            f"an observation, not a likelihood assessment, and not a complete "
+            f"list of the ways in."
+        )
+    thresholds = ", ".join(
+        f"{provider} {entry['recurrence_threshold']} of {entry['succeeded']}"
+        for provider, entry in (data.get("runs_by_provider") or {}).items()
+        if entry.get("recurrence_threshold")
+    )
+    return (
+        f"Repetition is the evidence, and it is counted per provider: a route "
+        f"is recurring when one model kept finding it in its own runs "
+        f"({thresholds or 'too few runs each to judge'}). Agreement is counted "
+        f"separately, in vendors rather than runs, so several samples from one "
+        f"model cannot outweigh a second model that disagreed. This is not an "
+        f"observation, not a likelihood assessment, and not a complete list of "
+        f"the ways in."
+    )
+
+
 def _render_group_report(
     data: dict[str, Any],
     names: dict[str, str],
@@ -2535,6 +2730,11 @@ def _render_group_report(
     failed = data.get("failed", 0)
     if failed:
         run_line += f", {failed} failed"
+    # Named only when there is more than one, so a single-vendor report reads
+    # exactly as it did before providers could be mixed.
+    group_providers = list(data.get("providers") or [])
+    if len(group_providers) > 1:
+        run_line += f", across {', '.join(group_providers)}"
     start, end = period
     when = f" between {start} and {end}" if start and end and start != end else (
         f" on {start}" if start else ""
@@ -2588,6 +2788,35 @@ def _render_group_report(
             f"{strongest['run_count']} of {succeeded} runs."
         )
 
+        if len(group_providers) > 1:
+            unanimous = [r for r in recurring if r.get("agreement") == "unanimous"]
+            alone = [r for r in recurring if r.get("providers_finding_it") == 1]
+            lines.append("")
+            if unanimous:
+                lines.append(
+                    f"{_plural(len(unanimous), 'recurring route')} "
+                    f"{'was' if len(unanimous) == 1 else 'were'} found by every "
+                    f"provider in this group. A route that survives a change of "
+                    f"reasoner is the strongest signal a group of runs carries — "
+                    f"it is not an artefact of one model's habits."
+                )
+            else:
+                lines.append(
+                    "No recurring route was found by every provider in this "
+                    "group. Each rests on one vendor's reading of the same "
+                    "architecture, and the same question."
+                )
+            if alone:
+                lines.append("")
+                lines.append(
+                    f"{_plural(len(alone), 'recurring route')} "
+                    f"{'was' if len(alone) == 1 else 'were'} found by a single "
+                    f"provider. Kept rather than dropped — this tool exists to "
+                    f"surface credible paths nobody has considered, and one "
+                    f"model finding something repeatedly is a reason to look, "
+                    f"not to discount it."
+                )
+
         shared = set(recurring[0]["route"])
         for route in recurring[1:]:
             shared &= set(route["route"])
@@ -2635,6 +2864,17 @@ def _render_group_report(
         found = f"{route['run_count']} of {succeeded} runs"
         if not route["recurring"]:
             found += " — one-off"
+        if len(group_providers) > 1:
+            # Which vendors, and how often each. A route two vendors found
+            # twice each and one a single vendor found five times are
+            # different findings, and the run count alone cannot tell them
+            # apart — this column is where that shows.
+            per_vendor = ", ".join(
+                f"{provider} {entry['run_count']}"
+                for provider, entry in (route.get("by_provider") or {}).items()
+                if entry["run_count"]
+            )
+            found += f" ({per_vendor}; {route.get('agreement', 'single')})"
         lines.append(
             f"| {route_text(route['route'])} | {found} | {ends} | "
             f"{_hinge_assumption(route) or '—'} |"
@@ -2688,11 +2928,7 @@ def _render_group_report(
         f"ids, technique names and the architecture are sourced; the routes and "
         f"the step rationales are the model's projection.",
         "",
-        f"Repetition is the evidence. A route found once is a suggestion; a "
-        f"route found in {data.get('recurrence_threshold') or 'most'} or more "
-        f"of {succeeded} runs is a pattern worth testing. This is not an "
-        f"observation, not a likelihood assessment, and not a complete list of "
-        f"the ways in.",
+        _repetition_sentence(data, succeeded, len(group_providers) > 1),
         "",
     ]
     if not flow_map:
@@ -3855,6 +4091,12 @@ class AdversaryPathProjector:
                 ),
             )
 
+        # Mixing PROVIDERS is allowed and is the point — one flow map past
+        # three vendors. Mixing the estate or the actor is not, and is checked
+        # below. What sits between those two is checked by _group_confounds:
+        # differences that are legitimate to record deliberately but ruin a
+        # comparison made by accident, so they warn rather than refuse.
+        #
         # One estate, one actor, or the counts mean nothing: the same route
         # found against two maps is not the same finding.
         maps = {r["run"].get("flow_map_sha256", "") for r in records}
@@ -3903,6 +4145,9 @@ class AdversaryPathProjector:
             "records": [r["run"].get("record_file", "") for r in records],
             **summary,
         }
+        confounds = _group_confounds(records)
+        if confounds:
+            result["report_warnings"] = confounds
 
         # The flow map is optional here: without it the report still counts
         # routes, it just cannot say which controls sit on them, and says so.
@@ -3914,10 +4159,10 @@ class AdversaryPathProjector:
             flow_map, map_errors, _ = _normalize_flow_map(raw)
             if map_errors:
                 flow_map = None
-                result["report_warnings"] = [
+                result.setdefault("report_warnings", []).append(
                     f"Flow map has {len(map_errors)} blocking error(s), so the "
                     f"report was written without control context."
-                ]
+                )
             elif _canonical_flow_map_hash(raw) != result["flow_map_sha256"]:
                 result.setdefault("report_warnings", []).append(
                     "The supplied flow map is not the one these runs were "

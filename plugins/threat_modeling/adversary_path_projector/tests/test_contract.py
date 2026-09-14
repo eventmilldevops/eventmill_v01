@@ -2404,6 +2404,220 @@ def _assert_corpus_intact(context):
         assert not rejections, rejections
 
 
+def _mixed_record(index, provider, path, *, ok=True, **model):
+    """One synthetic run record, attributed to a provider.
+
+    Synthetic rather than driven through execute(), because a plugin execution
+    runs against exactly one provider by construction — the operator's choice
+    rides the scoping wrapper, which a plugin cannot see. A mixed group is
+    therefore assembled from several invocations, and this is that shape.
+    """
+    record = {
+        "run": {
+            "schema_version": 4, "run_index": index, "run_id": f"r{index}",
+            "run_group": "g", "flow_map_sha256": "h",
+            "prompt_sha256": model.pop("prompt_sha256", "p" * 64),
+            "application": "App", "created_at": f"2026-09-14T00:{index:02d}:00",
+            "actor_resolved": {"name": "VT"}, "record_file": f"rec{index}.json",
+        },
+        "model": {
+            "provider": provider, "tier": "heavy", "thinking_level": "medium",
+            "max_paths": 3, "software_scope": "delivery", **model,
+        },
+        "outcome": {"status": "ok" if ok else "error"},
+    }
+    if ok:
+        record["sampled"] = {"paths": [path]}
+    return record
+
+
+_ROUTE_DB = {"steps": [
+    {"tactic": "Initial Access", "component_id": "web", "technique_id": "T1190"},
+    {"tactic": "Collection", "component_id": "customer_db", "technique_id": "T1005"},
+]}
+_ROUTE_WEB = {"steps": [
+    {"tactic": "Initial Access", "component_id": "web", "technique_id": "T1190"},
+    {"tactic": "Persistence", "component_id": "web", "technique_id": "T1505.003"},
+]}
+
+
+class TestMixedProviderGroup:
+    """Recurrence is per provider; agreement is across providers.
+
+    Counted over the group as a whole, three samples from one vendor outvote
+    two other vendors and the cheapest provider to run decides the finding.
+    These two numbers are what keep that from happening.
+    """
+
+    def test_recurrence_is_measured_against_the_providers_own_runs(self):
+        # Gemini found it in all three of ITS runs. Over the group that is
+        # 3 of 9 and would not clear a group-wide threshold of 5.
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+            + [_mixed_record(i, "anthropic", _ROUTE_WEB) for i in (4, 5, 6)]
+            + [_mixed_record(i, "openai", _ROUTE_WEB) for i in (7, 8, 9)]
+        )
+        out = _tool_mod._summarize_run_group(records)
+        db = next(r for r in out["routes"] if r["route"] == ["web", "customer_db"])
+
+        assert db["run_count"] == 3
+        assert db["by_provider"]["gcp_gemini"]["recurring"] is True
+        assert db["by_provider"]["anthropic"]["run_count"] == 0
+        assert db["recurring"] is True, "a vendor that kept finding it was outvoted"
+        # "single" means one vendor was in the GROUP; here three were and only
+        # one found this route, which is partial support, not no comparison.
+        assert db["agreement"] == "partial"
+
+    def test_a_route_every_vendor_found_is_unanimous(self):
+        records = [
+            _mixed_record(i, provider, _ROUTE_DB)
+            for i, provider in enumerate(
+                ["gcp_gemini"] * 3 + ["anthropic"] * 3 + ["openai"] * 3, start=1,
+            )
+        ]
+        out = _tool_mod._summarize_run_group(records)
+        route = out["routes"][0]
+        assert route["providers_finding_it"] == 3
+        assert route["agreement"] == "unanimous"
+        assert out["unanimous_route_count"] == 1
+
+    def test_two_of_three_vendors_is_a_majority(self):
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+            + [_mixed_record(i, "anthropic", _ROUTE_DB) for i in (4, 5, 6)]
+            + [_mixed_record(i, "openai", _ROUTE_WEB) for i in (7, 8, 9)]
+        )
+        out = _tool_mod._summarize_run_group(records)
+        db = next(r for r in out["routes"] if r["route"] == ["web", "customer_db"])
+        assert db["agreement"] == "majority"
+
+    def test_with_two_providers_there_is_no_majority_tier(self):
+        # A strict majority of two is two, which is unanimous. One of two is
+        # precisely the disagreement the grade exists to show.
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+            + [_mixed_record(i, "anthropic", _ROUTE_WEB) for i in (4, 5, 6)]
+        )
+        out = _tool_mod._summarize_run_group(records)
+        assert {r["agreement"] for r in out["routes"]} == {"partial"}
+
+    def test_a_vendor_whose_runs_all_failed_cannot_block_unanimity(self):
+        # Counting a provider that produced nothing would make "found by every
+        # provider" unreachable for reasons that have nothing to do with the
+        # architecture.
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+            + [_mixed_record(i, "anthropic", _ROUTE_DB) for i in (4, 5, 6)]
+            + [_mixed_record(i, "openai", None, ok=False) for i in (7, 8)]
+        )
+        out = _tool_mod._summarize_run_group(records)
+        assert out["routes"][0]["agreement"] == "unanimous"
+        assert out["failed"] == 2
+        assert out["runs_by_provider"]["openai"]["succeeded"] == 0
+
+    def test_a_v3_record_is_grouped_as_unknown_not_guessed_at(self):
+        # Before schema_version 4 the provider was a hardcoded constant, so a
+        # v3 record's vendor genuinely is unknown.
+        records = [_mixed_record(i, None, _ROUTE_DB) for i in (1, 2, 3)]
+        for record in records:
+            del record["model"]["provider"]
+        out = _tool_mod._summarize_run_group(records)
+        assert out["providers"] == ["unknown"]
+        assert out["routes"][0]["agreement"] == "single"
+
+
+class TestSingleProviderGroupIsUnchanged:
+    """One vendor must read exactly as it did before providers could be mixed.
+
+    The per-provider denominator is the same denominator when there is one
+    provider, so this is arithmetic, not a special case — but it is the
+    property most worth pinning, because every existing group report depends
+    on it.
+    """
+
+    def test_the_old_numbers_are_the_same_numbers(self):
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2)]
+            + [_mixed_record(3, "gcp_gemini", _ROUTE_WEB)]
+        )
+        out = _tool_mod._summarize_run_group(records)
+
+        assert out["recurrence_threshold"] == 2
+        assert out["recurrence_countable"] is True
+        assert out["route_count"] == 2
+        assert out["recurring_route_count"] == 1
+        recurring, one_off = out["routes"]
+        assert recurring["route"] == ["web", "customer_db"]
+        assert recurring["recurring"] is True and recurring["run_count"] == 2
+        assert one_off["recurring"] is False
+        # And the new grade says plainly that there was nothing to compare to.
+        assert recurring["agreement"] == "single"
+
+    def test_the_report_gains_nothing_when_one_vendor_ran(self):
+        records = [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+        report = _tool_mod._render_group_report(
+            {**_tool_mod._summarize_run_group(records),
+             "application": "App", "actor": "VT", "flow_map_sha256": "h" * 64},
+            names={}, jewels=set(), flow_map=None, period=("", ""),
+        )
+        # The run header gains no vendor clause, the routes table gains no
+        # per-vendor column, and no agreement grade is claimed. ("across" on
+        # its own would match the existing "came back across the runs".)
+        assert "across gcp_gemini" not in report
+        assert "gcp_gemini 3" not in report
+        assert "unanimous" not in report
+        assert "found by every provider" not in report
+        assert "found by a single" not in report
+
+    def test_the_report_names_the_vendors_when_several_ran(self):
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+            + [_mixed_record(i, "anthropic", _ROUTE_DB) for i in (4, 5, 6)]
+        )
+        report = _tool_mod._render_group_report(
+            {**_tool_mod._summarize_run_group(records),
+             "application": "App", "actor": "VT", "flow_map_sha256": "h" * 64},
+            names={}, jewels=set(), flow_map=None, period=("", ""),
+        )
+        assert "across gcp_gemini, anthropic" in report
+        assert "gcp_gemini 3, anthropic 3; unanimous" in report
+        assert "found by every provider" in report
+
+
+class TestGroupConfounds:
+    """A group varying more than the vendor warns; it never refuses.
+
+    Deliberately varying one knob is a legitimate experiment. Arriving at the
+    same variation by accident turns "these vendors disagree" into "these
+    vendors were asked different questions", so it has to be said out loud.
+    """
+
+    def test_a_differing_prompt_is_named(self):
+        records = [
+            _mixed_record(1, "gcp_gemini", _ROUTE_DB, prompt_sha256="a" * 64),
+            _mixed_record(2, "anthropic", _ROUTE_DB, prompt_sha256="b" * 64),
+        ]
+        (warning,) = _tool_mod._group_confounds(records)
+        assert "2 different prompts" in warning
+
+    def test_a_differing_thinking_level_is_named(self):
+        records = [
+            _mixed_record(1, "gcp_gemini", _ROUTE_DB, thinking_level="medium"),
+            _mixed_record(2, "anthropic", _ROUTE_DB, thinking_level="high"),
+        ]
+        warnings = _tool_mod._group_confounds(records)
+        assert any("thinking_level" in w for w in warnings)
+        assert any("high" in w and "medium" in w for w in warnings)
+
+    def test_an_identical_group_warns_about_nothing(self):
+        records = [
+            _mixed_record(1, "gcp_gemini", _ROUTE_DB),
+            _mixed_record(2, "anthropic", _ROUTE_DB),
+            _mixed_record(3, "openai", _ROUTE_DB),
+        ]
+        assert _tool_mod._group_confounds(records) == []
+
+
 class TestRunGroupSummary:
     def _corpus(self, plugin, flow_map, replies, workspace, monkeypatch,
                 run_group="grp"):

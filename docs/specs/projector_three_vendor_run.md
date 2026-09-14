@@ -207,7 +207,17 @@ baseline this is measured against.
 is `openai`, and `--runs 3` under each of three providers yields nine records
 naming three vendors.
 
-## Stage D — make the group summary read a mixed group
+## Stage D — make the group summary read a mixed group — **DONE 2026-09-14**
+
+Change log: `docs/change_log/2026-09-14-group-summary-provider-dimension.md`.
+The five proposed rules landed as written. Two things the plan did not settle,
+decided while building: `recurring` is true when **at least one** provider kept
+finding the route (not a majority of providers) — the tool is triage and a
+route one model produced consistently is a reason to look; and a vendor whose
+every run failed does not vote, or unanimity becomes unreachable for reasons
+unrelated to the architecture. Also rewritten: the report's "found in N of M
+runs is a pattern worth testing" paragraph, which quoted a threshold that no
+longer decides recurrence in a mixed group.
 
 This is the only genuine design decision, and it needs a call before the code.
 
