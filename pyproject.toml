@@ -42,14 +42,18 @@ dependencies = [
     # 1.69+ required for GenerateContentConfig.media_resolution and
     # ThinkingConfig.thinking_level (Gemini 3.x controls).
     #
-    # Ceiling at the next major, because an unbounded range is how the
-    # deployed container ended up on 2.x while every test and every live
-    # verification ran against 1.69 — the image builds clean and the skew is
-    # invisible until an SDK-shaped symptom appears (it surfaced as a runtime
-    # AFC warning that 1.69 does not emit). Moving to 2.x is a deliberate
-    # piece of work: read the changelog, then re-run the live Gemini checks,
-    # because this is the provider every module depends on.
-    "google-genai>=1.69.0,<2.0.0",
+    # 2.x, which is what the deployed container had already been running while
+    # the requirement was unbounded — so this makes the declaration match the
+    # environment that has been working, rather than pinning the image back to
+    # a major it had left. Every surface this project uses survived the move
+    # unchanged (client construction, GenerateContentConfig, ThinkingConfig /
+    # ThinkingLevel, MediaResolution, Part.from_uri / from_bytes, the response
+    # readers, models.list), and the native document path was re-verified live
+    # at 82/82 non-technique recall on the probe corpus — the same number Stage
+    # 1 recorded on 1.69.
+    #
+    # Ceiling at the next major: unbounded is how the skew happened.
+    "google-genai>=2.23.0,<3.0.0",
     # Framework, not plugin: the dispatcher's PDF context guard and the
     # shell's artifact registration both need a page count.
     "pypdf>=4.0.0",
