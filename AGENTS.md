@@ -107,6 +107,12 @@ can be verified before it is adopted.
 `connect` cannot answer reachability: every client builds an SDK handle without
 a network call, so a wrong key connects cleanly and fails at first use.
 
+`connect` binds **every** configured provider whose key is present and is not
+the placeholder — six clients when all three are named. The first entry of
+`EVENTMILL_LLM_PROVIDERS` is the session default and serves every tool that
+names no provider. `connect <model_id>` is the single-provider form: it binds
+that model's provider only, including its other tier for quota fallback.
+
 **`LLMDispatcher._clients` is keyed by `(provider_id, tier)`.** Keyed by tier
 alone it could not hold two vendors at once — a second provider's client under
 `"heavy"` evicted the first. A tier-keyed dict is still accepted and normalised
@@ -119,6 +125,12 @@ would go somewhere unchosen and the output would be unattributable. Deliberate
 selection is the requirement; silent failover is the hazard. Provider choice
 rides `TierScopedLLMClient(default_provider=...)`, never `QueryHints`, so a
 plugin cannot override an operator's selection.
+
+**`use <provider> [for <tool_name>]`** is how an operator makes that choice —
+session default or per-module override, `use default` to clear, bare `use` to
+report. It is session-scoped and never persisted. Selecting a provider that is
+not bound, or naming a tool that does not exist, is refused rather than stored.
+`ask:` follows the session default; a per-tool override does not apply to it.
 
 **The tiers are capacity-identical.** Tier selects reasoning depth and cost, and
 nothing else. Any logic that picks a tier based on how much data there is, is

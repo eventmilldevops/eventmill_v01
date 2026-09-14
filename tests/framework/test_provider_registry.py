@@ -1,12 +1,11 @@
 """
 Tests for three-provider configuration, key discovery and liveness probing.
 
-Stage 2a of docs/specs/multi_provider_llm_clients.md: Anthropic and OpenAI
-become configurable and provably reachable, while Gemini stays the only
-provider bound for tool execution. The last class here is the guard on that
-last clause — with LLMDispatcher._clients still keyed by tier alone, an
-Anthropic client registered under "heavy" would evict Gemini Pro and silently
-route every heavy plugin to another vendor.
+Stage 2a of docs/specs/multi_provider_llm_clients.md made Anthropic and OpenAI
+configurable and provably reachable; Stage 5 binds every configured provider
+for tool execution. The last class here is the guard on what that must not
+become — a mounted key is not a bound provider, and no client may be
+registered under another provider's id.
 
 Nothing here makes a network call. probe() is exercised against fakes; the live
 runs are recorded in docs/change_log/2026-09-13-three-provider-clients.md.
@@ -428,57 +427,125 @@ class TestProbeResultReporting:
 # ---------------------------------------------------------------------------
 
 
-class TestOnlyGeminiIsBoundForToolExecution:
-    """Stage 2a makes three providers reachable; it binds exactly one.
+class TestOnlyConfiguredProvidersAreBound:
+    """EVENTMILL_LLM_PROVIDERS binds a vendor. A mounted key never does.
 
-    LLMDispatcher._clients is still keyed by tier alone. An AnthropicClient
-    registered under "heavy" would evict Gemini Pro and route every heavy
-    plugin to another vendor without anyone choosing it. Until the
-    (provider_id, tier) rekey lands, that must be impossible by construction.
+    This class was written when LLMDispatcher._clients was keyed by tier
+    alone, and it asserted that exactly one provider could be bound: a second
+    vendor's client registered under "heavy" would have evicted Gemini Pro and
+    routed every heavy plugin to a vendor nobody chose. The (provider_id,
+    tier) rekey removed that hazard, and 'connect' now binds every configured
+    provider at once.
+
+    The other half of the guard still has to hold, and it is the half that
+    protects an operator rather than the data structure: a key present for a
+    provider the operator did not configure binds nothing, every deployment
+    mounts a placeholder for the vendors it has not adopted, and no client is
+    ever registered under another provider's id.
     """
 
     @pytest.fixture
-    def shell(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("K_SERVICE", raising=False)
-        monkeypatch.setenv("GEMINI_FLASH_API_KEY", "k-flash")
-        monkeypatch.setenv("GEMINI_PRO_API_KEY", "k-pro")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-        monkeypatch.setenv(
-            "EVENTMILL_LLM_PROVIDERS", "gcp_gemini anthropic openai",
-        )
-        return EventMillShell(workspace_path=tmp_path)
+    def make_shell(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """A shell with all four keys present and a chosen provider list.
 
-    def test_discovery_offers_gemini_tiers_only(self, shell: EventMillShell) -> None:
-        # Three providers configured and keyed, yet only Gemini's tiers are
-        # offered for binding. do_connect hands these ids to GeminiClient, so
-        # an Anthropic row here would bind a client that fails on first use.
-        assert shell._available_models
+        Keys for every vendor, always — that is the deployed steady state, and
+        it is what makes "configured, not keyed" the thing under test.
+        """
+        def _make(providers: str, **keys: str) -> EventMillShell:
+            monkeypatch.delenv("K_SERVICE", raising=False)
+            monkeypatch.setenv("GEMINI_FLASH_API_KEY", "k-flash")
+            monkeypatch.setenv("GEMINI_PRO_API_KEY", "k-pro")
+            monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+            monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+            for env_var, value in keys.items():
+                monkeypatch.setenv(env_var, value)
+            monkeypatch.setenv("EVENTMILL_LLM_PROVIDERS", providers)
+            return EventMillShell(workspace_path=tmp_path)
+        return _make
+
+    def test_a_mounted_key_is_not_a_bound_provider(self, make_shell) -> None:
+        # Every vendor's key is present; only Gemini is configured. This is the
+        # Cloud Run steady state exactly, and binding Anthropic here would send
+        # investigation data to a vendor the operator never selected.
+        shell = make_shell("gcp_gemini")
         assert {m["provider"] for m in shell._available_models} == {"gcp_gemini"}
-        assert {m["tier"] for m in shell._available_models} == {"light", "heavy"}
 
-    def test_connect_binds_only_gemini_clients(
-        self, shell: EventMillShell,
+        shell.do_connect("")
+        assert isinstance(shell.llm_client, LLMDispatcher)
+        assert set(shell.llm_client._clients) == {
+            ("gcp_gemini", "light"), ("gcp_gemini", "heavy"),
+        }
+        assert shell.llm_client.bound_providers() == ("gcp_gemini",)
+
+    def test_every_configured_provider_binds_its_own_tiers(
+        self, make_shell,
     ) -> None:
         # connect() builds an SDK handle without a network call, so this runs
         # offline against dummy keys.
+        shell = make_shell("gcp_gemini anthropic openai")
+        assert {m["provider"] for m in shell._available_models} == set(ALL_PROVIDERS)
+
         shell.do_connect("")
-        assert isinstance(shell.llm_client, LLMDispatcher)
         bound = shell.llm_client._clients
-        # Keyed by (provider_id, tier) since the rekey — which is exactly what
-        # makes this assertion possible to state rather than merely hope for.
-        assert set(bound) == {("gcp_gemini", "light"), ("gcp_gemini", "heavy")}
+        assert set(bound) == {
+            (provider_id, tier)
+            for provider_id in ALL_PROVIDERS for tier in ("light", "heavy")
+        }
         for (provider_id, tier), client in bound.items():
-            assert client.provider_id == "gcp_gemini" == provider_id, (
-                f"{tier} bound to {client.provider_id} — plugin routing hijacked"
+            assert client.provider_id == provider_id, (
+                f"{provider_id}/{tier} bound a {client.provider_id} client — "
+                f"plugin routing hijacked"
             )
+            assert client.model_id == EXPECTED_TIERS[provider_id][tier]
+        assert set(shell.llm_client.bound_providers()) == set(ALL_PROVIDERS)
+
+    def test_each_provider_is_clamped_by_its_own_manifest(
+        self, make_shell,
+    ) -> None:
+        """Anthropic's 128,000-token cap must not be read off Gemini's 65,536.
+
+        The dispatcher fans a tier-keyed spec map across every bound provider,
+        which is right for one vendor and silently wrong for three. The shell
+        therefore has to hand it a (provider_id, tier)-keyed map.
+        """
+        shell = make_shell("gcp_gemini anthropic openai")
+        shell.do_connect("")
+        specs = shell.llm_client._tier_specs
+
+        for provider_id in ALL_PROVIDERS:
+            for tier in ("light", "heavy"):
+                declared = load_tier_specs(provider_id)[tier]
+                assert specs[(provider_id, tier)].max_output_tokens == (
+                    declared.max_output_tokens
+                ), f"{provider_id}/{tier} priced off another vendor's manifest"
+
+    def test_the_first_configured_provider_serves_by_default(
+        self, make_shell,
+    ) -> None:
+        # Order in EVENTMILL_LLM_PROVIDERS is the operator's statement of which
+        # vendor serves a tool that names none.
+        shell = make_shell("anthropic gcp_gemini openai")
+        shell.do_connect("")
+        assert shell.llm_client.default_provider == "anthropic"
+
+    def test_a_placeholder_key_binds_nothing(self, make_shell) -> None:
+        # Every deployment mounts a secret for every vendor; the unadopted ones
+        # hold the literal "placeholder". Binding one would produce a client
+        # that fails at first use, long after 'connect' reported success.
+        shell = make_shell(
+            "gcp_gemini anthropic", ANTHROPIC_API_KEY=factory.PLACEHOLDER,
+        )
+        assert {m["provider"] for m in shell._available_models} == {"gcp_gemini"}
+
+        shell.do_connect("")
         assert shell.llm_client.bound_providers() == ("gcp_gemini",)
 
     def test_probing_another_provider_does_not_bind_it(
-        self, shell: EventMillShell, monkeypatch: pytest.MonkeyPatch,
+        self, make_shell, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # The read-only surface must stay read-only: an operator checking a key
         # must not thereby change what serves the next tool run.
+        shell = make_shell("gcp_gemini")
         shell.do_connect("")
         before = dict(shell.llm_client._clients)
 
@@ -581,8 +648,9 @@ class TestOnlyGeminiIsBoundForToolExecution:
         assert factory.PROVIDERS_ENV in text
 
     def test_the_providers_table_names_every_known_provider(
-        self, shell: EventMillShell, capsys: pytest.CaptureFixture,
+        self, make_shell, capsys: pytest.CaptureFixture,
     ) -> None:
+        shell = make_shell("gcp_gemini anthropic openai")
         shell.do_providers("")
         out = capsys.readouterr().out
         for provider_id in factory.known_providers():

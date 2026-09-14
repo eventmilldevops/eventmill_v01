@@ -37,7 +37,7 @@ from ..llm.dispatcher import (
     TierScopedLLMClient,
 )
 from ..llm.model_client import LLMModelClient
-from ..llm.providers import DEFAULT_PROVIDER_ID, load_tier_specs
+from ..llm.providers import DEFAULT_PROVIDER_ID, TierSpec, load_tier_specs
 from ..plugins.protocol import (
     ArtifactRef,
     ExecutionContext,
@@ -387,47 +387,212 @@ class EventMillShell(cmd.Cmd):
                 self._load_errors.append(f"Router: {e}")
                 logger.warning("Failed to initialize router: %s", e)
         
-        # LLM availability — tiers come from the provider capability manifest
-        # (framework/llm/providers/gcp_gemini.json), so model ids, API-key env
-        # vars, and output caps live in one declarative place.
-        self._tier_specs = load_tier_specs()
+        # LLM availability — tiers come from each configured provider's
+        # capability manifest (framework/llm/providers/<provider_id>.json), so
+        # model ids, API-key env vars, and output caps live in one declarative
+        # place per vendor rather than in the shell.
+        self._provider_specs = self._load_provider_specs()
+        self._tier_specs = self._provider_specs.get(DEFAULT_PROVIDER_ID, {})
         self._available_models: list[dict[str, str]] = self._discover_models()
         self._llm_available = len(self._available_models) > 0
+
+        # Which vendor serves what, chosen by the operator with 'use'. Not
+        # persisted: an A/B selection surviving a restart invisibly is the same
+        # hazard as a stale .env pin. None means the dispatcher's own default.
+        self._provider_default: str | None = None
+        self._provider_by_tool: dict[str, str] = {}
         
         self._update_prompt()
     
     _TIER_DISPLAY = {"light": "light (fast, cheap)", "heavy": "heavy (deep reasoning)"}
 
-    def _discover_models(self) -> list[dict[str, str]]:
-        """Build the available-model list from the provider manifest + environment.
+    def _load_provider_specs(self) -> dict[str, dict[str, TierSpec]]:
+        """Tier specs for every provider this session is configured to use.
 
-        A tier is available when its declared API-key env var is set. Falls
-        back to the legacy single GEMINI_API_KEY, which is bound to BOTH
-        tiers so plugin manifests keep driving model selection rather than
-        every tool collapsing onto Flash.
+        EVENTMILL_LLM_PROVIDERS names them; a mounted key does not. An unknown
+        id there is an operator typo that must not stop the shell from
+        starting, so it is recorded as a load error and the session falls back
+        to the default provider alone.
+        """
+        try:
+            configured = llm_factory.configured_providers()
+        except llm_factory.UnknownProviderError as e:
+            self._load_errors.append(f"LLM providers: {e}")
+            logger.warning("Falling back to %s alone: %s", DEFAULT_PROVIDER_ID, e)
+            configured = (DEFAULT_PROVIDER_ID,)
+        return {
+            provider_id: load_tier_specs(provider_id)
+            for provider_id in configured
+        }
+
+    def _build_client(
+        self, model: dict[str, str], failures: list[str],
+    ) -> LLMModelClient | None:
+        """Build and connect one tier's client, or record why it could not.
+
+        The class comes from the provider registry rather than being named
+        here, so adding a vendor stays a registry entry plus a manifest.
+        connect() makes no network call on any provider — it builds an SDK
+        handle — so success here means the key was present, not that it works.
+        'providers probe' is what answers reachability.
+        """
+        provider_id = model.get("provider", DEFAULT_PROVIDER_ID)
+        api_key = (os.environ.get(model["env_var"]) or "").strip()
+        if not api_key or api_key == llm_factory.PLACEHOLDER:
+            failures.append(
+                f"  ✗ {model['name']}: {model['env_var']} unset or placeholder"
+            )
+            return None
+        try:
+            cls = llm_factory.client_class(provider_id)
+        except ImportError as e:
+            extra = provider_id.replace("gcp_", "")
+            failures.append(
+                f"  ✗ {model['name']}: {provider_id} SDK not installed ({e}) — "
+                f"pip install 'eventmill[llm-{extra}]'"
+            )
+            return None
+        except llm_factory.UnknownProviderError as e:
+            failures.append(f"  ✗ {model['name']}: {e}")
+            return None
+
+        client = cls(
+            model_id=model["id"],
+            tier=model["tier"],
+            api_key_env_var=model["env_var"],
+        )
+        if not client.connect(api_key=api_key):
+            failures.append(
+                f"  ✗ {model['name']}: connect failed for {provider_id} — "
+                f"check the key in {model['env_var']}"
+            )
+            return None
+        return client
+
+    def _bound_tier_specs(
+        self, clients: dict[tuple[str, str], LLMModelClient],
+    ) -> dict[tuple[str, str], TierSpec] | None:
+        """Tier specs keyed the way the client map is.
+
+        Passing a tier-keyed map here would be wrong with two vendors bound:
+        the dispatcher fans a tier-keyed spec dict across every bound
+        provider, which is right for one vendor and would otherwise price
+        Anthropic's 128,000-token output cap off Gemini's 65,536. None means
+        'load your own', which is the dispatcher's per-provider path.
+        """
+        specs: dict[tuple[str, str], TierSpec] = {}
+        for provider_id, tier in clients:
+            spec = self._provider_specs.get(provider_id, {}).get(tier)
+            if spec is not None:
+                specs[(provider_id, tier)] = spec
+        return specs or None
+
+    def _provider_for(self, tool_name: str) -> str | None:
+        """The provider the operator selected for this tool, if any.
+
+        Per-tool override, then session default, then None — and None keeps
+        meaning "whatever the dispatcher chose", so a single-vendor session
+        behaves exactly as it did before 'use' existed.
+        """
+        return self._provider_by_tool.get(tool_name) or self._provider_default
+
+    def _provider_kwargs(self, provider_id: str | None) -> dict[str, str]:
+        """Provider scope for a direct dispatcher call, if it accepts one.
+
+        Duck-typed the same way TierScopedLLMClient does it, so a bare client
+        or a test fake whose query methods take no provider still works.
+        """
+        if not provider_id:
+            return {}
+        if not getattr(self.llm_client, "accepts_provider_scope", False):
+            return {}
+        return {"provider": provider_id}
+
+    def _bound_providers(self) -> tuple[str, ...]:
+        """Providers bound for tool execution, or () when nothing is connected."""
+        lister = getattr(self.llm_client, "bound_providers", None)
+        return tuple(lister()) if lister else ()
+
+    def _prune_provider_selection(self) -> None:
+        """Drop selections naming a provider this connect did not bind.
+
+        Reconnecting with a different EVENTMILL_LLM_PROVIDERS would otherwise
+        leave an override pointing at an unbound vendor, and the tool would
+        fail at its first LLM call rather than at the moment the selection
+        stopped being true.
+        """
+        bound = self._bound_providers()
+        if self._provider_default and self._provider_default not in bound:
+            print(f"  Cleared 'use {self._provider_default}' — no longer bound.")
+            self._provider_default = None
+        for tool_name, provider_id in list(self._provider_by_tool.items()):
+            if provider_id not in bound:
+                del self._provider_by_tool[tool_name]
+                print(
+                    f"  Cleared the {provider_id} override on {tool_name} — "
+                    f"no longer bound."
+                )
+
+    def _provider_note(self, will_use_llm: bool, selected: str | None) -> str:
+        """' on <provider>' when which vendor serves a run is not obvious.
+
+        Silent for a single-vendor session, so its output is unchanged; loud as
+        soon as a choice exists, because the transcript of a three-vendor
+        comparison has to say which vendor produced each line.
+        """
+        if not will_use_llm:
+            return ""
+        effective = selected or getattr(self.llm_client, "default_provider", None)
+        if not effective:
+            return ""
+        if selected or len(self._bound_providers()) > 1:
+            return f" on {effective}"
+        return ""
+
+    def _discover_models(self) -> list[dict[str, str]]:
+        """Build the available-model list from the provider manifests + environment.
+
+        A tier is available when its declared API-key env var holds something
+        other than the placeholder every deployment mounts for a vendor nobody
+        has adopted. Providers are listed in the order
+        EVENTMILL_LLM_PROVIDERS names them, so the first one bound is the
+        session default.
+
+        Falls back to the legacy single GEMINI_API_KEY, which is bound to BOTH
+        Gemini tiers so plugin manifests keep driving model selection rather
+        than every tool collapsing onto Flash. That fallback is Gemini-only:
+        no other vendor ever read that variable.
 
         One key may reach Flash but not the Pro preview. That binds cleanly —
-        GeminiClient.connect() does no entitlement check — and surfaces as
+        connect() does no entitlement check on any provider — and surfaces as
         PERMISSION_DENIED on first use, which LLMDispatcher._is_access_error
-        catches and falls back to the other tier.
+        catches and falls back to the other tier of the same provider.
         """
         models: list[dict[str, str]] = []
 
-        for tier in ("light", "heavy"):
-            spec = self._tier_specs.get(tier)
-            if not spec or not spec.api_key_env:
-                continue
-            if not os.environ.get(spec.api_key_env):
-                continue
-            models.append({
-                "id": spec.model_id,
-                "name": spec.label(),
-                "tier": tier,
-                "env_var": spec.api_key_env,
-                "provider": DEFAULT_PROVIDER_ID,
-            })
+        for provider_id, specs in self._provider_specs.items():
+            for tier in ("light", "heavy"):
+                spec = specs.get(tier)
+                if not spec or not spec.api_key_env:
+                    continue
+                key = (os.environ.get(spec.api_key_env) or "").strip()
+                if not key or key == llm_factory.PLACEHOLDER:
+                    continue
+                models.append({
+                    "id": spec.model_id,
+                    "name": spec.label(),
+                    "tier": tier,
+                    "env_var": spec.api_key_env,
+                    "provider": provider_id,
+                })
 
-        if not models and os.environ.get("GEMINI_API_KEY"):
+        legacy_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+        if (
+            not models
+            and DEFAULT_PROVIDER_ID in self._provider_specs
+            and legacy_key
+            and legacy_key != llm_factory.PLACEHOLDER
+        ):
             # Legacy single-key setup. Bind it to both tiers — one key reaches
             # both models, so plugin manifests still drive model selection
             # instead of everything collapsing onto Flash.
@@ -2780,10 +2945,18 @@ class EventMillShell(cmd.Cmd):
         # model_tier "none" declares the plugin does no LLM work at all.
         model_tier = plugin.manifest.model_tier
         llm_connected = self.llm_client is not None and self.llm_client.connected
+        selected_provider = self._provider_for(tool_name)
         if model_tier == "none" or not llm_connected:
             scoped_llm = None
         else:
-            scoped_llm = TierScopedLLMClient(self.llm_client, default_tier=model_tier)
+            # The provider joins the tier here and nowhere else. Both are
+            # per-execution decisions the operator owns, and the wrapper is
+            # the one place a plugin cannot reach either of them.
+            scoped_llm = TierScopedLLMClient(
+                self.llm_client,
+                default_tier=model_tier,
+                default_provider=selected_provider,
+            )
 
         context = ExecutionContext(
             session_id=session.session_id,
@@ -2807,7 +2980,11 @@ class EventMillShell(cmd.Cmd):
         )
         
         timeout = TimeoutClass.get_limit(plugin.manifest.timeout_class)
-        print(f"  Running {plugin.manifest.display_name} (timeout {timeout}s)...")
+        note = self._provider_note(scoped_llm is not None, selected_provider)
+        print(
+            f"  Running {plugin.manifest.display_name}{note} "
+            f"(timeout {timeout}s)..."
+        )
         
         try:
             # Execute with thread-based timeout to prevent indefinite hangs
@@ -3404,6 +3581,111 @@ class EventMillShell(cmd.Cmd):
                 display = s[:100] + "..." if len(s) > 100 else s
                 print(f"    {display}")
     
+    def do_use(self, arg: str) -> None:
+        """Choose which LLM provider serves tools.
+
+        Usage: use                              show the current selection
+               use <provider>                   session default for every tool
+               use <provider> for <tool_name>   override one tool
+               use default [for <tool_name>]    clear a selection
+
+        This is the runtime A/B control and the only supported way to point a
+        module at a second vendor. Running the same tool on the same input
+        under two providers is a deliberate comparison: the prompt stays
+        byte-identical across the swap, and every response is stamped with the
+        provider that served it.
+
+        The selection lives for this session only. Provider choice is an
+        operator decision, so it never reaches plugin code — a plugin cannot
+        see it and cannot override it.
+
+        Examples:
+          use anthropic for adversary_path_projector
+          use openai
+          use default for adversary_path_projector
+        """
+        parts = arg.strip().split()
+
+        if not parts:
+            self._show_provider_selection()
+            return
+
+        if len(parts) == 1:
+            provider_id, tool_name = parts[0], None
+        elif len(parts) == 3 and parts[1] == "for":
+            provider_id, tool_name = parts[0], parts[2]
+        elif len(parts) == 2 and parts[0] == "default" and parts[1] == "for":
+            print("  Usage: use default for <tool_name>")
+            return
+        else:
+            print(f"  Unknown argument: {arg.strip()}")
+            print("  Usage: use [<provider> | default] [for <tool_name>]")
+            return
+
+        if tool_name is not None and not self.plugin_loader.get(tool_name):
+            # A typo here would be silent — the override would sit in the map
+            # and never match a run.
+            print(f"  Tool not found: {tool_name}")
+            print("  Use 'tools' to see the tool names.")
+            return
+
+        if provider_id == "default":
+            if tool_name is None:
+                self._provider_default = None
+                self._provider_by_tool.clear()
+                print("  Cleared. Every tool runs on the session default again.")
+            else:
+                self._provider_by_tool.pop(tool_name, None)
+                print(f"  Cleared the override on {tool_name}.")
+            self._show_provider_selection()
+            return
+
+        bound = self._bound_providers()
+        if not bound:
+            print("  No providers are bound. Run 'connect' first.")
+            return
+        if provider_id not in bound:
+            print(f"  Provider not bound: {provider_id}")
+            print(f"  Bound: {', '.join(bound)}")
+            print("  'providers' shows what is configured; a vendor has to be in")
+            print(f"  {llm_factory.PROVIDERS_ENV} and keyed before 'connect' binds it.")
+            return
+
+        if tool_name is None:
+            self._provider_default = provider_id
+            print(f"  Session default: {provider_id}")
+            if self._provider_by_tool:
+                overridden = ", ".join(sorted(self._provider_by_tool))
+                print(f"  Still overridden per tool: {overridden}")
+        else:
+            self._provider_by_tool[tool_name] = provider_id
+            print(f"  {tool_name} will run on {provider_id}.")
+
+    def _show_provider_selection(self) -> None:
+        """Print which provider serves tools, and any per-tool overrides."""
+        bound = self._bound_providers()
+        if not bound:
+            print("  No providers are bound. Run 'connect' first.")
+            return
+
+        session_default = self._provider_default or getattr(
+            self.llm_client, "default_provider", None,
+        )
+        source = "chosen with 'use'" if self._provider_default else (
+            f"first in {llm_factory.PROVIDERS_ENV}"
+        )
+        print(f"  Session default: {session_default}  ({source})")
+        print(f"  Bound:           {', '.join(bound)}")
+
+        if self._provider_by_tool:
+            print("")
+            print("  Per-tool overrides")
+            for tool_name in sorted(self._provider_by_tool):
+                print(f"    {tool_name:34s} {self._provider_by_tool[tool_name]}")
+        print("")
+        print("  'use <provider> for <tool_name>' overrides one tool;")
+        print("  'use default' clears every selection.")
+
     def do_providers(self, arg: str) -> None:
         """Show LLM providers: configured, keyed, and reachable.
 
@@ -3470,8 +3752,8 @@ class EventMillShell(cmd.Cmd):
             )
         print("")
         print("  '*' marks the session default. 'providers probe' checks reachability.")
-        print("  Only Gemini's tiers are bound for tool execution; 'connect' binds")
-        print("  those and the router still drives every plugin through them.")
+        print("  'connect' binds every configured provider whose key is present;")
+        print("  the default above serves every tool until one is pointed elsewhere.")
 
     def _probe_providers(self, only: str | None) -> None:
         """Auth + ping every available provider's tiers, and report both phases."""
@@ -3538,7 +3820,7 @@ class EventMillShell(cmd.Cmd):
         """
         if not self._available_models:
             print("  No LLM models configured.")
-            print("  Set GEMINI_FLASH_API_KEY and/or GEMINI_PRO_API_KEY environment variables.")
+            print("  'providers' lists each configured provider and the key it needs.")
             return
         
         print(f"  {'Model':20s} {'Provider':11s} {'Tier':8s} {'Status':14s} {'ID':30s}")
@@ -3559,8 +3841,8 @@ class EventMillShell(cmd.Cmd):
         print("           by the plugin; framework calls with no preference")
         print("           use the light tier")
         print("  'providers'          — every provider, keyed or not, and reachability")
-        print("  Only this provider's tiers are bound for tool execution; another")
-        print("  provider's key can be verified with 'providers probe' first.")
+        print("  Every provider listed here is bound for tool execution; the first")
+        print("  one configured serves any tool that names none.")
     
     def do_connect(self, arg: str) -> None:
         """Connect to LLM.
@@ -3572,32 +3854,28 @@ class EventMillShell(cmd.Cmd):
         """
         if not self._available_models:
             print("  No LLM models configured.")
-            print("  Set GEMINI_FLASH_API_KEY and/or GEMINI_PRO_API_KEY environment variables.")
+            print("  'providers' lists each configured provider and the key it needs.")
             return
         
         model_id = arg.strip()
-        transport = os.environ.get("EVENTMILL_MCP_TRANSPORT", "stdio")
-        
+
         if not model_id:
-            # No model specified — connect ALL available models as a tiered pair
-            connected_clients: dict[str, LLMModelClient] = {}
+            # No model specified — connect every tier of every available
+            # provider. Keyed by (provider_id, tier): with two vendors bound a
+            # tier alone no longer identifies a client, and a tier-keyed dict
+            # would have the second vendor evict the first.
+            connected_clients: dict[tuple[str, str], LLMModelClient] = {}
             failed: list[str] = []
 
             for m in self._available_models:
-                api_key = os.environ.get(m["env_var"])
-                if not api_key:
-                    failed.append(f"  ✗ {m['name']}: {m['env_var']} not set")
+                provider_id = m.get("provider", DEFAULT_PROVIDER_ID)
+                client = self._build_client(m, failed)
+                if client is None:
                     continue
-                client = GeminiClient(
-                    model_id=m["id"], transport=transport,
-                    tier=m["tier"], api_key_env_var=m["env_var"],
-                )
-                if client.connect(api_key=api_key):
-                    connected_clients[m["tier"]] = client
-                    print(f"  ✓ {m['name']} ({m['id']})")
-                    print(f"    Tier: {m['tier']}")
-                else:
-                    failed.append(f"  ✗ {m['name']}: connection failed — check API key and google-generativeai install")
+                connected_clients[(provider_id, m["tier"])] = client
+                print(f"  ✓ {m['name']} ({m['id']})")
+                print(f"    Provider: {provider_id}   Tier: {m['tier']}   "
+                      f"Key: {m['env_var']}")
 
             for msg in failed:
                 print(msg)
@@ -3608,16 +3886,28 @@ class EventMillShell(cmd.Cmd):
 
             self.llm_client = LLMDispatcher(
                 clients=connected_clients,
-                tier_specs=self._tier_specs,
+                tier_specs=self._bound_tier_specs(connected_clients),
+                preferred_provider=next(iter(connected_clients))[0],
             )
 
             log_user_activity("connect_llm", {
-                "models": {tier: c.model_id for tier, c in connected_clients.items()},
+                "models": {
+                    f"{provider_id}/{tier}": c.model_id
+                    for (provider_id, tier), c in connected_clients.items()
+                },
+                "providers": list(self.llm_client.bound_providers()),
                 "tiered": True,
             })
 
+            self._prune_provider_selection()
+            providers = self.llm_client.bound_providers()
+            if len(providers) > 1:
+                print("")
+                default = self._provider_default or providers[0]
+                print(f"  Providers bound: {', '.join(providers)} — "
+                      f"'{default}' serves tools by default.")
             if len(connected_clients) > 1:
-                print(f"")
+                print("")
                 print("  Auto-routing: each plugin's manifest model_tier, overridable")
                 print("                per call; calls with no preference use light")
             return
@@ -3633,42 +3923,36 @@ class EventMillShell(cmd.Cmd):
             print("  Use 'models' to see available models.")
             return
 
-        api_key = os.environ.get(selected_model["env_var"])
-        if not api_key:
-            print(f"  API key not found in {selected_model['env_var']}")
-            return
-
-        primary_client = GeminiClient(
-            model_id=selected_model["id"],
-            transport=transport,
-            tier=selected_model["tier"],
-            api_key_env_var=selected_model["env_var"],
-        )
-
-        if not primary_client.connect(api_key=api_key):
-            print(f"  ✗ Failed to connect to {selected_model['name']}")
-            print("    Check that google-generativeai is installed and the API key is valid.")
+        provider_id = selected_model.get("provider", DEFAULT_PROVIDER_ID)
+        failures: list[str] = []
+        primary_client = self._build_client(selected_model, failures)
+        if primary_client is None:
+            for msg in failures:
+                print(msg)
             self.llm_client = None
             return
 
         print(f"  ✓ Connected to {selected_model['name']} ({selected_model['id']})")
-        print(f"    Tier: {selected_model['tier']}")
+        print(f"    Provider: {provider_id}   Tier: {selected_model['tier']}   "
+              f"Key: {selected_model['env_var']}")
 
-        # Silently try to connect the other tier for quota fallback
-        connected_clients: dict[str, LLMModelClient] = {
-            selected_model["tier"]: primary_client
+        # Silently try the other tier for quota fallback — of this provider
+        # only. LLMDispatcher._fallback_client answers "the other tier of the
+        # same provider", so binding another vendor's tier here would offer it
+        # a route back to the cross-provider hop that is forbidden.
+        connected_clients: dict[tuple[str, str], LLMModelClient] = {
+            (provider_id, selected_model["tier"]): primary_client
         }
-        other_models = [m for m in self._available_models if m["tier"] != selected_model["tier"]]
+        other_models = [
+            m for m in self._available_models
+            if m["tier"] != selected_model["tier"]
+            and m.get("provider", DEFAULT_PROVIDER_ID) == provider_id
+        ]
         for m in other_models:
-            other_key = os.environ.get(m["env_var"], "")
-            if other_key:
-                fallback_client = GeminiClient(
-                    model_id=m["id"], transport=transport,
-                    tier=m["tier"], api_key_env_var=m["env_var"],
-                )
-                if fallback_client.connect(api_key=other_key):
-                    connected_clients[m["tier"]] = fallback_client
-                    print(f"  ✓ {m['name']} available as quota fallback")
+            fallback_client = self._build_client(m, [])
+            if fallback_client is not None:
+                connected_clients[(provider_id, m["tier"])] = fallback_client
+                print(f"  ✓ {m['name']} available as quota fallback")
 
         # Always dispatch, even with a single client. A bare client
         # skips token clamping, the PDF context guard, the retired-model
@@ -3676,14 +3960,21 @@ class EventMillShell(cmd.Cmd):
         self.llm_client = LLMDispatcher(
             clients=connected_clients,
             preferred_tier=selected_model["tier"],
-            tier_specs=self._tier_specs,
+            tier_specs=self._bound_tier_specs(connected_clients),
+            preferred_provider=provider_id,
         )
+
+        self._prune_provider_selection()
 
         log_user_activity("connect_llm", {
             "model_id": selected_model["id"],
             "model_name": selected_model["name"],
+            "provider": provider_id,
             "tier": selected_model["tier"],
-            "fallback_tiers": [t for t in connected_clients if t != selected_model["tier"]],
+            "fallback_tiers": [
+                tier for (_, tier) in connected_clients
+                if tier != selected_model["tier"]
+            ],
         })
     
     def do_ask(self, arg: str) -> None:
@@ -3773,11 +4064,16 @@ class EventMillShell(cmd.Cmd):
         try:
             # 'ask:' is analyst-facing reasoning over the full session context —
             # deliberately the heavy tier, not an accident of max_tokens.
+            # The session default applies to 'ask:' as well — it is the
+            # operator reasoning over their own session, so the vendor they
+            # chose is the one that should answer. A per-tool override is not
+            # consulted: 'ask:' is not a tool.
             response = self.llm_client.query_text(
                 prompt=full_prompt,
                 system_context=system_context,
                 max_tokens=4096,
                 hints=QueryHints(tier="heavy", needs_reasoning=True),
+                **self._provider_kwargs(self._provider_default),
             )
             
             if response.ok and response.text:
