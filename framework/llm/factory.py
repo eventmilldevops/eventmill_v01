@@ -77,14 +77,21 @@ def known_providers() -> tuple[str, ...]:
 def configured_providers(raw: str | None = None) -> tuple[str, ...]:
     """Provider ids this session may bind, from EVENTMILL_LLM_PROVIDERS.
 
-    Space-separated, defaulting to the Gemini provider alone so an existing
-    deployment that sets nothing behaves exactly as before. Order is preserved:
-    the first entry is the session default.
+    Space-separated, defaulting to EVERY known provider. Order is preserved:
+    the first entry is the session default, so the default order also decides
+    which vendor serves a tool that names none.
+
+    Defaulting to all of them rather than to Gemini alone is deliberate.
+    Naming a provider costs nothing when its key is absent — build_clients and
+    _discover_models both skip a key that is unset or still holds the
+    placeholder — whereas leaving one out means a vendor whose key IS present
+    never binds, and the symptom is a vendor that is simply missing rather than
+    an error. That failure has happened; the reverse has not.
 
     Raises UnknownProviderError naming the unknown id and the known set.
     """
     value = raw if raw is not None else os.environ.get(PROVIDERS_ENV, "")
-    ids = tuple(dict.fromkeys(value.split())) or (DEFAULT_PROVIDER_ID,)
+    ids = tuple(dict.fromkeys(value.split())) or known_providers()
     unknown = [p for p in ids if p not in PROVIDER_CLIENTS]
     if unknown:
         raise UnknownProviderError(

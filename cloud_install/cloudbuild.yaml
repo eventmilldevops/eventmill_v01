@@ -266,10 +266,12 @@ substitutions:
   _SECRET_TTYD_USER: 'eventmill-ttyd-user'
   _SECRET_TTYD_CRED: 'eventmill-ttyd-cred'
 
-  # Providers the session may bind, space-separated. Mounting a key does not
-  # bind its provider — this names the ones in use. Keep in step with
-  # deploy-cloudrun-secrets.sh, which defaults to the same value.
-  _LLM_PROVIDERS: 'gcp_gemini'
+  # Providers the session may bind, space-separated. All three by default: a
+  # provider whose key is absent or still "placeholder" is skipped at runtime,
+  # so naming one costs nothing, while leaving one out means a vendor with a
+  # working key in Secret Manager is silently absent from the deployment.
+  # Keep in step with deploy-cloudrun-secrets.sh, which defaults to the same.
+  _LLM_PROVIDERS: 'gcp_gemini anthropic openai'
 
   _LOG_LEVEL: 'INFO'
 

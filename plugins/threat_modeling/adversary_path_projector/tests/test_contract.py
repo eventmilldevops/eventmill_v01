@@ -961,6 +961,9 @@ class _Resp:
     finish_reason: str | None = "STOP"
     truncated: bool = False
     model_version: str | None = "mock-heavy-001"
+    # Every real client stamps this and the dispatcher stamps it as a backstop,
+    # so a response without one is the case the record has to refuse to guess at.
+    provider_id: str | None = "mock_provider"
 
 
 class _ScriptedLLM:
@@ -1684,7 +1687,7 @@ class TestStepState:
         schema = json.loads(
             (PLUGIN_DIR / "schemas" / "projection_run.schema.json").read_text())
         jsonschema.validate(record, schema)
-        assert record["run"]["schema_version"] == 3
+        assert record["run"]["schema_version"] == 4
         assert record["model"]["max_tokens"] == _tool_mod.PROJECTION_MAX_TOKENS
         step = record["sampled"]["paths"][0]["steps"][0]
         assert step["access_after"] == "code_execution"
@@ -1707,6 +1710,121 @@ class TestStepState:
         record = _records_in(os.environ["EVENTMILL_WORKSPACE"])[0]
         assert record["model"]["model_configured"] == "mock-heavy"
         assert record["model"]["model_served"] == "mock-heavy-001"
+
+    def test_the_record_names_the_provider_that_served_it(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """With several vendors bound, a record that names none is unreadable.
+
+        The tool cannot know which provider served it — the operator's choice
+        rides the scoping wrapper, which a plugin cannot see — so the only
+        honest source is the response itself.
+        """
+        context = FakeContext()
+        context.llm_query = _ScriptedLLM(
+            _stateful_projection(), provider_id="anthropic",
+        )
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        assert result.ok, result.message
+        record = _records_in(os.environ["EVENTMILL_WORKSPACE"])[0]
+        assert record["model"]["provider"] == "anthropic"
+
+    def test_a_response_naming_no_provider_records_null_not_gemini(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """Null is the honest answer; a default would be a false one.
+
+        Until schema_version 4 this field was the literal 'gcp_gemini' on every
+        record. That was true while one vendor could be bound and silently
+        wrong the moment two could, which is worse than admitting ignorance:
+        a reader cannot tell a guess from an observation.
+        """
+        context = FakeContext()
+        context.llm_query = _ScriptedLLM(_stateful_projection(), provider_id=None)
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        assert result.ok, result.message
+        record = _records_in(os.environ["EVENTMILL_WORKSPACE"])[0]
+        assert record["model"]["provider"] is None
+
+    def test_the_record_hashes_what_the_model_was_asked(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """The comparison rests on the prompt being the same across vendors.
+
+        Recording the hash is what turns that from an argument into something
+        a reader can check.
+        """
+        llm = _ScriptedLLM(_stateful_projection())
+        context = FakeContext()
+        context.llm_query = llm
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        assert result.ok, result.message
+        record = _records_in(os.environ["EVENTMILL_WORKSPACE"])[0]
+
+        expected = _tool_mod._prompt_hash(
+            llm.prompts[0], _tool_mod.PROJECTION_SYSTEM_CONTEXT,
+        )
+        assert record["run"]["prompt_sha256"] == expected
+
+    def test_the_prompt_hash_moves_when_the_question_does(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """Same map, different ask — the hash has to separate them.
+
+        Two records sharing a flow_map_sha256 are not necessarily comparable:
+        max_paths changes what was asked without touching the estate.
+        """
+        asked = []
+        for max_paths in (2, 4):
+            llm = _ScriptedLLM(_stateful_projection())
+            context = FakeContext()
+            context.llm_query = llm
+            result = plugin_instance.execute({
+                "action": "project_paths", "threat_actor": "APT29",
+                "flow_map": sample_flow_map, "max_paths": max_paths,
+            }, context)
+            assert result.ok, result.message
+            asked.append(
+                _tool_mod._prompt_hash(
+                    llm.prompts[0], _tool_mod.PROJECTION_SYSTEM_CONTEXT,
+                )
+            )
+
+        assert asked[0] != asked[1]
+
+    def test_the_prompt_hash_is_stable_for_an_unchanged_question(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """Two invocations asking the same thing must hash the same.
+
+        If the prompt carried anything ordered by a set or a timestamp this
+        would fail, and every cross-vendor comparison built on it would be
+        measuring the prompt rather than the model.
+        """
+        asked = []
+        for _ in range(2):
+            llm = _ScriptedLLM(_stateful_projection())
+            context = FakeContext()
+            context.llm_query = llm
+            result = plugin_instance.execute({
+                "action": "project_paths", "threat_actor": "APT29",
+                "flow_map": sample_flow_map,
+            }, context)
+            assert result.ok, result.message
+            asked.append(llm.prompts[0])
+
+        # Byte-identical, not merely equal in hash: the hash is what the record
+        # carries, but this is the property the record is claiming.
+        assert asked[0] == asked[1]
 
 
 class TestProjectionSummary:

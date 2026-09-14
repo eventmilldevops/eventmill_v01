@@ -91,10 +91,12 @@ ENV EVENTMILL_LOG_LEVEL=INFO
 # unlike the two Gemini keys, which exist so bulk Flash work cannot consume Pro
 # quota.
 #
-# EVENTMILL_LLM_PROVIDERS (space-separated, default "gcp_gemini") names which
-# providers the session may bind. A mounted key is not a bound provider: only
-# Gemini's tiers are bound for tool execution, and 'providers probe' is what
-# verifies another vendor's key without binding it.
+# EVENTMILL_LLM_PROVIDERS (space-separated) names which providers the session
+# may bind; every deploy path defaults it to all three. A provider whose key is
+# absent or still holds "placeholder" is skipped at startup and reported as
+# dormant, so naming all three costs nothing and adopting a vendor is a secret
+# version plus a restart. 'providers' shows what bound; 'providers probe <id>'
+# verifies a key without binding it.
 
 EXPOSE 8080
 

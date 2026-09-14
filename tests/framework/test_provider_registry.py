@@ -239,10 +239,23 @@ class TestPingBudgetComesFromTheManifest:
 
 
 class TestConfiguredProviders:
-    def test_unset_means_gemini_alone(self) -> None:
-        # An existing deployment that sets nothing must behave exactly as
-        # before Stage 2a.
-        assert factory.configured_providers("") == ("gcp_gemini",)
+    def test_unset_means_every_known_provider(self) -> None:
+        """Unset must not mean "Gemini alone", and the reason is asymmetric.
+
+        Naming a provider whose key is absent costs nothing — it is skipped at
+        build time and reported as dormant. Failing to name one whose key IS
+        present costs a vendor that never binds, with no error to show for it.
+        That is the failure this deployment has actually had.
+        """
+        assert factory.configured_providers("") == factory.known_providers()
+        assert set(factory.configured_providers("")) == {
+            "gcp_gemini", "anthropic", "openai",
+        }
+
+    def test_the_default_order_puts_gemini_first(self) -> None:
+        # The first entry serves any tool that names no provider, so the
+        # default order is a routing decision, not a cosmetic one.
+        assert factory.configured_providers("")[0] == "gcp_gemini"
 
     def test_space_separated_order_is_preserved(self) -> None:
         ids = factory.configured_providers("anthropic gcp_gemini openai")
@@ -539,6 +552,40 @@ class TestOnlyConfiguredProvidersAreBound:
 
         shell.do_connect("")
         assert shell.llm_client.bound_providers() == ("gcp_gemini",)
+
+    def test_connect_names_a_configured_provider_it_could_not_bind(
+        self, make_shell, capsys: pytest.CaptureFixture,
+    ) -> None:
+        """Dormant must be visible, not merely harmless.
+
+        Every provider is configured by default, so a vendor with no key is
+        expected — but a key that arrived and a key that did not must not look
+        identical. Three separate incidents in this project were a setting that
+        was correct in source and inert in the environment, with nothing said.
+        """
+        shell = make_shell(
+            "gcp_gemini anthropic openai",
+            ANTHROPIC_API_KEY=factory.PLACEHOLDER,
+            OPENAI_API_KEY="",
+        )
+        capsys.readouterr()
+        shell.do_connect("")
+
+        out = capsys.readouterr().out
+        assert "anthropic: dormant" in out
+        assert "openai: dormant" in out
+        assert "ANTHROPIC_API_KEY" in out and "OPENAI_API_KEY" in out
+        # And it stays a report, not a failure: Gemini still bound.
+        assert shell.llm_client.bound_providers() == ("gcp_gemini",)
+
+    def test_connect_says_nothing_when_every_provider_bound(
+        self, make_shell, capsys: pytest.CaptureFixture,
+    ) -> None:
+        shell = make_shell("gcp_gemini anthropic openai")
+        capsys.readouterr()
+        shell.do_connect("")
+
+        assert "dormant" not in capsys.readouterr().out
 
     def test_probing_another_provider_does_not_bind_it(
         self, make_shell, monkeypatch: pytest.MonkeyPatch,

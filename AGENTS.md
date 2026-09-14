@@ -97,8 +97,12 @@ so anything that reads one provider's limits for another is wrong.
 Only Gemini splits keys by tier, so bulk Flash work cannot consume Pro quota;
 the other two issue one key per account.
 
-`EVENTMILL_LLM_PROVIDERS` (space-separated, default `gcp_gemini`) names which
-providers a session may bind. **A mounted key is not a bound provider.**
+`EVENTMILL_LLM_PROVIDERS` (space-separated) names which providers a session may
+bind; every deploy path and `.env.example` default it to **all three**, because
+a provider whose key is unset or still `placeholder` is skipped at startup
+anyway. **A mounted key is not a bound provider** — but with all three named,
+a *real* key is, which is the point: adopting a vendor is a secret version and
+a restart, with no variable to remember.
 `providers` shows what is configured and keyed; `providers probe` proves
 reachability with two cheap phases — a model listing and a few-token ping — and
 works on a provider that is keyed but not yet named in that variable, so a key
@@ -367,18 +371,22 @@ ranges. Cloud Shell always works and is the reliable fallback.
   `placeholder` until someone adopts that vendor. This keeps the revision shape
   identical for every deployment, so adopting a provider is a new secret version
   plus a restart rather than an infrastructure change.
-  `EVENTMILL_LLM_PROVIDERS` (space-separated, default `gcp_gemini`) names the
-  ones actually in use; only those must hold real values, and an unknown id is
-  refused rather than ignored. **A placeholder in an unadopted provider is the
-  expected steady state** — Step 4 of the deploy reports it as `·` and does not
-  prompt. Do not "fix" that by making it blocking again; it would train
-  operators to dismiss the check that stops ttyd shipping with the password
-  `placeholder`.
-- **A mounted key is not a bound provider.** `_discover_models`
-  (`framework/cli/shell.py:418`) reads tier specs from the Gemini manifest
-  alone, so `ANTHROPIC_API_KEY` arrives in the container and binds nothing until
-  the provider registry lands. Confirm key delivery with `printenv`, not
-  `models`. Verified on Cloud Run 2026-09-13.
+  `EVENTMILL_LLM_PROVIDERS` (space-separated) names the ones a session may bind
+  and defaults to **all three** on every deploy path; an unknown id is refused
+  rather than ignored. **A placeholder in an unadopted provider is the expected
+  steady state** — Step 4 reports it as `·` and does not prompt. Because every
+  provider is named by default, "configured" no longer means "adopted", so
+  Step 4 blocks on **values**: ttyd holding `placeholder`, or no LLM provider
+  holding a real key at all. Do not make a per-provider placeholder blocking
+  again; it would fire on every deployment that has one vendor's key and not
+  the other two, and train operators to dismiss the check that stops ttyd
+  shipping with the password `placeholder`.
+- **A real key now does bind its provider.** `_discover_models` walks every
+  configured provider's manifest and `connect` builds each tier through the
+  provider registry, so `ANTHROPIC_API_KEY` holding a real value appears in
+  `models` and is selectable with `use`. A key that is unset or still
+  `placeholder` is skipped and named. `providers` is the diagnostic;
+  `printenv` is no longer the only way to see a key arrived.
 - Deploys default to `--allow-unauthenticated`; the only gate is shared ttyd
   basic auth. `ALLOW_UNAUTH=false` switches to IAM (`roles/run.invoker`).
   Prefer that for anything holding real investigation data.

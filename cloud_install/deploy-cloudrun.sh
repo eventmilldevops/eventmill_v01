@@ -153,7 +153,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --set-env-vars="GEMINI_PRO_API_KEY=${GEMINI_PRO_API_KEY:-}" \
     --set-env-vars="ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
     --set-env-vars="OPENAI_API_KEY=${OPENAI_API_KEY:-}" \
-    --set-env-vars="EVENTMILL_LLM_PROVIDERS=${EVENTMILL_LLM_PROVIDERS:-gcp_gemini}" \
+    --set-env-vars="EVENTMILL_LLM_PROVIDERS=${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai}" \
     --set-env-vars="EVENTMILL_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX:-${PROJECT_ID}-eventmill}" \
     --set-env-vars="GCS_LOG_BUCKET=${GCS_LOG_BUCKET:-}" \
     --set-env-vars="EVENTMILL_LOG_LEVEL=${EVENTMILL_LOG_LEVEL:-INFO}" \

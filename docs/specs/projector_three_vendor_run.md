@@ -164,7 +164,16 @@ unknown tool name in `use ... for <tool>` is refused rather than stored.
 produces a response whose `provider_id` is `anthropic`, with no other tool
 affected.
 
-## Stage C — attribution on the record
+## Stage C — attribution on the record — **DONE 2026-09-14**
+
+Change log: `docs/change_log/2026-09-14-run-record-attribution.md`. Landed as
+written, minus `effort_requested` — `model.thinking_level` already records what
+was asked for, and a second field saying the same thing would be a duplicate
+rather than a fact. The `medium`/`high` mapping to `output_config.effort` and
+`reasoning_effort` is recorded in the change log instead. Added beyond the
+plan: `provider` on the single-run result, so an operator reads it off the run
+rather than opening the record; and a cross-hash-seed check proving the prompt
+carries nothing set-ordered, which the plan assumed.
 
 `RUN_RECORD_SCHEMA_VERSION` 3 to 4. Four changes in the `model` block
 (`tool.py:3500-3515`):

@@ -42,6 +42,11 @@
           "pattern": "^[0-9a-f]{64}$",
           "description": "SHA-256 over a canonical serialisation (sorted keys, no insignificant whitespace, UTF-8) of the flow map AS SUPPLIED, before normalization. Reformatting or key reordering does not change it; a content change does. This is the join key — two records sharing it were run against the same estate, and nothing else in the record can be trusted to say so."
         },
+        "prompt_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 over exactly what the model was given: the system context and the prompt body. A comparison across two providers means nothing unless both were asked the same question, and until schema_version 4 that was an argument rather than something a reader could check. Two records sharing a flow_map_sha256 but differing here were not asked the same thing — max_paths, software_scope or the actor resolution moved. Null on records written before schema_version 4."
+        },
         "application": { "type": "string" },
         "actor_input": {
           "type": "string",
@@ -78,13 +83,16 @@
     },
     "model": {
       "type": "object",
-      "description": "What was asked of the model. Gemini only; a second provider is a separate path and this block does not attempt to abstract over one.",
+      "description": "What was asked of the model, and which vendor answered. Provider-neutral since schema_version 4: several providers can be bound at once and any of them may serve this call, so nothing here may be read as Gemini's.",
       "required": ["provider", "tier", "thinking_level"],
       "properties": {
-        "provider": { "type": "string" },
+        "provider": {
+          "type": ["string", "null"],
+          "description": "The provider that actually served the request, read from response.provider_id rather than assumed. Null only when no response came back at all. Before schema_version 4 this was the literal 'gcp_gemini' on every record — true while one vendor was bound, and silently false the moment two were, so a v3 record's provider is an assumption rather than an observation."
+        },
         "model_configured": {
           "type": ["string", "null"],
-          "description": "The id the client was constructed with from gcp_gemini.json, including an EVENTMILL_MODEL_* override or a retired-model substitution. Read it as 'what we asked for'; 'what ran' is model_served."
+          "description": "The id the client was constructed with from its provider manifest, including an EVENTMILL_MODEL_* override or a retired-model substitution. Read it as 'what we asked for'; 'what ran' is model_served."
         },
         "model_served": {
           "type": ["string", "null"],

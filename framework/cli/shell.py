@@ -469,6 +469,36 @@ class EventMillShell(cmd.Cmd):
             return None
         return client
 
+    def _report_dormant_providers(
+        self, clients: dict[tuple[str, str], LLMModelClient],
+    ) -> None:
+        """Name every configured provider that bound nothing, and why.
+
+        Every provider is configured by default, so a vendor whose key is
+        absent or still holds the placeholder is the expected steady state
+        rather than a fault — but it must not be *invisible*. A key that
+        arrived and a key that did not look identical from the outside until
+        something asks for that vendor, and that is the failure this project
+        has now had three times.
+        """
+        bound = {provider_id for provider_id, _ in clients}
+        dormant: list[tuple[str, tuple[str, ...]]] = []
+        for provider_id in self._provider_specs:
+            if provider_id in bound:
+                continue
+            gaps = llm_factory.missing_keys(provider_id)
+            if gaps:
+                dormant.append((provider_id, gaps))
+
+        if not dormant:
+            return
+        print("")
+        for provider_id, gaps in dormant:
+            print(f"  · {provider_id}: dormant — {', '.join(gaps)} "
+                  f"unset or placeholder")
+        print("    Set a key and reconnect to bind one; no redeploy needed.")
+        print("    'providers probe <id>' verifies a key before adopting it.")
+
     def _bound_tier_specs(
         self, clients: dict[tuple[str, str], LLMModelClient],
     ) -> dict[tuple[str, str], TierSpec] | None:
@@ -3879,6 +3909,7 @@ class EventMillShell(cmd.Cmd):
 
             for msg in failed:
                 print(msg)
+            self._report_dormant_providers(connected_clients)
 
             if not connected_clients:
                 print("  No models connected.")

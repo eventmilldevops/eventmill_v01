@@ -80,7 +80,13 @@ THINKING_LEVEL_ENV_OVERRIDE = "EVENTMILL_PROJECTION_THINKING"
 # 2: sampled steps carry the model's step state (Phase 3c).
 # 3: model.model_served — the id the provider reports, so a comparison across
 #    models rests on what ran rather than on what was asked for.
-RUN_RECORD_SCHEMA_VERSION = 3
+# 4: model.provider is read from the response instead of being assumed, and
+#    run.prompt_sha256 records what was asked. With several vendors bound at
+#    once a record that names no provider is not a weaker measurement but an
+#    unreadable one, and a cross-vendor comparison means nothing unless the
+#    prompt was the same — which was previously an argument rather than a fact
+#    on the record.
+RUN_RECORD_SCHEMA_VERSION = 4
 
 # Output cap for the projection call: 48K (48 x 1024). Step state roughly
 # triples the size of a step, and the assessment sets out to show what deep
@@ -464,6 +470,20 @@ def _canonical_flow_map_hash(raw: Any) -> str:
         default=str,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _prompt_hash(prompt: str, system_context: str) -> str:
+    """SHA-256 over exactly what the model was given, system context included.
+
+    A comparison across two vendors means nothing unless both were asked the
+    same question, and until this existed that was an argument rather than
+    something a reader could check. It covers the system context because that
+    is half of what was asked: a change there moves the answer as surely as a
+    change to the prompt body, and it would otherwise be invisible.
+    """
+    return hashlib.sha256(
+        f"{system_context}\n\n{prompt}".encode("utf-8")
+    ).hexdigest()
 
 
 _GIT_SHA: str | None = None
@@ -3284,6 +3304,7 @@ class AdversaryPathProjector:
             "runs": runs,
             "flow_map_path": str(payload.get("file_path", "") or ""),
             "flow_map_sha256": _canonical_flow_map_hash(raw),
+            "prompt_sha256": _prompt_hash(prompt, PROJECTION_SYSTEM_CONTEXT),
             "application": flow_map["application"],
             "actor_input": str(payload.get("threat_actor", "") or ""),
             "unreachable": unreachable,
@@ -3486,6 +3507,7 @@ class AdversaryPathProjector:
                 },
                 "flow_map_path": run_context["flow_map_path"],
                 "flow_map_sha256": run_context["flow_map_sha256"],
+                "prompt_sha256": run_context["prompt_sha256"],
                 "application": run_context["application"],
                 "actor_input": run_context["actor_input"],
                 "actor_resolved": {
@@ -3503,7 +3525,13 @@ class AdversaryPathProjector:
                 ),
             },
             "model": {
-                "provider": "gcp_gemini",
+                # Read from the response, never assumed. The dispatcher stamps
+                # provider_id as a backstop when a client omits it, so this is
+                # present on any real run; null means no response came back at
+                # all. Defaulting to a vendor name would be worse than null —
+                # with several providers bound, a record that quietly claims
+                # Gemini is not an incomplete measurement but a false one.
+                "provider": getattr(response, "provider_id", None),
                 "model_configured": getattr(response, "model_used", None),
                 "model_served": getattr(response, "model_version", None),
                 "tier": "heavy",
@@ -3675,6 +3703,9 @@ class AdversaryPathProjector:
             "actor": profile["label"],
             "application": run_context["application"],
             "software_scope": profile["software_scope"],
+            # Which vendor answered, so an operator comparing providers can
+            # read it off the run rather than opening the exported record.
+            "provider": getattr(attempt.get("response"), "provider_id", None),
             "thinking_level": run_context["thinking_level"],
             "allowed_technique_count": run_context["allowed_technique_count"],
             "techniques_offered_to_model": listed,

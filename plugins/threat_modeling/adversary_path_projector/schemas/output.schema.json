@@ -616,6 +616,10 @@
       "type": "string",
       "description": "Reasoning depth the projection call actually used."
     },
+    "provider": {
+      "type": ["string", "null"],
+      "description": "The LLM provider that served the projection call, read from the response rather than assumed. Several providers can be bound at once and the operator chooses which serves a tool, so a result that does not say is not interpretable. Null only when no response came back."
+    },
     "run_group": {
       "type": "string",
       "description": "Operator label tying a comparison set of runs together."

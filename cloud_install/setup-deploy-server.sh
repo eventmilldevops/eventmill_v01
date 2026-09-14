@@ -117,13 +117,18 @@ export EVENTMILL_SECRET_GCS_SA="eventmill-gcs-sa"
 export EVENTMILL_SECRET_TTYD_USER="eventmill-ttyd-user"
 export EVENTMILL_SECRET_TTYD_CRED="eventmill-ttyd-cred"
 
-# Providers this deployment intends to use, space-separated.
+# Providers this deployment may bind, space-separated. All three by default.
 # Known ids: gcp_gemini anthropic openai — an unknown one is refused, not
 # ignored, because a typo would otherwise deploy with that provider silently
-# absent. Only the providers named here must hold real key values; the rest
-# stay on "placeholder" and are reported as not-in-use rather than as a fault.
+# absent.
+#
+# Leave this alone. A provider whose key is absent or still holds the seeded
+# "placeholder" is skipped at runtime and reported as dormant, so naming all
+# three costs nothing; removing one means a vendor with a real key in Secret
+# Manager never binds, and the symptom is a vendor that is simply missing
+# rather than an error. Adopting a vendor is a secret version plus a restart.
 # A key can be verified before adoption with 'providers probe <id>'.
-export EVENTMILL_LLM_PROVIDERS="gcp_gemini"
+export EVENTMILL_LLM_PROVIDERS="gcp_gemini anthropic openai"
 
 # ttyd web terminal credentials (used by deploy-cloudrun.sh quick deploy only)
 export TTYD_USERNAME="analyst"

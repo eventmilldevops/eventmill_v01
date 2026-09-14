@@ -133,10 +133,20 @@ SECRET_OPENAI="${EVENTMILL_SECRET_OPENAI:-eventmill-openai-api}"
 SECRET_TTYD_USER="${EVENTMILL_SECRET_TTYD_USER:-eventmill-ttyd-user}"
 SECRET_TTYD_CRED="${EVENTMILL_SECRET_TTYD_CRED:-eventmill-ttyd-cred}"
 
-# Providers this deployment intends to actually use. Only these must hold real
-# key values; the rest are mounted holding "placeholder" so the revision shape
-# is identical for every deployment and adopting a vendor needs no redeploy.
-LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini}"
+# Providers this deployment may bind. ALL THREE BY DEFAULT, deliberately.
+#
+# Naming a provider here costs nothing at runtime: the framework skips a key
+# that is unset or still holds "placeholder", logs which provider that was, and
+# binds the rest. What the old default cost was real — a deployment with a
+# working Anthropic key in Secret Manager still bound Gemini only, because this
+# variable said so, and the operator had to know to come back and change it.
+# That is a workaround a field user forgets, and its symptom is a vendor that
+# is simply absent rather than an error.
+#
+# So adoption is now decided by whether a key holds a real value, which is
+# already where the operator's real decision lives, and this variable stops
+# being a second switch that has to agree with it.
+LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai}"
 
 SA_NAME="${EVENTMILL_SA_NAME:-eventmill-runner}"
 
@@ -219,19 +229,37 @@ ALL_SECRETS=(
 )
 
 # Of those, the ones that must hold a REAL value rather than "placeholder".
+#
 # The ttyd pair always must — a web terminal whose password is "placeholder" is
-# an open door. An LLM key must only when its provider is named in
-# EVENTMILL_LLM_PROVIDERS: a placeholder in a provider nobody has adopted is
-# the expected steady state, not a problem to warn about on every deploy.
+# an open door.
+#
+# No LLM key is individually required any more, and that follows directly from
+# naming all three providers by default: "configured" no longer means "adopted",
+# so it cannot be the test for whether a placeholder is a fault. Requiring each
+# configured provider's key would prompt "Deploy anyway?" on every deployment
+# that holds one vendor's key and not the other two — which is the common case
+# and an entirely healthy deployment.
+#
+# What must still hold is that the deployment can do LLM work AT ALL. That is
+# checked in Step 4 against the values rather than the configuration: at least
+# one LLM secret must be real. It is the same guard, resting on the fact rather
+# than on a variable an operator had to remember to keep in step.
 REQUIRED_SECRETS=("${SECRET_TTYD_USER}" "${SECRET_TTYD_CRED}")
+
+# Every LLM secret, and which provider each belongs to, so Step 4 can report
+# what will actually bind. Order matches LLM_PROVIDERS' own default.
+LLM_SECRETS=(
+    "${SECRET_GEMINI_FLASH}"
+    "${SECRET_GEMINI_PRO}"
+    "${SECRET_ANTHROPIC}"
+    "${SECRET_OPENAI}"
+)
+
+# The typo guard stays: an unknown id is refused rather than ignored, because
+# it would otherwise deploy with that provider silently absent.
 for _provider in ${LLM_PROVIDERS}; do
     case "${_provider}" in
-        gcp_gemini)
-            REQUIRED_SECRETS+=("${SECRET_GEMINI_FLASH}" "${SECRET_GEMINI_PRO}") ;;
-        anthropic)
-            REQUIRED_SECRETS+=("${SECRET_ANTHROPIC}") ;;
-        openai)
-            REQUIRED_SECRETS+=("${SECRET_OPENAI}") ;;
+        gcp_gemini|anthropic|openai) ;;
         *)
             echo "ERROR: unknown provider '${_provider}' in EVENTMILL_LLM_PROVIDERS."
             echo "       Known: gcp_gemini anthropic openai"
@@ -243,6 +271,16 @@ for _provider in ${LLM_PROVIDERS}; do
     esac
 done
 unset _provider
+
+# True when this secret holds a key for a provider EVENTMILL_LLM_PROVIDERS
+# names, i.e. one the runtime would bind if the value were real.
+secret_is_llm() {
+    local candidate="$1" s
+    for s in "${LLM_SECRETS[@]}"; do
+        [ "${s}" = "${candidate}" ] && return 0
+    done
+    return 1
+}
 
 # True when a placeholder in this secret should block the deploy.
 secret_is_required() {
@@ -608,9 +646,11 @@ echo ""
 # terminal whose password is "placeholder". Values are never printed.
 # ---------------------------------------------------------------------------
 echo "🔐 Step 4: Checking secret values..."
-echo "   Providers in use: ${LLM_PROVIDERS}"
+echo "   Providers this revision may bind: ${LLM_PROVIDERS}"
 PLACEHOLDER_FOUND=0
 DORMANT_FOUND=0
+LLM_KEYS_REAL=0
+LLM_KEYS_UNREADABLE=0
 for secret in "${ALL_SECRETS[@]}"; do
     if value=$(gcloud secrets versions access latest \
                   --secret="${secret}" --project="${PROJECT_ID}" 2>/dev/null); then
@@ -619,32 +659,50 @@ for secret in "${ALL_SECRETS[@]}"; do
                 echo "   ⚠ ${secret} still holds the seeded 'placeholder' value"
                 PLACEHOLDER_FOUND=1
             else
-                # Expected: a provider nobody has adopted. Mounted so the
+                # Expected: a vendor nobody has bought a key for. Mounted so the
                 # revision shape never changes, dormant until someone sets it.
-                echo "   · ${secret} holds 'placeholder' (provider not in use — fine)"
+                # The runtime skips it and binds the others.
+                echo "   · ${secret} holds 'placeholder' (dormant — will not bind)"
                 DORMANT_FOUND=1
             fi
         else
             echo "   ✓ ${secret} has a real value (${#value} chars)"
+            secret_is_llm "${secret}" && LLM_KEYS_REAL=$((LLM_KEYS_REAL + 1))
         fi
     else
         echo "   ? ${secret} — cannot read value (no secretAccessor for you); skipping check"
+        secret_is_llm "${secret}" && LLM_KEYS_UNREADABLE=$((LLM_KEYS_UNREADABLE + 1))
     fi
     unset value
 done
 
 if [ "${DORMANT_FOUND}" -ne 0 ]; then
     echo ""
-    echo "   Dormant secrets are mounted but unused. To adopt one later:"
+    echo "   Dormant secrets are mounted but hold no key. Adopting one is a"
+    echo "   secret version and a restart — no redeploy, no variable to change:"
     echo "     echo -n 'KEY' | gcloud secrets versions add SECRET_NAME \\"
     echo "         --project=${PROJECT_ID} --data-file=-"
-    echo "   then add its provider to EVENTMILL_LLM_PROVIDERS and redeploy."
+    echo "   Verify it from inside the container with 'providers probe <id>'."
+fi
+
+# The deployment must be able to do LLM work at all. Checked against the values
+# rather than against EVENTMILL_LLM_PROVIDERS, because every provider is named
+# there by default now and so naming one says nothing about whether it is
+# usable. Unreadable secrets are not counted as failures — a deployer without
+# secretAccessor cannot see any value, and refusing on that would block a
+# perfectly good deploy over an IAM role the service does not need them to hold.
+if [ "${LLM_KEYS_REAL}" -eq 0 ] && [ "${LLM_KEYS_UNREADABLE}" -eq 0 ]; then
+    echo ""
+    echo "   ⚠ NO LLM provider holds a real key — every one is 'placeholder'."
+    echo "   The service will start and every tool needing a model will fail."
+    echo "   Set at least one:  bash cloud_install/provision-secrets.sh"
+    PLACEHOLDER_FOUND=1
 fi
 
 if [ "${PLACEHOLDER_FOUND}" -ne 0 ]; then
     echo ""
-    echo "   A provider you ARE using has no real key, or ttyd would deploy"
-    echo "   with the password 'placeholder'."
+    echo "   ttyd would deploy with the password 'placeholder', or the"
+    echo "   deployment has no usable LLM key at all."
     echo "   Set real values first:  bash cloud_install/provision-secrets.sh"
     if [ "${DRY_RUN}" != "1" ]; then
         read -r -p "   Deploy anyway? [y/N]: " confirm
