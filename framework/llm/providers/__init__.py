@@ -22,6 +22,13 @@ logger = logging.getLogger("eventmill.framework.llm.providers")
 DEFAULT_PROVIDER_ID = "gcp_gemini"
 
 # Env vars that override the manifest's model id for a tier.
+#
+# These are UNQUALIFIED and apply to the default provider only. With one
+# provider that was complete; with three, a global EVENTMILL_MODEL_HEAVY would
+# point every provider's heavy tier at one vendor's model id — .env pins
+# gemini-3.1-pro-preview today, which would have retargeted Anthropic's heavy
+# tier at a Gemini model the moment anthropic.json loaded. Other providers use
+# the qualified form below.
 TIER_MODEL_ENV_OVERRIDE = {
     "light": "EVENTMILL_MODEL_LIGHT",
     "heavy": "EVENTMILL_MODEL_HEAVY",
@@ -33,6 +40,34 @@ TIER_MAX_OUTPUT_ENV_OVERRIDE = {
     "light": "EVENTMILL_MAX_OUTPUT_LIGHT",
     "heavy": "EVENTMILL_MAX_OUTPUT_HEAVY",
 }
+
+
+def _env_provider_token(provider_id: str) -> str:
+    """Provider id as it appears in an env var name: gcp_gemini -> GCP_GEMINI."""
+    return "".join(c if c.isalnum() else "_" for c in provider_id).upper()
+
+
+def _model_override_env(provider_id: str, tier: str) -> str | None:
+    """Env var that overrides this provider's model id for this tier.
+
+    Qualified for every provider (EVENTMILL_MODEL_ANTHROPIC_HEAVY); the
+    unqualified EVENTMILL_MODEL_HEAVY is honoured for the default provider
+    only, so an existing .env keeps working without reaching other vendors.
+    """
+    if provider_id == DEFAULT_PROVIDER_ID:
+        return TIER_MODEL_ENV_OVERRIDE.get(tier)
+    if tier not in TIER_MODEL_ENV_OVERRIDE:
+        return None
+    return f"EVENTMILL_MODEL_{_env_provider_token(provider_id)}_{tier.upper()}"
+
+
+def _max_output_override_env(provider_id: str, tier: str) -> str | None:
+    """Env var that overrides this provider's output cap for this tier."""
+    if provider_id == DEFAULT_PROVIDER_ID:
+        return TIER_MAX_OUTPUT_ENV_OVERRIDE.get(tier)
+    if tier not in TIER_MAX_OUTPUT_ENV_OVERRIDE:
+        return None
+    return f"EVENTMILL_MAX_OUTPUT_{_env_provider_token(provider_id)}_{tier.upper()}"
 
 # Caps used when no provider manifest is available. Gemini 3.x tiers are
 # capacity-identical (1,048,576 in / 65,536 out) — tier is quality/cost, not size.
@@ -55,6 +90,13 @@ class TierSpec:
     # Model to retry against when model_id is retired (Preview endpoints).
     # Empty means no fallback — the call fails and the caller decides.
     fallback_model_id: str = ""
+    # Reasoning-depth levels this tier accepts, most shallow first. Empty means
+    # the manifest declares none and every level in the provider's output
+    # budget is assumed accepted. Not every provider takes the same set:
+    # gemini-3.8-flash and both gpt-5.6 models reject "minimal" outright, so a
+    # level that is valid vocabulary in QueryHints can still be a 400.
+    thinking_levels: tuple[str, ...] = ()
+    provider_id: str = DEFAULT_PROVIDER_ID
 
     def label(self) -> str:
         """Human-readable name for CLI listings."""
@@ -66,7 +108,7 @@ def manifest_path(provider_id: str = DEFAULT_PROVIDER_ID) -> Path:
     return Path(__file__).parent / f"{provider_id}.json"
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def load_provider_manifest(
     provider_id: str = DEFAULT_PROVIDER_ID,
 ) -> dict[str, Any] | None:
@@ -96,8 +138,9 @@ def load_tier_specs(
     """Resolve every declared tier for a provider.
 
     Model ids may be overridden per tier via EVENTMILL_MODEL_LIGHT /
-    EVENTMILL_MODEL_HEAVY, so an operator can point a tier at a different
-    model without editing the manifest.
+    EVENTMILL_MODEL_HEAVY for the default provider, or the provider-qualified
+    EVENTMILL_MODEL_<PROVIDER>_<TIER> for any provider, so an operator can
+    point a tier at a different model without editing the manifest.
 
     Returns an empty dict when the manifest cannot be loaded.
     """
@@ -108,7 +151,7 @@ def load_tier_specs(
     specs: dict[str, TierSpec] = {}
     for tier, cfg in (manifest.get("tiers") or {}).items():
         model_id = cfg.get("model_id", "")
-        override_env = TIER_MODEL_ENV_OVERRIDE.get(tier)
+        override_env = _model_override_env(provider_id, tier)
         overridden = False
         if override_env and os.environ.get(override_env):
             # An override naming the manifest's own model is a redundant pin,
@@ -123,7 +166,7 @@ def load_tier_specs(
             "max_output_tokens",
             _FALLBACK_MAX_OUTPUT_TOKENS.get(tier, _DEFAULT_MAX_OUTPUT_TOKENS),
         )
-        cap_env = TIER_MAX_OUTPUT_ENV_OVERRIDE.get(tier)
+        cap_env = _max_output_override_env(provider_id, tier)
         cap_raw = os.environ.get(cap_env) if cap_env else None
         if cap_raw:
             try:
@@ -146,6 +189,8 @@ def load_tier_specs(
             capabilities=tuple(cfg.get("capabilities", [])),
             display_name=cfg.get("display_name", ""),
             fallback_model_id=cfg.get("fallback_model_id", ""),
+            thinking_levels=tuple(cfg.get("thinking_levels", [])),
+            provider_id=provider_id,
         )
     return specs
 
@@ -224,11 +269,63 @@ def max_output_tokens_for_tier(
     return spec.max_output_tokens if spec else _DEFAULT_MAX_OUTPUT_TOKENS
 
 
+# Shallowest to deepest. Not every provider accepts every level — the manifest's
+# per-tier thinking_levels is what says which — but where two providers share a
+# name they mean the same relative depth, so this is the order to pick from.
+_LEVEL_ORDER = ("minimal", "low", "medium", "high", "xhigh", "max")
+
+# Content allowance on top of the thinking reserve for a probe's ping. The ping
+# asks for one word; this only has to cover it.
+PING_CONTENT_TOKENS = 64
+
+
+def accepted_thinking_levels(
+    tier: str, provider_id: str = DEFAULT_PROVIDER_ID,
+) -> tuple[str, ...]:
+    """Reasoning-depth levels a tier accepts, shallowest first.
+
+    A level that is valid QueryHints vocabulary can still be a 400 at the
+    provider: gemini-3.8-flash and both gpt-5.6 models reject "minimal". Where
+    the manifest declares nothing, fall back to the levels its output budget
+    prices, which is the widest set that can be costed.
+    """
+    spec = load_tier_specs(provider_id).get(tier)
+    declared = spec.thinking_levels if spec else ()
+    if not declared:
+        budget = (load_provider_manifest(provider_id) or {}).get("output_budget") or {}
+        reserves = budget.get("thinking_reserve_tokens") or _FALLBACK_THINKING_RESERVE
+        declared = tuple(reserves)
+    return tuple(lv for lv in _LEVEL_ORDER if lv in declared)
+
+
+def ping_budget(
+    tier: str, provider_id: str = DEFAULT_PROVIDER_ID,
+) -> tuple[int, str | None]:
+    """Output budget and reasoning level for a liveness ping.
+
+    Returns (max_output_tokens, thinking_level). A flat small budget does not
+    work: reasoning is spent from the output budget, and the spend varies
+    between identical calls — gemini-3.8-flash returned empty text at a
+    64-token cap on one run and "OK" on the next, and gpt-5-mini spent all 64
+    tokens on reasoning. So size the ping from the reserve the provider
+    declares for its shallowest accepted level. The budget is a ceiling rather
+    than a charge, so reserving generously costs nothing unless it is spent.
+    """
+    levels = accepted_thinking_levels(tier, provider_id)
+    level = levels[0] if levels else None
+    reserve = thinking_reserve_tokens(level, provider_id)
+    cap = max_output_tokens_for_tier(tier, provider_id)
+    return min(reserve + PING_CONTENT_TOKENS, cap), level
+
+
 __all__ = [
     "DEFAULT_MEDIA_RESOLUTION",
     "DEFAULT_THINKING_LEVEL",
     "DEFAULT_PROVIDER_ID",
+    "PING_CONTENT_TOKENS",
     "TierSpec",
+    "accepted_thinking_levels",
+    "ping_budget",
     "load_provider_manifest",
     "load_tier_specs",
     "manifest_path",

@@ -10,6 +10,12 @@
       "max_output_tokens": 65536,
       "max_context_tokens": 1048576,
       "cost_tier": "low",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "_thinking_levels_note": "'minimal' is EXCLUDED: gemini-3.8-flash rejects thinking_level 'minimal' with 400 INVALID_ARGUMENT, verified live. _THINKING_LEVELS in clients/gemini.py still accepts it and QueryHints still documents it, so a plugin asking for it here fails the call outright rather than being clamped. Declared for the probe's benefit; nothing clamps a query against it yet.",
       "capabilities": [
         "text",
         "multimodal_image",
@@ -28,6 +34,12 @@
       "max_output_tokens": 65536,
       "max_context_tokens": 1048576,
       "cost_tier": "high",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "_thinking_levels_note": "'minimal' is excluded here too, but unverified rather than known-rejected — the light tier's rejection was measured and this tier's was not tested. Left out so the probe never picks a level that might 400.",
       "capabilities": [
         "text",
         "multimodal_image",

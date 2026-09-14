@@ -1,0 +1,93 @@
+{
+  "provider_id": "openai",
+  "display_name": "OpenAI GPT",
+  "_verified": "2026-09-13: tier ids confirmed present in models.list and both pinged clean. max_output_tokens read from the provider's own over-limit 400 ('This model supports at most 128000 completion tokens'). reasoning_effort 'minimal' is REJECTED by both tiers ('does not support minimal with this model'); 'low' works. temperature is rejected — only the default is accepted. max_context_tokens is NOT verified: this provider exposes no context window through models.retrieve, which returns id/created/owned_by only.",
+  "tiers": {
+    "light": {
+      "model_id": "gpt-5.6-terra",
+      "display_name": "GPT-5.6 Terra",
+      "fallback_model_id": "",
+      "api_key_env": "OPENAI_API_KEY",
+      "max_output_tokens": 128000,
+      "max_context_tokens": 400000,
+      "cost_tier": "low",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "capabilities": [
+        "text",
+        "multimodal_image",
+        "structured_output",
+        "function_calling"
+      ],
+      "_note": "One API key serves both tiers — OpenAI does not split keys by tier. max_context_tokens is a documented figure the provider does not report; it is used only by the PDF guard, which no OpenAI path reaches yet. thinking_levels omits 'minimal' because this model rejects it outright — the same shape as gemini-3.8-flash rejecting thinking_level 'minimal'."
+    },
+    "heavy": {
+      "model_id": "gpt-5.6-sol",
+      "display_name": "GPT-5.6 Sol",
+      "fallback_model_id": "gpt-5.6-terra",
+      "_fallback_note": "Unversioned aliases; the response reports a dated build (gpt-5.6-sol -> gpt-5.6-sol), so a provider-side version change is only visible through model_version on the response.",
+      "api_key_env": "OPENAI_API_KEY",
+      "max_output_tokens": 128000,
+      "max_context_tokens": 400000,
+      "cost_tier": "high",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "capabilities": [
+        "text",
+        "multimodal_image",
+        "structured_output",
+        "function_calling",
+        "deep_reasoning"
+      ]
+    }
+  },
+  "request_constraints": {
+    "_note": "Rejected parameters, each verified with a live 400 rather than assumed.",
+    "sampling_params": false,
+    "reasoning_effort_minimal": false,
+    "store": false,
+    "_store_note": "store=false is sent on every request. This platform handles incident data, so a no-retention posture is a declared property of the client, not an incidental default."
+  },
+  "file_handling": {
+    "application/pdf": {
+      "max_pages": 100,
+      "max_size_mb": 32,
+      "tokens_per_page": 1500,
+      "tokens_per_page_by_resolution": {
+        "low": 1500,
+        "medium": 1500,
+        "high": 1500
+      },
+      "default_media_resolution": "medium",
+      "ingestion_paths": [
+        "inline_bytes",
+        "files_api"
+      ],
+      "preferred_ingestion": "files_api",
+      "_note": "Placeholder limits, NOT verified — no OpenAI document path exists yet and nothing reads this. Stage 3 replaces these with measured values when query_with_document lands. No gs_uri path: this provider cannot read a GCS URI."
+    }
+  },
+  "output_budget": {
+    "_note": "Reasoning tokens are completion tokens and come out of max_completion_tokens — measured: at a 64-token cap gpt-5-mini spent all 64 on reasoning and returned empty content with finish_reason 'length'. Sizing a reply against the full cap truncates it. max_completion_tokens is a ceiling, not a charge, so reserving generously costs nothing unless spent.",
+    "default_thinking_level": "medium",
+    "thinking_reserve_tokens": {
+      "low": 4096,
+      "medium": 16384,
+      "high": 32768
+    }
+  },
+  "document_strategies": {
+    "application/pdf": "extract_text",
+    "application/json": "extract_text",
+    "text/csv": "extract_text",
+    "text/plain": "extract_text",
+    "text/html": "extract_text",
+    "default": "extract_and_chunk"
+  }
+}

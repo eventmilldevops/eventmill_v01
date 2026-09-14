@@ -13,6 +13,7 @@ convenience.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from ..plugins.protocol import LLMResponse, QueryHints
@@ -45,6 +46,66 @@ ERROR_KINDS = (
 # Both mean "this model cannot serve the request but another one might", and
 # neither recovers from a retry against the same model.
 TIER_CHANGE_KINDS = frozenset({"quota", "access"})
+
+
+# The ping prompt, shared by every client so the probe is the same question
+# everywhere. A one-word reply keeps the content cost at a few tokens and makes
+# "did anything come back" unambiguous.
+PROBE_PROMPT = "Reply with the single word: OK"
+
+
+@dataclass(frozen=True)
+class LLMProbeResult:
+    """What a liveness probe found out about one model on one provider.
+
+    Two phases, reported separately because they fail for different reasons and
+    an operator needs to know which: ``auth`` is a listing call that costs no
+    tokens and proves the key reaches the vendor, ``ping`` is a few-token
+    completion that proves the query path returns. A key can pass the first and
+    fail the second — an entitlement that does not cover this model shows up
+    only on the ping.
+
+    ``connect()`` cannot answer either question on its own. Every client builds
+    an SDK handle and reports success without a round trip, so a wrong key
+    "connects" and fails later at first use.
+    """
+
+    provider_id: str
+    model_id: str
+    tier: str | None
+    auth_ok: bool
+    ping_ok: bool
+    # None where the provider offers no model listing to check against.
+    model_visible: bool | None = None
+    # Models listed by the provider, for an operator picking a substitute.
+    models_listed: int = 0
+    ping_text: str = ""
+    # The ping hit its output cap before emitting content — reasoning consumed
+    # the budget. Distinct from a failure: the key, the model and the query
+    # path all work, so this reports as "raise the budget", never as an auth or
+    # connectivity problem.
+    ping_truncated: bool = False
+    latency_ms: int = 0
+    # Model the provider reports having served, where model_id is what was
+    # asked for. An alias resolves to a dated build, so these differ.
+    reported_model: str = ""
+    tokens_used: int = 0
+    error: str = ""
+    error_kind: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Both phases passed: the key reaches the vendor and the model answers."""
+        return self.auth_ok and self.ping_ok
+
+    def summary(self) -> str:
+        """One line for a CLI table."""
+        if self.ok:
+            note = " (truncated — raise budget)" if self.ping_truncated else ""
+            return f"ok {self.latency_ms} ms{note}"
+        if not self.auth_ok:
+            return f"auth failed: {self.error[:60]}"
+        return f"ping failed: {self.error[:60]}"
 
 
 def compose_prompt(prompt: str, grounding_data: list[str] | None) -> str:
@@ -119,6 +180,20 @@ class LLMModelClient(Protocol):
         """Whether this client's model declares a provider capability token."""
         ...
 
+    def probe(self) -> "LLMProbeResult":
+        """Check the key reaches the provider and this model answers.
+
+        Two phases, both cheap: a model listing (no tokens) and a few-token
+        completion. Never raises — a probe reports, so every failure comes back
+        on the result with an ``error_kind`` from the vocabulary above.
+
+        Size the ping from the provider's declared thinking reserve, not a
+        constant. Reasoning is spent from the output budget and the spend
+        varies between identical calls, so a flat small budget makes a healthy
+        model report as broken on some runs and not others.
+        """
+        ...
+
     # --- Queries ----------------------------------------------------------
 
     def query_text(
@@ -165,7 +240,9 @@ class LLMModelClient(Protocol):
 
 __all__ = [
     "ERROR_KINDS",
+    "PROBE_PROMPT",
     "TIER_CHANGE_KINDS",
     "LLMModelClient",
+    "LLMProbeResult",
     "compose_prompt",
 ]

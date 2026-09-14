@@ -29,6 +29,7 @@ from ..session.models import Pillar, ToolExecution, ToolExecutionStatus
 from ..plugins.loader import PluginLoader, LoadedPlugin
 from ..routing.router import Router, RouterConfig
 from ..artifacts.registry import ArtifactRegistry, create_artifact_registration_callback
+from ..llm import factory as llm_factory
 from ..llm.clients.gemini import GeminiClient
 from ..llm.dispatcher import (
     ContextBuilder,
@@ -36,7 +37,7 @@ from ..llm.dispatcher import (
     TierScopedLLMClient,
 )
 from ..llm.model_client import LLMModelClient
-from ..llm.providers import load_tier_specs
+from ..llm.providers import DEFAULT_PROVIDER_ID, load_tier_specs
 from ..plugins.protocol import (
     ArtifactRef,
     ExecutionContext,
@@ -423,6 +424,7 @@ class EventMillShell(cmd.Cmd):
                 "name": spec.label(),
                 "tier": tier,
                 "env_var": spec.api_key_env,
+                "provider": DEFAULT_PROVIDER_ID,
             })
 
         if not models and os.environ.get("GEMINI_API_KEY"):
@@ -438,6 +440,7 @@ class EventMillShell(cmd.Cmd):
                     "name": spec.label(),
                     "tier": tier,
                     "env_var": "GEMINI_API_KEY",
+                    "provider": DEFAULT_PROVIDER_ID,
                 })
             if not models:
                 models.append({
@@ -445,6 +448,7 @@ class EventMillShell(cmd.Cmd):
                     "name": "Gemini (default)",
                     "tier": "light",
                     "env_var": "GEMINI_API_KEY",
+                    "provider": DEFAULT_PROVIDER_ID,
                 })
 
         return models
@@ -3400,9 +3404,136 @@ class EventMillShell(cmd.Cmd):
                 display = s[:100] + "..." if len(s) > 100 else s
                 print(f"    {display}")
     
+    def do_providers(self, arg: str) -> None:
+        """Show LLM providers: configured, keyed, and reachable.
+
+        Usage: providers
+               providers probe [<provider_id>]
+
+        A mounted key is not a bound provider. The deployment mounts every LLM
+        secret for every deployment, with unadopted ones holding a placeholder,
+        so 'configured but no key' is an expected state rather than a fault.
+
+        'providers probe' is the only thing here that touches the network: two
+        phases per tier, a model listing (no tokens) and a few-token ping.
+        'connect' cannot answer either question — every client builds an SDK
+        handle and reports success without a round trip, so a wrong key
+        connects cleanly and fails later at first use.
+        """
+        parts = arg.strip().split()
+        if parts and parts[0] == "probe":
+            self._probe_providers(parts[1] if len(parts) > 1 else None)
+            return
+        if parts:
+            print(f"  Unknown argument: {' '.join(parts)}")
+            print("  Usage: providers | providers probe [<provider_id>]")
+            return
+
+        rows = llm_factory.provider_status()
+        error = next((r["config_error"] for r in rows if r["config_error"]), "")
+        if error:
+            print(f"  ⚠️  {error}")
+            print(f"     Falling back to {llm_factory.PROVIDERS_ENV} unset behaviour.")
+            print("")
+
+        print(f"  {'Provider':12s} {'Use':5s} {'Key':16s} {'Light':22s} {'Heavy':22s}")
+        print(f"  {'─' * 12} {'─' * 5} {'─' * 16} {'─' * 22} {'─' * 22}")
+        for row in rows:
+            configured = bool(row["configured"])
+            missing = row["missing_keys"]
+            if not configured:
+                use, key = "—", "—"
+            elif missing:
+                use, key = "✓", "missing"
+            else:
+                use, key = "✓", "present"
+            if row["is_default"]:
+                use = "✓ *"
+            tiers = row["tiers"]
+            print(
+                f"  {str(row['provider_id']):12s} {use:5s} {key:16s} "
+                f"{tiers.get('light', '—'):22s} {tiers.get('heavy', '—'):22s}"
+            )
+
+        print("")
+        for row in rows:
+            if row["configured"] and row["missing_keys"]:
+                gaps = ", ".join(row["missing_keys"])
+                secrets = ", ".join(row["secrets"]) or "—"
+                print(f"  {row['provider_id']}: set {gaps} to bind it.")
+                print(f"    On Cloud Run that is a new version of: {secrets}")
+        unconfigured = [r["provider_id"] for r in rows if not r["configured"]]
+        if unconfigured:
+            print(
+                f"  Not in use: {', '.join(str(p) for p in unconfigured)} — add to "
+                f"{llm_factory.PROVIDERS_ENV} (space-separated) to configure."
+            )
+        print("")
+        print("  '*' marks the session default. 'providers probe' checks reachability.")
+        print("  Only Gemini's tiers are bound for tool execution; 'connect' binds")
+        print("  those and the router still drives every plugin through them.")
+
+    def _probe_providers(self, only: str | None) -> None:
+        """Auth + ping every available provider's tiers, and report both phases."""
+        try:
+            configured = llm_factory.configured_providers()
+        except llm_factory.UnknownProviderError as e:
+            print(f"  ✗ {e}")
+            return
+
+        targets = [only] if only else list(configured)
+        unknown = [p for p in targets if p not in llm_factory.known_providers()]
+        if unknown:
+            print(f"  ✗ unknown provider: {', '.join(unknown)}")
+            print(f"    Known: {', '.join(llm_factory.known_providers())}")
+            return
+
+        for provider_id in targets:
+            print("")
+            print(f"  {provider_id}")
+            if provider_id not in configured:
+                print(
+                    f"    · not in {llm_factory.PROVIDERS_ENV} — probing anyway, "
+                    "since a key can be verified before it is adopted"
+                )
+            clients, failures = llm_factory.build_clients(provider_id)
+            for message in failures:
+                print(f"    ✗ {message}")
+            if not clients:
+                continue
+            for tier in ("light", "heavy"):
+                client = clients.get(tier)
+                if client is None:
+                    continue
+                result = client.probe()
+                mark = "✓" if result.ok else "✗"
+                print(f"    {mark} {tier:6s} {result.model_id}")
+                listing = (
+                    f"{result.models_listed} models, this one "
+                    f"{'visible' if result.model_visible else 'NOT listed'}"
+                    if result.auth_ok else result.error[:70]
+                )
+                print(f"        auth  {listing}")
+                if result.auth_ok:
+                    if result.ping_ok:
+                        served = result.reported_model or "unreported"
+                        detail = (
+                            f"{result.ping_text[:20]!r} in {result.latency_ms} ms, "
+                            f"{result.tokens_used} tokens, served by {served}"
+                        )
+                        if result.ping_truncated:
+                            detail += " — TRUNCATED, raise the budget"
+                        print(f"        ping  {detail}")
+                    else:
+                        print(
+                            f"        ping  failed [{result.error_kind}]: "
+                            f"{result.error[:70]}"
+                        )
+        print("")
+
     def do_models(self, arg: str) -> None:
         """List available LLM models.
-        
+
         Usage: models
         """
         if not self._available_models:
@@ -3410,12 +3541,16 @@ class EventMillShell(cmd.Cmd):
             print("  Set GEMINI_FLASH_API_KEY and/or GEMINI_PRO_API_KEY environment variables.")
             return
         
-        print(f"  {'Model':20s} {'Tier':10s} {'Status':14s} {'ID':30s}")
-        print(f"  {'─' * 20} {'─' * 10} {'─' * 14} {'─' * 30}")
-        
+        print(f"  {'Model':20s} {'Provider':11s} {'Tier':8s} {'Status':14s} {'ID':30s}")
+        print(f"  {'─' * 20} {'─' * 11} {'─' * 8} {'─' * 14} {'─' * 30}")
+
         for model in self._available_models:
             status = self._model_connected_status(model)
-            print(f"  {model['name']:20s} {model['tier']:10s} {status:14s} {model['id']:30s}")
+            provider = model.get("provider", DEFAULT_PROVIDER_ID)
+            print(
+                f"  {model['name']:20s} {provider:11s} {model['tier']:8s} "
+                f"{status:14s} {model['id']:30s}"
+            )
         
         print("")
         print("  'connect'            — bind all models (tiered auto-routing)")
@@ -3423,6 +3558,9 @@ class EventMillShell(cmd.Cmd):
         print("  Routing: plugin manifest model_tier, overridable per call")
         print("           by the plugin; framework calls with no preference")
         print("           use the light tier")
+        print("  'providers'          — every provider, keyed or not, and reachability")
+        print("  Only this provider's tiers are bound for tool execution; another")
+        print("  provider's key can be verified with 'providers probe' first.")
     
     def do_connect(self, arg: str) -> None:
         """Connect to LLM.

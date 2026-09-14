@@ -1,0 +1,96 @@
+{
+  "provider_id": "anthropic",
+  "display_name": "Anthropic Claude",
+  "_verified": "2026-09-13: tier ids, output caps and context windows read from the Models API (models.retrieve) and the output cap confirmed by an over-limit 400. Both tiers pinged clean. Context window is reported by the provider, not assumed.",
+  "tiers": {
+    "light": {
+      "model_id": "claude-sonnet-5",
+      "display_name": "Claude Sonnet 5",
+      "fallback_model_id": "",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "max_output_tokens": 128000,
+      "max_context_tokens": 1000000,
+      "cost_tier": "low",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "capabilities": [
+        "text",
+        "multimodal_image",
+        "native_pdf",
+        "structured_output",
+        "function_calling"
+      ],
+      "_note": "One API key serves both tiers — Anthropic does not split keys by tier, unlike the two Gemini keys that isolate Flash volume from Pro quota. thinking_levels maps onto output_config.effort; the provider also accepts xhigh and max, which QueryHints has no vocabulary for. 'minimal' is absent because there is no such effort level."
+    },
+    "heavy": {
+      "model_id": "claude-opus-5",
+      "display_name": "Claude Opus 5",
+      "fallback_model_id": "claude-sonnet-5",
+      "_fallback_note": "Both are GA aliases rather than dated snapshots, so a retirement is unlikely; Sonnet 5 is named as the substitute because it shares the same request surface and caps.",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "max_output_tokens": 128000,
+      "max_context_tokens": 1000000,
+      "cost_tier": "high",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "capabilities": [
+        "text",
+        "multimodal_image",
+        "native_pdf",
+        "structured_output",
+        "function_calling",
+        "deep_reasoning"
+      ]
+    }
+  },
+  "request_constraints": {
+    "_note": "Rejected parameters, verified against the Models API capability block. Sending any of these is a 400, so no client may pass them for this provider.",
+    "thinking_budget_tokens": false,
+    "sampling_params": false,
+    "assistant_prefill": false,
+    "thinking_mode": "adaptive",
+    "stream_above_output_tokens": 32768
+  },
+  "file_handling": {
+    "application/pdf": {
+      "max_pages": 100,
+      "max_size_mb": 32,
+      "tokens_per_page": 1500,
+      "tokens_per_page_by_resolution": {
+        "low": 1500,
+        "medium": 1500,
+        "high": 1500
+      },
+      "default_media_resolution": "medium",
+      "ingestion_paths": [
+        "inline_bytes",
+        "files_api"
+      ],
+      "preferred_ingestion": "inline_bytes",
+      "_note": "Tightest PDF limits of the three providers, and the reason the dispatcher's PDF guard must read the ACTIVE provider's limits rather than Gemini's 1000 pages / 50 MB. No gs_uri path: this provider cannot read a GCS URI, so the framework must materialise bytes first. Page cost does not vary by media_resolution here — the per-resolution block is filled uniformly so a caller reading it gets a usable number rather than a KeyError. Unused until Stage 4 wires the document path."
+    }
+  },
+  "output_budget": {
+    "_note": "Thinking tokens are output tokens and come out of max_tokens, as on Gemini — but budget_tokens was removed on the 5 family, so depth is set by output_config.effort and the spend is adaptive rather than capped. These reserves are what to hold back when sizing how much content one call may emit; max_tokens is a ceiling, not a charge, so reserving generously costs nothing unless spent.",
+    "default_thinking_level": "high",
+    "thinking_reserve_tokens": {
+      "low": 4096,
+      "medium": 16384,
+      "high": 32768
+    }
+  },
+  "document_strategies": {
+    "application/pdf": "native",
+    "application/json": "extract_text",
+    "text/csv": "extract_text",
+    "text/plain": "extract_text",
+    "text/html": "extract_text",
+    "default": "extract_and_chunk"
+  }
+}

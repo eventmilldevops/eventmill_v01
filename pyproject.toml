@@ -75,8 +75,20 @@ plugins-network-forensics = [
     "networkx>=3.2",
 ]
 plugins-threat-modeling = []
+# One extra per LLM provider. Each client imports its own SDK, so a provider
+# whose extra is not installed must not break a session on one whose extra is —
+# framework/llm/factory.py imports clients lazily for exactly that reason.
+llm-anthropic = [
+    "anthropic>=0.111.0",
+]
+llm-openai = [
+    # 1.58.1 has no client.responses; the Responses API landed in 1.66. The
+    # client currently uses chat.completions, which works on either, but the
+    # floor is set where Stage 3 needs it so the SDK is not the blocker twice.
+    "openai>=1.66",
+]
 all = [
-    "eventmill[dev,gcp,plugins-log-analysis,plugins-network-forensics,plugins-threat-modeling]",
+    "eventmill[dev,gcp,plugins-log-analysis,plugins-network-forensics,plugins-threat-modeling,llm-anthropic,llm-openai]",
 ]
 
 [project.urls]

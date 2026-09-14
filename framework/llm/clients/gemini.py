@@ -21,8 +21,8 @@ from typing import Any
 
 from ...plugins.protocol import LLMResponse, QueryHints
 from ..backends.base import DocumentPart
-from ..model_client import compose_prompt
-from ..providers import DEFAULT_PROVIDER_ID, load_tier_specs
+from ..model_client import PROBE_PROMPT, LLMProbeResult, compose_prompt
+from ..providers import DEFAULT_PROVIDER_ID, load_tier_specs, ping_budget
 
 try:
     from google import genai
@@ -266,6 +266,68 @@ class GeminiClient:
         if spec is None:
             return capability in _ASSUMED_CAPABILITIES
         return capability in spec.capabilities
+
+    def probe(self) -> LLMProbeResult:
+        """Check the key reaches Gemini and this model answers.
+
+        Added for parity with the other providers rather than because Gemini
+        needed it: all three clients now prove liveness the same way, so one
+        reading of the code covers every provider. Nothing else about this
+        client's behaviour changed.
+
+        models.list costs no tokens; the ping costs a handful. Neither touches
+        the query paths the plugins use.
+        """
+        started = time.monotonic()
+        base = {
+            "provider_id": self.provider_id,
+            "model_id": self.model_id,
+            "tier": self.tier,
+        }
+
+        def elapsed() -> int:
+            return int((time.monotonic() - started) * 1000)
+
+        if not self._connected or self._genai_client is None:
+            return LLMProbeResult(
+                **base, auth_ok=False, ping_ok=False, latency_ms=elapsed(),
+                error="not connected — call connect() first", error_kind="access",
+            )
+
+        try:
+            listed = [m.name or "" for m in self._genai_client.models.list()]
+        except Exception as e:  # noqa: BLE001 — a probe reports, it does not raise
+            return LLMProbeResult(
+                **base, auth_ok=False, ping_ok=False, latency_ms=elapsed(),
+                error=f"{type(e).__name__}: {e}",
+                error_kind=self.classify_error(str(e)),
+            )
+
+        # Listings are fully-qualified ("models/gemini-3.8-flash").
+        visible = any(n.split("/")[-1] == self.model_id for n in listed)
+
+        max_tokens, level = ping_budget(self.tier or "light", self.provider_id)
+        hints = QueryHints(thinking_level=level) if level else None
+        result = self.query_text(
+            prompt=PROBE_PROMPT, max_tokens=max_tokens, hints=hints,
+        )
+        text = (result.text or "").strip()
+        return LLMProbeResult(
+            **base,
+            auth_ok=True,
+            ping_ok=result.ok,
+            model_visible=visible,
+            models_listed=len(listed),
+            ping_text=text,
+            # Gemini spends thinking tokens from the reply's budget, so a cap
+            # hit with nothing to show is budget starvation, not a failure.
+            ping_truncated=bool(result.truncated and not text),
+            latency_ms=elapsed(),
+            reported_model=result.model_version or "",
+            tokens_used=(result.token_usage or {}).get("total_tokens", 0),
+            error=result.error or "",
+            error_kind=result.error_kind,
+        )
 
     # --- Error classification --------------------------------------------
 
