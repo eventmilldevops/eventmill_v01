@@ -134,6 +134,92 @@
               "defanged": {
                 "type": "boolean",
                 "description": "True if the original value was defanged (e.g., hxxp://, [.]com) and has been re-fanged."
+              },
+              "occurrences": {
+                "type": "array",
+                "description": "Every report of this indicator across the run, in merge order. (ioc_type, value) and (technique_id, tactic) are entity identities, not evidence identities \u2014 several procedures share one technique and one indicator carries several roles \u2014 so the canonical scalars above stay first-wins and each individual sighting is kept here.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "batch_label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Which call reported it: a native page range (p12-19) or a chunk label (chunk 3/8)."
+                    },
+                    "attempt_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Monotonic attempt number within the run, so a bisected retry can be told from its parent."
+                    },
+                    "page_start": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "First page of the reporting call's range. Null for a chunked-text call, which has no page range until Stage 2.5."
+                    },
+                    "page_end": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Last page of the reporting call's range. Null for a chunked-text call."
+                    },
+                    "context": {
+                      "type": "string",
+                      "description": "What this particular sighting said, which is the part a single canonical record cannot hold.",
+                      "maxLength": 300
+                    },
+                    "superseded": {
+                      "type": "boolean",
+                      "description": "Present and True when this sighting came from a truncated reply that a later attempt replaced. Kept for the audit trail; it sets no canonical value and raises no conflict."
+                    }
+                  }
+                }
+              },
+              "conflicts": {
+                "type": "array",
+                "description": "Present only when two standing reports of this entity disagreed on a scalar. Never auto-resolved: a later correction and a lower-confidence restatement are not distinguishable by value, so the first reading stays canonical and every reading is recorded. Non-empty makes analysis_status partial.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "The disagreeing field: confidence, priority, is_false_positive.",
+                      "enum": [
+                        "confidence",
+                        "priority",
+                        "is_false_positive"
+                      ]
+                    },
+                    "canonical": {
+                      "description": "The value reported above, from the first standing report."
+                    },
+                    "reported": {
+                      "description": "The value this other report gave instead."
+                    },
+                    "batch_label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "attempt_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "recovered_from_partial": {
+                "type": "boolean",
+                "description": "Present and True when this record survives only because a truncated reply mentioned it and the attempt that replaced that reply did not restate it. The evidence is kept rather than dropped, and the run is reported partial."
               }
             }
           }
@@ -202,6 +288,91 @@
               "tactic_corrected_from": {
                 "type": "string",
                 "description": "Present when the reconciler replaced the LLM's tactic label deterministically (retired tactic, Stealth/Defense Impairment sibling swap, or a technique with a single valid tactic). Holds the original label."
+              },
+              "occurrences": {
+                "type": "array",
+                "description": "Every report of this technique role across the run, in merge order. (ioc_type, value) and (technique_id, tactic) are entity identities, not evidence identities \u2014 several procedures share one technique and one indicator carries several roles \u2014 so the canonical scalars above stay first-wins and each individual sighting is kept here.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "batch_label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Which call reported it: a native page range (p12-19) or a chunk label (chunk 3/8)."
+                    },
+                    "attempt_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Monotonic attempt number within the run, so a bisected retry can be told from its parent."
+                    },
+                    "page_start": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "First page of the reporting call's range. Null for a chunked-text call, which has no page range until Stage 2.5."
+                    },
+                    "page_end": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Last page of the reporting call's range. Null for a chunked-text call."
+                    },
+                    "context": {
+                      "type": "string",
+                      "description": "What this particular sighting said, which is the part a single canonical record cannot hold.",
+                      "maxLength": 300
+                    },
+                    "superseded": {
+                      "type": "boolean",
+                      "description": "Present and True when this sighting came from a truncated reply that a later attempt replaced. Kept for the audit trail; it sets no canonical value and raises no conflict."
+                    }
+                  }
+                }
+              },
+              "conflicts": {
+                "type": "array",
+                "description": "Present only when two standing reports of this entity disagreed on a scalar. Never auto-resolved: a later correction and a lower-confidence restatement are not distinguishable by value, so the first reading stays canonical and every reading is recorded. Non-empty makes analysis_status partial.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "The disagreeing field: confidence, technique_name.",
+                      "enum": [
+                        "confidence",
+                        "technique_name"
+                      ]
+                    },
+                    "canonical": {
+                      "description": "The value reported above, from the first standing report."
+                    },
+                    "reported": {
+                      "description": "The value this other report gave instead."
+                    },
+                    "batch_label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "attempt_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "recovered_from_partial": {
+                "type": "boolean",
+                "description": "Present and True when this record survives only because a truncated reply mentioned it and the attempt that replaced that reply did not restate it. The evidence is kept rather than dropped, and the run is reported partial."
               }
             }
           }
@@ -325,7 +496,37 @@
             },
             "candidates_unassessed": {
               "type": "integer",
-              "description": "Regex candidates the model was given but returned no verdict on \u2014 neither accepted nor ruled out. Non-zero makes analysis_status partial. mitre_technique matches are excluded: they are requested as techniques, not indicators."
+              "description": "Regex candidates the model was given but returned no verdict on \u2014 neither accepted nor ruled out. Counted against what actually reached a prompt, not against the whole-document regex pass. Non-zero makes analysis_status partial. mitre_technique matches are excluded: they are requested as techniques, not indicators."
+            },
+            "candidates_not_submitted": {
+              "type": "integer",
+              "description": "Regex candidates that reached no prompt at all, so no model was asked about them. Distinct from candidates_unassessed, which is the model's silence about a candidate it was given; this is a coverage gap in the batching. Non-zero makes analysis_status partial."
+            },
+            "merge_stats": {
+              "type": "object",
+              "description": "What the merge did, as opposed to what it produced. Empty on a run that never reached the merge (regex_only, or every call failing).",
+              "properties": {
+                "conflicts": {
+                  "type": "integer",
+                  "description": "Scalar disagreements recorded across all entities. Non-zero makes analysis_status partial."
+                },
+                "recovered_from_partial": {
+                  "type": "integer",
+                  "description": "Entities that survive only from a truncated reply its retry did not restate. Non-zero makes analysis_status partial."
+                },
+                "superseded_results": {
+                  "type": "integer",
+                  "description": "Truncated native partials that a later attempt covered in full, by page-range containment, and which therefore no longer supply canonical values."
+                },
+                "occurrences": {
+                  "type": "integer",
+                  "description": "Total sightings kept across every indicator and technique role."
+                }
+              }
+            },
+            "native_attempts": {
+              "type": "integer",
+              "description": "Native document calls that returned parseable JSON, including the partials later superseded. 0 on a run with no native path. Separate from chunks_attempted, which counts only chunked-text calls and is 0 on a clean native run."
             },
             "coverage_unit": {
               "type": "string",

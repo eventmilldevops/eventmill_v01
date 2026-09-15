@@ -28,9 +28,16 @@ Whether a long threat report survives chunking with its evidence intact. Plan:
 | 09-15 | `2026-09-15-chunk-failures-and-rejection.md` | **Stage 1.5.** `if not refined_iocs:` reinstated the exact indicators the model had rejected, as a regex baseline. Split from "refinement never ran". Per-chunk failures also reach the result now, closing a Goal A gap 1.4 left open |
 | 09-15 | `2026-09-15-persisted-provenance-and-page-outcomes.md` | **Stages 1.6 + 1.7.** Coverage and status are written into the exports, not just the result; an unreadable page no longer counts as read, and a blank one is not a defect. **Stage 1 complete** |
 | 09-15 | `2026-09-15-unassessed-candidates-and-units.md` | **Post-Stage-1, found by running the tools.** The rejection note counted verdicts returned and called them "all candidates"; coverage counted lines and named them pages; the analyzer's export stated no page count on the native path. Three Goal A failures a deterministic review could not catch |
+| 09-15 | `2026-09-15-submitted-baseline.md` | **Stage 2.0.** The reconciliation is measured against what actually reached a prompt, with `candidates_not_submitted` reported separately from the model's silence. **Changes no output today** — the defect it was written against turned out to be unreachable, and the entry says so; kept as the invariant tripwire 2.5 needs |
+| 09-15 | `2026-09-15-retry-supersedes-partial.md` | **Stage 2.1 + 2.2.** A truncated partial beat its own bisected retry in the merge — the one finding whose behaviour was the opposite of what the logs reported — and every sighting of an entity after the first was discarded. Supersession is by page-range containment, canonical scalars stay first-wins, and disagreements are recorded rather than resolved |
 
 **Stage 1 is complete.** Goal A — *incomplete work is never reported as
 complete* — holds for both plugins. Suite went 1177 → 1319.
+
+**Stage 2 is in progress.** 2.0 and 2.1+2.2 have landed; 2.3, 2.4, 2.5 and 2.6
+are next, as one change set. Suite 1319 → 1372. Every step is verified on
+control flow only — the single live run that Stage 2's sign-off requires has
+not been made, so no part of Stage 2 is signed off yet.
 
 **The seven steps were verified on control flow alone, and the first live run
 found three more Goal A failures** (last row above). A deterministic review is
