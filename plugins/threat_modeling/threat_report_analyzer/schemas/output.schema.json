@@ -12,12 +12,23 @@
       "items": {
         "type": "object",
         "properties": {
-          "path": {"type": "string"},
-          "name": {"type": "string"},
-          "size_bytes": {"type": "integer"},
-          "last_modified": {"type": "string"}
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer"
+          },
+          "last_modified": {
+            "type": "string"
+          }
         },
-        "required": ["path", "name"]
+        "required": [
+          "path",
+          "name"
+        ]
       },
       "description": "Available reports (for list_reports action)"
     },
@@ -26,22 +37,90 @@
       "items": {
         "type": "object",
         "properties": {
-          "report_path": {"type": "string"},
-          "word_count": {"type": "integer"},
-          "pages_total": {"type": "integer", "description": "Pages the source PDF has. Absent when native ingestion read the whole document, where coverage is total by construction."},
-          "pages_read": {"type": "integer", "description": "Pages actually examined on the text path. Equal to pages_total unless the local page ceiling truncated the read."},
-          "pages_dropped": {"type": "integer", "description": "pages_total - pages_read. Non-zero means the summary was built from part of the report, so a topic's absence is not evidence it is absent from the document."},
-          "summary": {"type": "string"},
+          "report_path": {
+            "type": "string"
+          },
+          "word_count": {
+            "type": "integer"
+          },
+          "pages_total": {
+            "type": "integer",
+            "description": "Pages the source PDF has. Absent when native ingestion read the whole document, where coverage is total by construction."
+          },
+          "pages_read": {
+            "type": "integer",
+            "description": "Pages actually examined on the text path. Equal to pages_total unless the local page ceiling truncated the read."
+          },
+          "pages_dropped": {
+            "type": "integer",
+            "description": "pages_total - pages_read. Non-zero means the summary was built from part of the report, so a topic's absence is not evidence it is absent from the document."
+          },
+          "summary": {
+            "type": "string"
+          },
           "key_findings": {
             "type": "array",
-            "items": {"type": "string"}
+            "items": {
+              "type": "string"
+            }
           },
           "relevant_techniques": {
             "type": "array",
-            "items": {"type": "string"}
+            "items": {
+              "type": "string"
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when at least one LLM call in this run stopped at the output cap. The text is still the best available answer, but it is partial: content absent from it was not necessarily absent from the report."
+          },
+          "truncation_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One line per truncated call, naming which part of the work was cut off (the whole-document pass, a page range, or the final synthesis)."
+          },
+          "degraded": {
+            "type": "boolean",
+            "description": "True when part of this run fell back to a materially worse input than analysis: a section that produced no summary and contributed raw extracted text instead, or a synthesis pass that did not run and left a concatenation as the final report."
+          },
+          "degradation_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One line per degradation, naming which section or pass fell back and to what."
+          },
+          "analysis_status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial",
+              "degraded"
+            ],
+            "description": "Whether this run did the work it set out to do. complete: nothing truncated, no pages dropped, no fallback. partial: content is missing but every cause is known and named in analysis_notes. degraded: the tool fell back to a materially worse input path, so part of the output is not the kind of answer it normally produces."
+          },
+          "analysis_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One short line per cause behind analysis_status. Rendered ahead of the content in summarize_for_llm, which PluginExecutor caps at 2000 characters."
+          },
+          "pages_empty": {
+            "type": "integer",
+            "description": "Pages that yielded no text and are genuinely blank. A legitimate outcome, reported separately so it is not confused with a page that could not be read."
+          },
+          "pages_extract_failed": {
+            "type": "integer",
+            "description": "Pages pypdf could not read at all \u2014 scanned or damaged. Their content reaches nothing downstream, so a non-zero value makes analysis_status partial. Distinct from pages_dropped, which is pages never attempted."
           }
         },
-        "required": ["report_path", "summary"]
+        "required": [
+          "report_path",
+          "summary"
+        ]
       },
       "description": "Generated summaries (for summarize action)"
     },
@@ -50,10 +129,19 @@
       "items": {
         "type": "object",
         "properties": {
-          "report_path": {"type": "string"},
-          "matches": {"type": "array", "items": {"type": "string"}}
+          "report_path": {
+            "type": "string"
+          },
+          "matches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         },
-        "required": ["report_path"]
+        "required": [
+          "report_path"
+        ]
       },
       "description": "Search results (for search_reports action)"
     },
@@ -66,5 +154,8 @@
       "description": "Status or error message"
     }
   },
-  "required": ["action", "message"]
+  "required": [
+    "action",
+    "message"
+  ]
 }

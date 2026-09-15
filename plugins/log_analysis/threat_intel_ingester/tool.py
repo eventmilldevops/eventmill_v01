@@ -529,6 +529,82 @@ def _merge_llm_chunk_results(chunk_results: list[dict]) -> dict:
     }
 
 
+def _analysis_fields(
+    *,
+    ingestion_mode: str,
+    pages_total: int,
+    pages_read: int,
+    truncated_chunks: list[int],
+    chunks_attempted: int = 0,
+    chunks_failed: int = 0,
+    candidates_rejected: int = 0,
+    accepted_none: bool = False,
+) -> dict:
+    """One status for the whole ingestion, with the reasons behind it.
+
+    Precedence is degraded > partial > complete. "regex_only" is degraded and
+    not merely partial: the indicators are unrefined and unclassified, which is
+    a different kind of answer rather than less of the same one.
+
+    The notes carry the markers that used to be separate sentences in
+    summarize_for_llm, so that the status can lead there. That matters because
+    PluginExecutor truncates the summary at 2000 characters, and a warning
+    placed after the content is the part that gets cut.
+    """
+    notes: list[str] = []
+    dropped = max(0, (pages_total or 0) - (pages_read or 0))
+    if dropped:
+        notes.append(
+            f"INCOMPLETE COVERAGE: only {pages_read} of {pages_total} pages "
+            f"were read, so absence of an indicator here is not evidence it is "
+            f"absent from the report"
+        )
+    if truncated_chunks:
+        listed = ", ".join(str(c) for c in truncated_chunks)
+        plural = "s" if len(truncated_chunks) != 1 else ""
+        notes.append(
+            f"TRUNCATED OUTPUT: chunk{plural} {listed} stopped at the output "
+            f"cap; their candidates were only partly assessed"
+        )
+    # A chunk that failed took its candidates with it. Counting these only in
+    # the logs is what let a run where four of ten chunks failed report exactly
+    # like a clean one.
+    if chunks_failed:
+        notes.append(
+            f"INCOMPLETE ANALYSIS: {chunks_failed} of {chunks_attempted} "
+            f"chunk(s) produced no usable result, so their candidates were "
+            f"never assessed"
+        )
+    # Not a defect and not a degradation: the model looked at every candidate
+    # and rejected all of them. Said plainly so an empty IOC list is not read
+    # as a failure to produce one.
+    if accepted_none:
+        notes.append(
+            f"NO INDICATORS ACCEPTED: all {candidates_rejected} candidate(s) "
+            f"were assessed as false positives; the empty result is the "
+            f"assessment, not a failure to produce one"
+        )
+
+    if ingestion_mode == "regex_only":
+        notes.append(
+            "DEGRADED INPUT: LLM refinement did not run, so these indicators "
+            "are a regex baseline — low confidence, no false-positive "
+            "assessment, no MITRE mapping, no attack graph"
+        )
+
+    # "No indicators accepted" is a complete answer and does not by itself make
+    # the run partial — the work was done and this is its result. Every other
+    # note means something was not looked at.
+    incomplete = [n for n in notes if not n.startswith("NO INDICATORS ACCEPTED")]
+    if ingestion_mode == "regex_only":
+        status = "degraded"
+    elif incomplete:
+        status = "partial"
+    else:
+        status = "complete"
+    return {"analysis_status": status, "analysis_notes": notes}
+
+
 def _parse_llm_json(response_text: str) -> dict | None:
     """Strip markdown code fences and parse JSON from LLM response."""
     parsed, _ = _parse_llm_json_result(response_text)
@@ -1582,6 +1658,24 @@ class ThreatIntelIngester:
         attack_graph = {}  # multi-path attack graph from LLM
         native_batch_results: list[dict] = []
         native_calls = 0
+        # 1-based indices of chunks whose reply stopped at the output cap.
+        # Their candidates were only partly assessed, which is invisible in the
+        # merged result unless it is recorded here. Method-level, because the
+        # result is built outside the LLM block.
+        chunk_truncations: list[int] = []
+        # Per-chunk outcomes. These were counted for the logs only, so a run
+        # where four of ten chunks failed and six succeeded produced a merged
+        # result indistinguishable from a clean one — the partial-coverage
+        # question the whole of Stage 1 exists to answer.
+        chunks_attempted = 0
+        chunk_json_failures = 0
+        chunk_llm_failures = 0
+        chunk_exceptions = 0
+        # True once at least one chunk or native batch produced parseable JSON.
+        # Distinct from "any IOC survived": a refinement that ran and rejected
+        # every candidate is a real answer, not a failure to answer.
+        refinement_ran = False
+        candidates_rejected = 0
         # Text and candidates for the chunked path: the whole document unless
         # native batches covered some pages, in which case only the failed ones.
         fallback_text = raw_text
@@ -1928,9 +2022,7 @@ class ThreatIntelIngester:
 
             # Native batch results are merged together with any chunk results
             chunk_results: list[dict] = list(native_batch_results)
-            chunk_json_failures = 0
-            chunk_llm_failures = 0
-            chunk_exceptions = 0
+            chunks_attempted = n_chunks
             t_chunks = time.monotonic()
             for i in range(n_chunks):
                 t_chunk = time.monotonic()
@@ -2008,7 +2100,21 @@ class ThreatIntelIngester:
                             i + 1, n_chunks, len(llm_response.text),
                             llm_response.text[:500],
                         )
-                        parsed = _parse_llm_json(llm_response.text)
+                        # Both signals are needed and neither subsumes the
+                        # other: truncated is the transport's finish reason,
+                        # repaired catches a reply that parsed only after
+                        # unmatched brackets were closed. Same pattern the
+                        # native path uses.
+                        parsed, repaired = _parse_llm_json_result(llm_response.text)
+                        if bool(llm_response.truncated) or repaired:
+                            chunk_truncations.append(i + 1)
+                            logger.warning(
+                                "[CHUNK] %d/%d was cut off at the output cap "
+                                "(finish_reason_truncated=%s, bracket_repair=%s) "
+                                "— its candidates are only partly assessed",
+                                i + 1, n_chunks,
+                                bool(llm_response.truncated), repaired,
+                            )
                         if parsed:
                             n_refined = len(parsed.get("refined_iocs", []))
                             n_fp = sum(
@@ -2080,9 +2186,11 @@ class ThreatIntelIngester:
             )
 
             if chunk_results:
+                refinement_ran = True
                 merged = _merge_llm_chunk_results(chunk_results)
                 all_refined = merged.get("refined_iocs", [])
                 non_fp = [r for r in all_refined if not r.get("is_false_positive", False)]
+                candidates_rejected = len(all_refined) - len(non_fp)
                 logger.info(
                     "[DIAG] Merged result — %d refined_iocs total, "
                     "%d after false-positive filter, "
@@ -2106,13 +2214,28 @@ class ThreatIntelIngester:
                     chunk_llm_failures, chunk_exceptions,
                 )
 
-        # If LLM refinement didn't produce results, use regex baseline
+        # Fall back to the regex baseline only when refinement was unavailable
+        # or wholly failed — never when it ran and rejected what it found.
+        #
+        # "refined_iocs is empty" answers two different questions at once. If
+        # the model assessed every candidate as a false positive, reinstating
+        # them here returns the exact indicators it rejected, at
+        # confidence "low", and labels the run regex_only — turning a correct
+        # filtering result into a wrong one. An empty set is the honest answer
+        # to "what survived assessment", and it is reported as complete.
         ingestion_mode = "llm"  # track which path produced results
-        if not refined_iocs:
+        if not refined_iocs and refinement_ran:
+            logger.info(
+                "[DIAG] Refinement ran and accepted no candidates — %d assessed "
+                "as false positives. Returning zero IOCs rather than "
+                "reinstating the regex baseline the model just rejected.",
+                candidates_rejected,
+            )
+        elif not refined_iocs:
             ingestion_mode = "regex_only"
             llm_was_enabled = context.llm_enabled and context.llm_query is not None
             logger.warning(
-                "[DIAG] FALLBACK to regex-only — refined_iocs empty. "
+                "[DIAG] FALLBACK to regex-only — refinement did not run. "
                 "LLM enabled=%s, mitre_mappings=%d, attack_graph_paths=%d",
                 llm_was_enabled, len(mitre_mappings),
                 len(attack_graph.get("paths", [])) if isinstance(attack_graph, dict) else 0,
@@ -2139,6 +2262,31 @@ class ThreatIntelIngester:
             for ioc in refined_iocs
             if confidence_order.get(ioc.get("confidence", "low"), 0) >= threshold_value
         ]
+
+        # Computed once, here, because it goes two places: the returned
+        # ToolResult and the persisted artifact. An export outlives the session
+        # that produced it, and a file read back from the bucket months later
+        # has only what was written into it.
+        coverage_fields = {
+            "pages_total": pages_total if pages_total else page_count,
+            "pages_read": page_count,
+            "pages_dropped": pages_dropped,
+        }
+        analysis = _analysis_fields(
+            ingestion_mode=ingestion_mode,
+            pages_total=coverage_fields["pages_total"],
+            pages_read=page_count,
+            truncated_chunks=chunk_truncations,
+            chunks_attempted=chunks_attempted,
+            chunks_failed=(
+                chunk_json_failures + chunk_llm_failures + chunk_exceptions
+            ),
+            candidates_rejected=candidates_rejected,
+            # refined_iocs, not filtered_iocs: an empty result after the
+            # confidence threshold is the threshold's doing, not a
+            # false-positive assessment.
+            accepted_none=(refinement_ran and not refined_iocs),
+        )
 
         # --- Build MITRE mappings from IOCs + additional techniques ---
         all_mitre = list(mitre_mappings)  # Start with additional techniques
@@ -2187,6 +2335,13 @@ class ThreatIntelIngester:
                 "iocs": filtered_iocs,
                 "mitre_mappings": all_mitre,
                 "attack_graph": attack_graph,
+                # Coverage and status travel with the data. Without these the
+                # artifact says what was found and nothing about what was
+                # looked at, and a reader months later cannot tell a full
+                # ingestion from one that read a third of the document.
+                "coverage": dict(coverage_fields),
+                "ingestion_mode": ingestion_mode,
+                **analysis,
             }
 
             # Write artifact file
@@ -2270,6 +2425,19 @@ class ThreatIntelIngester:
                          if m.get("technique_id")}
                     ),
                     "confidence_distribution": confidence_dist,
+                    "truncated": bool(chunk_truncations),
+                    "truncated_chunks": list(chunk_truncations),
+                    "chunks_attempted": chunks_attempted,
+                    "chunks_failed": (
+                        chunk_json_failures + chunk_llm_failures + chunk_exceptions
+                    ),
+                    "chunk_failure_breakdown": {
+                        "json_parse": chunk_json_failures,
+                        "llm_call": chunk_llm_failures,
+                        "exception": chunk_exceptions,
+                    },
+                    "candidates_rejected": candidates_rejected,
+                    **analysis,
                     "ingestion_mode": ingestion_mode,
                     "document_profile": profile,
                     "ingestion_plan": plan.to_dict(),
@@ -2304,18 +2472,21 @@ class ThreatIntelIngester:
         artifact_type = meta.get("artifact_type", "unknown")
         pages = meta.get("page_count", "?")
         size_label = "pages" if artifact_type == "pdf_report" else "lines"
+        # Status before anything else, including the report identity. The
+        # summary is capped at 2000 characters by PluginExecutor, so a warning
+        # placed after the content is the part that gets cut.
+        status = summary.get("analysis_status", "complete")
+        notes = "; ".join(summary.get("analysis_notes") or [])
+        if status != "complete":
+            parts.append(f"{status.upper()} — {notes}.")
+        elif notes:
+            # A complete run can still carry a note: "every candidate was
+            # assessed as a false positive" is a finished answer, but an empty
+            # IOC list reads as a failure unless the reason is stated.
+            parts.append(f"{notes}.")
+
         parts.append(f"Ingested {artifact_type} ({pages} {size_label}): {title}.")
 
-        # Coverage before content: a reader told only what was found cannot
-        # tell that a third of the document was never examined.
-        dropped = meta.get("pages_dropped") or 0
-        if dropped:
-            total = meta.get("pages_total", "?")
-            parts.append(
-                f"INCOMPLETE COVERAGE: only {pages} of {total} pages were "
-                f"read; {dropped} pages were not examined, so absence of an "
-                f"indicator here is not evidence it is absent from the report."
-            )
 
         # Attribution
         actor = meta.get("attributed_actor")
@@ -2415,14 +2586,10 @@ class ThreatIntelIngester:
                 "the visualizer marks them 'tactic unconfirmed'."
             )
 
-        # Ingestion mode warning
-        mode = summary.get("ingestion_mode", "")
-        if mode == "regex_only":
-            parts.append(
-                "WARNING: LLM analysis failed — results are regex-only "
-                "(low confidence, no MITRE mapping, no attack graph). "
-                "Check logs for LLM failure details."
-            )
+        # The regex-only warning used to live here, at the end. It is now the
+        # DEGRADED INPUT note that leads the summary — saying it twice wastes a
+        # budget PluginExecutor caps at 2000 characters, and the copy that got
+        # cut was this one.
 
         # Output artifact + quick chart command
         artifacts = result.output_artifacts or []

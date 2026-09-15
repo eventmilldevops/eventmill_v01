@@ -93,6 +93,33 @@ def _native_thinking_level() -> str:
     return DEFAULT_NATIVE_THINKING_LEVEL
 
 
+# What a section summary actually is. "complete" and "partial" both hold real
+# analysis — partial was cut off at the output cap. "empty" and "failed" hold
+# none: the model returned nothing usable, or the call never succeeded. What
+# travels in their place is raw extracted text, and it has to be labelled
+# everywhere it goes, because the file it lands in is named ".summary.md" and
+# the synthesis prompt cannot otherwise tell it from analysis.
+CHUNK_STATUSES = ("complete", "partial", "empty", "failed")
+
+# Stamped on any block that is not a section summary. "empty" is the
+# budget-starvation outcome: ok=True with no text, because thinking consumed
+# the whole output budget.
+UNSUMMARISED_NOTICE = {
+    "partial": (
+        "SECTION SUMMARY TRUNCATED at the output cap; it covers only part of "
+        "this range"
+    ),
+    "empty": (
+        "SECTION SUMMARY EMPTY — the model returned no text; raw extracted "
+        "text follows, treat as unsummarised source"
+    ),
+    "failed": (
+        "SECTION SUMMARY FAILED; raw extracted text follows, treat as "
+        "unsummarised source"
+    ),
+}
+
+
 def _budget(tier: str, thinking_level: str, content_tokens: int) -> int:
     """Output budget that leaves room for both thinking and content.
 
@@ -236,6 +263,28 @@ class ThreatReportAnalyzer:
     # whole document, so coverage is total by construction).
     _last_pdf_pages: tuple[int, int] | None = None
 
+    # Calls in the current run whose reply stopped at the output cap. The text
+    # is kept — a partial answer is better than none — but the fact has to
+    # travel with the result, because a truncated summary reads exactly like a
+    # complete one and nothing downstream can tell them apart.
+    # Per-page extraction outcomes for the PDF just read, or None when no page
+    # text extraction ran — native ingestion reads the document whole, and
+    # inventing per-page counts it never made would be worse than silence.
+    _last_pdf_page_outcomes: dict[str, int] | None = None
+
+    # Who answered, for this run. An export outlives the session, and a summary
+    # read back from the bucket with no attribution cannot be compared against
+    # another vendor's, or re-run against the same one.
+    _provenance: list[str] | None = None
+
+    _truncations: list[str] | None = None
+
+    # Points in the current run where the tool fell back to a materially worse
+    # input than the one it set out to use — a section that produced no summary
+    # and contributed raw extracted text instead, or a synthesis that failed
+    # and left a bare concatenation as the final report.
+    _degradations: list[str] | None = None
+
     # Local intake and chunking limits. These are NOT provider limits and
     # must not be read as any: what a vendor accepts lives in
     # framework/llm/providers/<id>.json and is enforced by the dispatcher's
@@ -331,20 +380,18 @@ class ThreatReportAnalyzer:
                 stored = s.get("summary_path")
                 location = f" → {stored}" if stored else ""
                 chunk_info = f", {chunks} chunk(s)" if chunks > 1 else ""
-                dropped = s.get("pages_dropped") or 0
-                coverage = ""
-                if dropped:
-                    # Stated first and in full: a reader told only what the
-                    # summary contains cannot tell what was never read.
-                    coverage = (
-                        f" INCOMPLETE COVERAGE: only {s.get('pages_read')} of "
-                        f"{s.get('pages_total')} pages were read; {dropped} "
-                        f"pages were not examined, so a topic missing here may "
-                        f"simply be in the part that was not read."
-                    )
+                # Status leads. summarize_for_llm is capped at 2000
+                # characters by PluginExecutor, and a warning placed after the
+                # content is the part that gets cut. Every cause is already
+                # phrased as a note, so nothing is repeated afterwards.
+                status = s.get("analysis_status", "complete")
+                lead = ""
+                if status != "complete":
+                    notes = "; ".join(s.get("analysis_notes") or [])
+                    lead = f"{status.upper()} — {notes}. "
                 return (
-                    f"Summarized {s['report_path']} ({wc} words{chunk_info})"
-                    f"{location}.{coverage}"
+                    f"{lead}Summarized {s['report_path']} "
+                    f"({wc} words{chunk_info}){location}."
                 )
             return "Report summarized"
 
@@ -414,6 +461,10 @@ class ThreatReportAnalyzer:
         # Coverage is unknown until something reads the document; a value left
         # over from a previous run would describe the wrong report.
         self._last_pdf_pages = None
+        self._last_pdf_page_outcomes = None
+        self._provenance = []
+        self._truncations = []
+        self._degradations = []
         # One stamp for every file this run writes, so a run's summary and its
         # chunk summaries sort together in the bucket.
         stamp = self._run_stamp()
@@ -423,6 +474,7 @@ class ThreatReportAnalyzer:
 
         # --- Native PDF path: send full document to LLM directly ---
         native_pdf_succeeded = False
+        native_attempted = False
         native_summary: str | None = None
         native_techniques: list[str] = []
 
@@ -455,6 +507,7 @@ class ThreatReportAnalyzer:
             if (context and hasattr(context, "llm_query") and context.llm_query
                     and hasattr(context.llm_query, "supports_native_document")
                     and context.llm_query.supports_native_document("application/pdf")):
+                native_attempted = True
                 _log.info(
                     "Native PDF ingestion available — attempting "
                     "query_with_document() for %s", report_name,
@@ -508,10 +561,23 @@ class ThreatReportAnalyzer:
                             if not native_response.ok else None
                         ),
                     )
+                    self._note_model(native_response)
                     if native_response.ok and native_response.text:
                         native_summary = native_response.text.strip()
                         native_techniques = self._extract_techniques(native_summary)
                         native_pdf_succeeded = True
+                        if native_response.truncated:
+                            self._note_truncation(
+                                "the whole-document summary stopped at the "
+                                "output cap, so it covers only the earlier "
+                                "part of the report"
+                            )
+                            _log.warning(
+                                "Native PDF summary was cut off at the output "
+                                "cap (%d words returned) — the tail of the "
+                                "report is not represented",
+                                len(native_summary.split()),
+                            )
                         _log.info(
                             "Native PDF summarization succeeded "
                             "(transport=%s, model=%s, words=%d, techniques=%d)",
@@ -570,6 +636,20 @@ class ThreatReportAnalyzer:
 
             # Fall back to text extraction + chunking if native path didn't work
             if not native_pdf_succeeded:
+                # pypdf text is a materially worse input than the document
+                # itself: no page images, no layout, no tables. Whether the
+                # native attempt failed or was never available, the summary
+                # that comes out is built from less than the PDF contains, and
+                # it looks exactly like one that was not.
+                self._note_degradation(
+                    "the PDF was read as extracted text rather than natively"
+                    + (
+                        " because the native attempt did not succeed"
+                        if native_attempted
+                        else " because native document ingestion was unavailable"
+                    )
+                    + "; page images, layout and tables are not represented"
+                )
                 chunks = self._split_pdf_into_chunks(file_obj)
                 if not chunks:
                     content = self._read_report_content(report_path, context)
@@ -633,8 +713,9 @@ class ThreatReportAnalyzer:
 
             # Synthesize
             if len(chunk_summaries) == 1:
-                final_summary = chunk_summaries[0]["summary"]
-                relevant_techniques = chunk_summaries[0].get("techniques", [])
+                only = chunk_summaries[0]
+                final_summary = self._chunk_export_text(only)
+                relevant_techniques = only.get("techniques", [])
             else:
                 final_summary = self._synthesize_summaries(
                     chunk_summaries, report_name, focus_areas, max_words, context
@@ -654,7 +735,10 @@ class ThreatReportAnalyzer:
         if summary_path:
             try:
                 summary_path.parent.mkdir(parents=True, exist_ok=True)
-                summary_path.write_text(final_summary, encoding="utf-8")
+                summary_path.write_text(
+                    self._provenance_block(report_path, stamp) + final_summary,
+                    encoding="utf-8",
+                )
                 common_path = self._get_common_bucket_path(context)
                 if common_path:
                     summary_relative = str(
@@ -677,7 +761,10 @@ class ThreatReportAnalyzer:
                 f"{self.GENERATED_BASE}/threat_report_analyzer/"
                 f"{self._export_name(normalized, stamp, 'summary.md')}"
             )
-            if self._upload_to_gcs(final_summary, gcs_object, context):
+            if self._upload_to_gcs(
+                self._provenance_block(report_path, stamp) + final_summary,
+                gcs_object, context,
+            ):
                 bucket_name = self._get_common_bucket_name(context)
                 summary_relative = f"gs://{bucket_name}/{gcs_object}"
                 output_artifacts.append(
@@ -700,6 +787,9 @@ class ThreatReportAnalyzer:
                         "chunk_count": effective_chunk_count,
                         "word_count": word_count,
                         **self._coverage_fields(),
+                        **self._truncation_fields(),
+                        **self._degradation_fields(),
+                        **self._analysis_fields(),
                         "summary": final_summary,
                         "key_findings": key_findings,
                         "relevant_techniques": relevant_techniques,
@@ -819,12 +909,179 @@ class ThreatReportAnalyzer:
         """
         if not self._last_pdf_pages:
             return {}
-        document_pages, pages_read = self._last_pdf_pages
+        document_pages, pages_attempted = self._last_pdf_pages
+        outcomes = self._last_pdf_page_outcomes
+        if outcomes is None:
+            # Nothing measured per page. pages_read is what was attempted,
+            # which is what this reported before per-page counting existed.
+            return {
+                "pages_total": document_pages,
+                "pages_read": pages_attempted,
+                "pages_dropped": max(0, document_pages - pages_attempted),
+            }
+        # pages_read counts only pages that yielded text. pages_dropped stays
+        # "never attempted" — a page pypdf failed on was attempted, and saying
+        # it was dropped would hide that the file itself is the problem.
         return {
             "pages_total": document_pages,
-            "pages_read": pages_read,
-            "pages_dropped": max(0, document_pages - pages_read),
+            "pages_read": outcomes["extracted"],
+            "pages_dropped": max(0, document_pages - pages_attempted),
+            "pages_empty": outcomes["empty"],
+            "pages_extract_failed": outcomes["extract_failed"],
         }
+
+    def _note_truncation(self, label: str) -> None:
+        """Record that one call's reply was cut off at the output cap."""
+        if self._truncations is None:
+            self._truncations = []
+        self._truncations.append(label)
+
+    def _note_model(self, response: Any) -> None:
+        """Record which provider and model answered, once per distinct pair."""
+        model = getattr(response, "model_version", None) or getattr(
+            response, "model_used", None
+        )
+        if not model:
+            return
+        provider = getattr(response, "provider_id", None)
+        label = f"{provider}/{model}" if provider else str(model)
+        if self._provenance is None:
+            self._provenance = []
+        if label not in self._provenance:
+            self._provenance.append(label)
+
+    def _provenance_block(self, report_path: str, stamp: str) -> str:
+        """Header stamped onto every file this run writes.
+
+        Coverage and status live only on the returned ToolResult otherwise, and
+        the result does not survive the session. A file named ".summary.md" has
+        to carry, in itself, what it was built from and how completely.
+        """
+        fields = self._analysis_fields()
+        lines = [
+            "<!-- Event Mill threat_report_analyzer -->",
+            f"> **Source:** `{report_path}`  ",
+            f"> **Run:** {stamp}  ",
+            f"> **Answered by:** {', '.join(self._provenance or ['(no LLM)'])}  ",
+            f"> **Analysis status:** {fields['analysis_status']}  ",
+        ]
+        for note in fields["analysis_notes"]:
+            lines.append(f"> - {note}  ")
+        coverage = self._coverage_fields()
+        if coverage:
+            lines.append(
+                f"> **Pages:** {coverage['pages_read']} read of "
+                f"{coverage['pages_total']}"
+                + (
+                    f", {coverage['pages_empty']} blank"
+                    if coverage.get("pages_empty") else ""
+                )
+                + (
+                    f", {coverage['pages_extract_failed']} unreadable"
+                    if coverage.get("pages_extract_failed") else ""
+                )
+                + (
+                    f", {coverage['pages_dropped']} never examined"
+                    if coverage.get("pages_dropped") else ""
+                )
+                + "  "
+            )
+        return "\n".join(lines) + "\n\n---\n\n"
+
+    def _note_degradation(self, label: str) -> None:
+        """Record that part of this run fell back to a worse input path."""
+        if self._degradations is None:
+            self._degradations = []
+        self._degradations.append(label)
+
+    def _degradation_fields(self) -> dict[str, Any]:
+        """Degradation record for the result, alongside _truncation_fields()."""
+        notes = self._degradations or []
+        return {"degraded": bool(notes), "degradation_notes": list(notes)}
+
+    @staticmethod
+    def _chunk_label(cs: dict[str, Any]) -> str:
+        """Which part of the report a section came from."""
+        if cs.get("page_start") is not None:
+            return f"Pages {cs['page_start']}–{cs['page_end']}"
+        return f"Chunk {cs['chunk_index'] + 1}"
+
+    @staticmethod
+    def _chunk_notice(cs: dict[str, Any]) -> str | None:
+        """Why this block is not a section summary, or None when it is one."""
+        return UNSUMMARISED_NOTICE.get(cs.get("status", "complete"))
+
+    @staticmethod
+    def _chunk_text(cs: dict[str, Any]) -> str:
+        """What this section contributes: its summary, or the raw excerpt that
+        stood in for one. Never silently one in place of the other."""
+        if cs.get("status", "complete") in ("complete", "partial"):
+            return cs.get("summary") or ""
+        return cs.get("raw_excerpt") or ""
+
+    def _analysis_fields(self) -> dict[str, Any]:
+        """One status for the whole run, with the reasons behind it.
+
+        Precedence is degraded > partial > complete. A run that fell back to a
+        worse input path is the more serious statement: calling it "partial"
+        would suggest the same analysis covering less of the report, when what
+        actually happened is that part of it was never analysed at all.
+
+        The notes carry the markers that used to be separate sentences, so a
+        reader still sees INCOMPLETE COVERAGE / TRUNCATED OUTPUT / DEGRADED
+        INPUT — but behind the status rather than after the content, because
+        summarize_for_llm is truncated at 2000 characters from the end.
+        """
+        notes: list[str] = []
+        coverage = self._coverage_fields()
+        if coverage.get("pages_dropped"):
+            notes.append(
+                f"INCOMPLETE COVERAGE: only {coverage['pages_read']} of "
+                f"{coverage['pages_total']} pages were read, so a topic "
+                f"missing here may simply be in the part that was not read"
+            )
+        if coverage.get("pages_extract_failed"):
+            notes.append(
+                f"UNREADABLE PAGES: {coverage['pages_extract_failed']} of "
+                f"{coverage['pages_total']} pages could not be read as text "
+                f"(scanned or damaged), so their content is absent from this "
+                f"summary"
+            )
+        notes.extend(f"TRUNCATED OUTPUT: {n}" for n in self._truncations or [])
+        notes.extend(f"DEGRADED INPUT: {n}" for n in self._degradations or [])
+
+        if self._degradations:
+            status = "degraded"
+        elif notes:
+            status = "partial"
+        else:
+            status = "complete"
+        return {"analysis_status": status, "analysis_notes": notes}
+
+    @classmethod
+    def _chunk_export_text(cls, cs: dict[str, Any]) -> str:
+        """Text to write to a file for this section.
+
+        A substitution carries its notice into the file, because the file is
+        named ".summary.md" and someone reading it out of the bucket months
+        later has only its contents to go on. A real summary — whole or
+        truncated — is written as the model produced it; stamping export
+        provenance onto every file is Stage 1.6.
+        """
+        text = cls._chunk_text(cs)
+        if cs.get("status", "complete") in ("complete", "partial"):
+            return text
+        return f"> {cls._chunk_notice(cs)}\n\n{text}"
+
+    def _truncation_fields(self) -> dict[str, Any]:
+        """Truncation record for the result, alongside _coverage_fields().
+
+        Always stated, unlike coverage: every LLM path here now reads the
+        transport's finish reason, so "nothing was truncated" is a measurement
+        rather than an absence of one.
+        """
+        notes = self._truncations or []
+        return {"truncated": bool(notes), "truncation_notes": list(notes)}
 
     def _summary_export_path(
         self, report_relative_path: str, context: Any, stamp: str,
@@ -1018,14 +1275,33 @@ class ThreatReportAnalyzer:
                 _log.info(
                     "PDF %s: %d pages, all read", file_path.name, document_pages,
                 )
+            # Per-page outcomes. A page pypdf cannot read and a page that is
+            # genuinely blank both used to append "" and both counted as read,
+            # so the coverage numbers could not tell a scanned page from an
+            # empty one — and neither can a reader who only sees a total.
+            extracted = empty = extract_failed = 0
             for start in range(0, total_pages, max_pages):
                 end = min(start + max_pages, total_pages)
                 texts = []
                 for i in range(start, end):
                     try:
-                        texts.append(reader.pages[i].extract_text() or "")
-                    except Exception:
+                        text = reader.pages[i].extract_text() or ""
+                    except Exception as e:
+                        extract_failed += 1
+                        _log.warning(
+                            "PDF %s page %d: text extraction failed (%s) — "
+                            "this page is not represented in the summary",
+                            file_path.name, i + 1, type(e).__name__,
+                        )
                         texts.append("")
+                        continue
+                    # A blank page is a legitimate outcome, not a defect.
+                    # Reporting it as one trains operators to ignore the field.
+                    if text.strip():
+                        extracted += 1
+                    else:
+                        empty += 1
+                    texts.append(text)
                 content = self._normalize_pdf_text("\n\n".join(texts))
                 chunks.append(
                     Chunk(
@@ -1036,6 +1312,17 @@ class ThreatReportAnalyzer:
                         page_start=start + 1,
                         page_end=end,
                     )
+                )
+            self._last_pdf_page_outcomes = {
+                "extracted": extracted,
+                "empty": empty,
+                "extract_failed": extract_failed,
+            }
+            if extract_failed:
+                _log.warning(
+                    "PDF %s: %d of %d page(s) could not be read by pypdf — "
+                    "their content reaches nothing downstream",
+                    file_path.name, extract_failed, total_pages,
                 )
         except Exception as e:
             _log.error("PDF chunking failed for %s: %s", file_path.name, e)
@@ -1127,8 +1414,15 @@ class ThreatReportAnalyzer:
                 content=chunk.content,
             )
             out_tokens = _budget("light", "low", 3072)
-        summary_text = chunk.content[:3000]
+        # None until a genuine reply sets it. The raw excerpt is kept, but in
+        # its own key: putting it in "summary" is what let 3,000 characters of
+        # pypdf output be persisted to a file named ".summary.md" and fed to
+        # synthesis as though a model had written it.
+        summary_text: str | None = None
+        raw_excerpt = chunk.content[:3000]
+        status = "failed"
         techniques: list[str] = []
+        truncated = False
         if context and hasattr(context, "llm_query") and context.llm_query:
             try:
                 # Per-chunk summarization is bulk, repetitive work — pin it to
@@ -1148,19 +1442,51 @@ class ThreatReportAnalyzer:
                     model_id=response.model_used or "threat_report_analyzer",
                     error=str(response.error) if not response.ok else None,
                 )
+                self._note_model(response)
                 if response.ok:
-                    summary_text = response.text.strip()
-                    techniques = self._extract_techniques(summary_text)
+                    truncated = bool(response.truncated)
+                    text = (response.text or "").strip()
+                    if text:
+                        summary_text = text
+                        techniques = self._extract_techniques(text)
+                        status = "partial" if truncated else "complete"
+                        if truncated:
+                            self._note_truncation(
+                                f"the summary of {page_info} stopped at the "
+                                f"output cap and covers only part of that range"
+                            )
+                            _log.warning(
+                                "Chunk %d (%s) summary was cut off at the "
+                                "output cap", chunk.index, page_info,
+                            )
+                    else:
+                        # ok=True with no text is budget starvation: thinking
+                        # spent the whole output budget. It is not a failure
+                        # the transport reports, so it has to be caught here.
+                        status = "empty"
+                        _log.warning(
+                            "Chunk %d (%s) returned no text despite ok=True — "
+                            "raw extracted text will stand in for it, labelled",
+                            chunk.index, page_info,
+                        )
             except Exception as e:
                 _log.warning("Chunk summarization failed (chunk %d): %s", chunk.index, e)
+        if status in ("empty", "failed"):
+            self._note_degradation(
+                f"{page_info} has no section summary ({status}); raw extracted "
+                f"text stood in for it"
+            )
         return {
             "chunk_index": chunk.index,
             "page_start": chunk.page_start,
             "page_end": chunk.page_end,
             "source_type": chunk.source_type,
             "token_estimate": chunk.token_estimate,
+            "status": status,
             "summary": summary_text,
+            "raw_excerpt": raw_excerpt if summary_text is None else None,
             "techniques": techniques,
+            "truncated": truncated,
         }
 
     def _synthesize_summaries(
@@ -1174,14 +1500,15 @@ class ThreatReportAnalyzer:
         """Second-pass synthesis: combine chunk summaries into a final cohesive report."""
         _log = logging.getLogger("eventmill.plugin.threat_report_analyzer")
 
-        def _label(cs: dict[str, Any]) -> str:
-            if cs.get("page_start") is not None:
-                return f"Pages {cs['page_start']}\u2013{cs['page_end']}"
-            return f"Chunk {cs['chunk_index'] + 1}"
+        def _block(cs: dict[str, Any]) -> str:
+            # The label carries the status, so the model cannot read raw
+            # extracted text as though a summary had been written for that
+            # range.
+            notice = self._chunk_notice(cs)
+            header = self._chunk_label(cs) + (f" \u2014 {notice}" if notice else "")
+            return f"[{header}]\n{self._chunk_text(cs)}"
 
-        combined = "\n\n---\n\n".join(
-            f"[{_label(cs)}]\n{cs['summary']}" for cs in chunk_summaries
-        )
+        combined = "\n\n---\n\n".join(_block(cs) for cs in chunk_summaries)
         prompt = SYNTHESIS_PROMPT_TEMPLATE.format(
             report_name=report_name,
             chunk_count=len(chunk_summaries),
@@ -1204,10 +1531,34 @@ class ThreatReportAnalyzer:
                     model_id=response.model_used or "threat_report_analyzer",
                     error=str(response.error) if not response.ok else None,
                 )
+                self._note_model(response)
                 if response.ok:
-                    return response.text.strip()
+                    if response.truncated:
+                        self._note_truncation(
+                            "the final synthesis stopped at the output cap, so "
+                            "later sections may be under-represented in it"
+                        )
+                        _log.warning(
+                            "Synthesis was cut off at the output cap — the "
+                            "final summary is partial",
+                        )
+                    text = (response.text or "").strip()
+                    if text:
+                        return text
+                    _log.warning(
+                        "Synthesis returned no text despite ok=True — falling "
+                        "back to the labelled concatenation"
+                    )
             except Exception as e:
                 _log.warning("Synthesis pass failed: %s", e)
+        # The concatenation is a worse product than a synthesised report: it is
+        # unreconciled, undeduplicated, and carries any unsummarised blocks
+        # through verbatim. It is still the best available answer, so it is
+        # returned — but the run must not read as though synthesis happened.
+        self._note_degradation(
+            "the synthesis pass did not produce a report; the final summary is "
+            "a labelled concatenation of the section summaries"
+        )
         return combined
 
     def _write_chunk_artifact(
@@ -1233,7 +1584,11 @@ class ThreatReportAnalyzer:
             chunk_file = generated / self._export_name(normalized, stamp, suffix)
             chunk_file.parent.mkdir(parents=True, exist_ok=True)
             try:
-                chunk_file.write_text(chunk_summary["summary"], encoding="utf-8")
+                chunk_file.write_text(
+                    self._provenance_block(report_path, stamp)
+                    + self._chunk_export_text(chunk_summary),
+                    encoding="utf-8",
+                )
                 common_path = self._get_common_bucket_path(context)
                 relative = None
                 if common_path:
@@ -1264,7 +1619,11 @@ class ThreatReportAnalyzer:
                 f"{self.GENERATED_BASE}/threat_report_analyzer/"
                 f"{self._export_name(normalized, stamp, suffix)}"
             )
-            if self._upload_to_gcs(chunk_summary["summary"], gcs_object, context):
+            if self._upload_to_gcs(
+                self._provenance_block(report_path, stamp)
+                + self._chunk_export_text(chunk_summary),
+                gcs_object, context,
+            ):
                 bucket_name = self._get_common_bucket_name(context)
                 return {
                     "artifact_type": "text/markdown",

@@ -1,8 +1,15 @@
 # Plan — report processing integrity
 
 **Date:** 2026-09-15
-**Status:** Stage 1.1 implemented 2026-09-15 (`docs/change_log/2026-09-15-analyzer-output-budgets.md`).
-Stages 1.2-1.7, 2, 3 and 4 are still proposed, nothing built.
+**Status:** **Stage 1 is COMPLETE** (1.1-1.7), 2026-09-15. Change logs:
+`2026-09-15-analyzer-output-budgets.md`,
+`2026-09-15-truncation-is-recorded.md`,
+`2026-09-15-section-status-and-substitution.md`,
+`2026-09-15-analysis-status.md`,
+`2026-09-15-chunk-failures-and-rejection.md`,
+`2026-09-15-persisted-provenance-and-page-outcomes.md`.
+Stages 2, 3 and 4 are still proposed, nothing built.
+Full suite **1308 passing**, from a 1177 baseline before Stage 1.
 **Parent review:** `docs/change_log/2026-09-15-chunking-integrity-review.md` —
 the eight findings, their verification, and the four corrections to the
 external analysis are settled there and are not restated.
@@ -109,7 +116,8 @@ testable with synthetic `LLMResponse` objects and no network.
 **Estimated size:** one change set, ~1 day. **This is the recommended next
 piece of work, and the recommended stopping point before reassessing.**
 
-**Progress:** 1.1 done. 1.2-1.7 outstanding.
+**Progress:** all of Stage 1 done. **This is the recommended stopping
+point before reassessing.**
 
 ### 1.1 — Size every analyzer LLM budget from the provider's declared reserve
 
@@ -209,6 +217,24 @@ retry budgets are both exposed to this.
 
 ### 1.2 — Read `truncated` at the four call sites that ignore it
 
+**Status: DONE, 2026-09-15.** Landed as written. Full record in
+`docs/change_log/2026-09-15-truncation-is-recorded.md`. Line numbers below are
+as the plan was written; the sites are now `tra:511` (native), `tra:1151`
+(section), `tra:1207` (synthesis) and `ti:2011` (text path, unmoved).
+
+**Recorded where:** `tra` gains per-run `_truncations` plus `truncated` /
+`truncation_notes` on the result (mirroring `_coverage_fields()`); `ti` gains
+`truncated` / `truncated_chunks` carrying the affected 1-based chunk indices.
+Both state it in `summarize_for_llm`. These are shaped so **1.4 can absorb them
+into `analysis_status` / `analysis_notes` without a schema break** — 1.2's test
+criterion refers to a status field that 1.4 introduces, so until then these
+fields are the record.
+
+**Note for 1.4:** `_parse_llm_json` (`ti:532`) still exists and still discards
+the repair flag; it is retained only because `test_contract.py:1302` exercises
+the repair logging through it. A test now asserts no production call site below
+its definition calls it.
+
 **Where:** `tra:457` (native), `tra:1098` (section), `tra:1154` (synthesis),
 `ti:2011` (text path).
 
@@ -230,6 +256,22 @@ content. Recovery (retry at a larger budget, or bisect) is **Stage 3**.
 produce a result whose status is `complete`.
 
 ### 1.3 — Stop substituting raw text for a summary without saying so
+
+**Status: DONE, 2026-09-15.** Landed as written, including open decision 3
+(failed-section chunk artifacts **are** written, with a failure header). Full
+record in `docs/change_log/2026-09-15-section-status-and-substitution.md`.
+
+**One distinction the step did not draw:** a `partial` section — real analysis
+cut off at the output cap — is **not** a degradation. It is reported through
+1.2's truncation fields instead. Folding truncation into `degraded` would make
+that field fire so often it would stop carrying information. 1.4 must keep the
+two separable when it maps them onto `analysis_status`: truncation alone is
+`partial`, a substitution or a failed synthesis is `degraded`.
+
+**Inputs now ready for 1.4:** `truncated` / `truncation_notes` and `degraded` /
+`degradation_notes` on the analyzer; `truncated` / `truncated_chunks` on the
+ingester. The ingester has no degradation record yet — its equivalent is the
+regex-baseline fallback, which is step 1.5.
 
 **Where:** `tra:1076` (`summary_text = chunk.content[:3000]`), `tra:1098`,
 `tra:1157` (`return combined`).
@@ -258,6 +300,25 @@ from a summary, are the two halves of one defect.
 contain the failure label; the run's status must not be `complete`.
 
 ### 1.4 — Add `analysis_status` to both plugins' outputs
+
+**Status: DONE, 2026-09-15.** Landed as written. Full record in
+`docs/change_log/2026-09-15-analysis-status.md`.
+
+**One input the step assumed existed but did not:** `tra` never recorded the
+native → pypdf text fallback, which this step names as a degradation. It is
+recorded now, distinguishing "the native attempt did not succeed" from "native
+ingestion was unavailable".
+
+**Trailing warnings were removed, not kept.** Each cause is a note now, and the
+status leads; `ti`'s separate "WARNING: LLM analysis failed — results are
+regex-only" block was the same fact said twice and was folded into the note.
+
+**Known gap left open, and it is a Goal A gap.** `ti`'s per-chunk failure
+counts (`chunk_json_failures`, `chunk_llm_failures`, `chunk_exceptions`) are
+logged but never reach the result, so a run where some chunks failed and others
+succeeded still reports `analysis_status: complete`. **1.5 must close this** —
+it is already editing that code, and until it does, `complete` on the ingester
+means "no truncation, no dropped pages, LLM ran", not "no chunk failed".
 
 **Where:** `tra` result dict (`tra:646`) and
 `plugins/threat_modeling/threat_report_analyzer/schemas/output.schema.json`;
@@ -292,6 +353,35 @@ output starts with the status whenever it is not `complete`.
 
 ### 1.5 — Distinguish "classified, none accepted" from "classification unavailable"
 
+**Status: DONE, 2026-09-15.** Landed as written, including open decision 2
+(zero accepted IOCs returns an **empty set**, not a labelled baseline). Full
+record in `docs/change_log/2026-09-15-chunk-failures-and-rejection.md`.
+
+**It also closed the Goal A gap 1.4 left open.** Per-chunk failure counts now
+reach the result as `chunks_attempted`, `chunks_failed` and
+`chunk_failure_breakdown` (json_parse / llm_call / exception), and a non-zero
+`chunks_failed` makes the run `partial`. Before this, a run where four of ten
+chunks failed reported `complete`.
+
+**Two distinctions the step did not name:**
+
+- *Unparseable JSON is a failure, not a rejection.* The model answered and the
+  answer could not be read; that is not an assessment that every candidate was
+  benign. Only a parseable result sets `refinement_ran`.
+- *`accepted_none` is computed from `refined_iocs`, not `filtered_iocs`.* An
+  empty result after the confidence threshold is the threshold's doing, and
+  treating it as a false-positive assessment would be a new version of the same
+  conflation this step removes.
+
+**A gap in 1.4's rendering this exposed:** `summarize_for_llm` emitted
+`analysis_notes` only when the status was not `complete`, so the "no indicators
+accepted" note would never have been seen. Notes now render on a complete run
+too, without the status prefix. A clean run with no notes stays silent.
+
+**Still outside `analysis_status`:** native batch failures. `chunks_attempted`
+is 0 on a native run, so `chunks_failed == 0` there says nothing about native
+batch outcomes. That bookkeeping is Stage 2.1's subject.
+
 **Where:** `ti:2111` — `if not refined_iocs:`.
 
 **Change:** track whether LLM refinement *ran and returned parseable results*
@@ -312,6 +402,20 @@ yield the baseline with mode `regex_only`.
 
 ### 1.6 — Persist coverage and status with the exports, not only in the result
 
+**Status: DONE, 2026-09-15.** Full record in
+`docs/change_log/2026-09-15-persisted-provenance-and-page-outcomes.md`.
+
+`ti` persists `coverage`, `ingestion_mode`, `analysis_status` and
+`analysis_notes` into `output_data`, computed **once** and shared with the
+result so the two cannot disagree. `tra` prepends a provenance block to the
+final summary and every chunk artifact, on both the local and GCS paths,
+naming source, run stamp, provider/model, status, every note and the page
+outcomes.
+
+**Note for any later stage:** the provenance block is written for a human and
+is never parsed back. Reconciling an export against a run record would need a
+machine-readable sidecar, not markdown parsing.
+
 **Where:** `ti:2186-2190` (the persisted artifact's `output_data`) and
 `tra:603` / `tra:626` (the exported Markdown).
 
@@ -331,6 +435,18 @@ part of a report, or of having failed halfway.
 status survive.
 
 ### 1.7 — Do not count an unreadable page as read
+
+**Status: DONE, 2026-09-15.** Landed as written, including the fixture.
+
+`pages_read` counts only pages that yielded text; `pages_empty` and
+`pages_extract_failed` are reported separately, and a non-zero
+`pages_extract_failed` makes the run `partial`. A blank page is **not** a
+failure, per the step's own "Do not".
+
+**One distinction the step did not name:** `pages_dropped` keeps meaning
+*never attempted*. A page pypdf failed on was attempted, so counting it as
+dropped would hide that the file itself is the problem. The two counts are
+orthogonal.
 
 **Where:** `tra:970-974`.
 
@@ -558,7 +674,7 @@ Stage 1 ──► reassess ──► Stage 2 ──► reassess ──► [Appen
 
 - **Stage 1 alone removes every failure that currently misleads an operator.**
   It is the recommended next change set and a legitimate stopping point.
-  1.1 has landed; 1.2-1.7 are what remain of it.
+  1.1-1.5 have landed; 1.6 and 1.7 are what remain of it.
 - Stage 2 is independently valuable and does not depend on Stage 3.
 - Stage 3 without Appendix A is unmeasurable. Treat the gate as hard.
 
@@ -584,12 +700,14 @@ Stage 1 ──► reassess ──► Stage 2 ──► reassess ──► [Appen
    (assumed by 1.2), or refuse and make the operator split the document, as the
    provider-limit refusal does? The assumed answer treats a short answer as
    better than a worse input path; the opposite is defensible.
-2. **Zero accepted IOCs** (1.5) — return an empty set, or return the regex
-   baseline clearly labelled `unrefined`? The plan assumes empty, on the
-   grounds that reinstating rejected indicators is worse than returning none.
-3. **Chunk artifacts for failed sections** (1.3) — write them with a failure
-   header, or do not write them at all? The plan assumes writing with a header,
-   since a missing file is itself ambiguous.
+2. ~~**Zero accepted IOCs** (1.5)~~ — **settled 2026-09-15**: an empty set,
+   as assumed. The empty result is now labelled well enough not to read as a
+   failure. Reversing it would mean an `unrefined` mode rather than reusing
+   `regex_only`, which would claim refinement never happened.
+3. ~~**Chunk artifacts for failed sections** (1.3)~~ — **settled
+   2026-09-15**: written, with a failure header, as assumed. A missing file
+   cannot distinguish a section that failed from one never attempted. Reversible
+   in one line plus its test if the operator disagrees.
 
 ---
 

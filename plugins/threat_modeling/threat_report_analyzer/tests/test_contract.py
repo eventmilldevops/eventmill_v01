@@ -213,12 +213,23 @@ class TestPageCoverageIsReported:
                     "pages_total": 2500,
                     "pages_read": 2000,
                     "pages_dropped": 500,
+                    # Since Stage 1.4 the warning reaches the summary through
+                    # analysis_notes, so that the status can lead. That the
+                    # note is derived from the page counts is covered by
+                    # test_analysis_status.py.
+                    "analysis_status": "partial",
+                    "analysis_notes": [
+                        "INCOMPLETE COVERAGE: only 2000 of 2500 pages were "
+                        "read, so a topic missing here may simply be in the "
+                        "part that was not read"
+                    ],
                 }],
             },
         })()
         text = tool_instance.summarize_for_llm(result)
         assert "INCOMPLETE COVERAGE" in text
         assert "2000 of 2500" in text
+        assert text.startswith("PARTIAL"), "the status has to lead"
 
     def test_full_coverage_says_nothing_about_coverage(self, tool_instance):
         result = type("R", (), {
