@@ -43,6 +43,12 @@ from framework.reference_data.mitre_attack import is_legacy_tactic as _is_legacy
 from framework.reference_data.mitre_attack import (
     resolve_legacy_tactic as _resolve_legacy_tactic,
 )
+from framework.reference_data.mitre_attack import (
+    resolve_retired_technique as _resolve_retired_technique,
+)
+from framework.reference_data.mitre_attack import (
+    retirement_note as _retirement_note,
+)
 
 logger = logging.getLogger("eventmill.plugin.threat_intel_ingester")
 
@@ -332,9 +338,14 @@ def _native_tier() -> str:
     except (OSError, json.JSONDecodeError, KeyError):
         return "light"
 
-# Request deadline the LLM client enforces (framework/llm/client.py sets
-# http_options timeout = 120 s, which the SDK also sends as a server deadline).
-_NATIVE_CALL_DEADLINE_S: float = 120.0
+# Request deadline the LLM client enforces. All three clients agree on 180 s
+# (clients/gemini.py http_options timeout, clients/anthropic.py and
+# clients/openai.py `timeout`), and Gemini also sends it as a server deadline.
+# This said 120 s and cited framework/llm/client.py, a module that no longer
+# exists — understating the deadline splits a document into more batches than
+# it needs, which costs per-call overhead and separates pages that should be
+# read together.
+_NATIVE_CALL_DEADLINE_S: float = 180.0
 
 # A truncated batch is halved and retried; this bounds the extra calls that
 # can generate, so a persistently bad estimate cannot loop.
@@ -818,6 +829,118 @@ def _fix_tactic_progression(
     return attack_graph, reassign_count
 
 
+def _canonicalize_retired_techniques(
+    all_mitre: list[dict],
+    attack_graph: dict,
+    mitre_db: dict,
+) -> int:
+    """Rewrite retired technique ids to their current equivalent, in place.
+
+    Runs before everything else so the rest of reconciliation, the tactic
+    lookups and the attack graph all see one vocabulary. Rewriting only
+    ``mitre_mappings`` would leave the graph pointing at ids that no longer
+    exist, and the two views of the same report would disagree.
+
+    Version skew, not model error: a model emits the numbering in its
+    training data and in most published reporting, so a correct technique can
+    arrive under an id ATT&CK has retired. Left alone it is demoted to
+    "non-ATT&CK" — dropped from every ATT&CK-keyed view and shown to an
+    analyst as though it were not a real technique.
+
+    Returns how many ids were rewritten. Each rewrite keeps the id it came
+    from on the entry, because a silent renumber is its own kind of wrong.
+
+    Mutates *all_mitre* in place, which can shorten it: if a report names
+    both the retired id and its successor for the same tactic, remapping
+    makes them the same entry, and the identity index downstream is keyed on
+    ``(technique_id, tactic)`` — it would keep one and the output would carry
+    the technique twice.
+    """
+    if not mitre_db:
+        return 0
+
+    # One decision per distinct id, so the graph and the mappings cannot
+    # diverge and the log has one line per retirement rather than per use.
+    decided: dict[str, str | None] = {}
+
+    def _current(tid: str, name: str = "") -> str | None:
+        if tid in decided:
+            return decided[tid]
+        resolved = _resolve_retired_technique(tid, name)
+        if resolved:
+            new_id, basis = resolved
+            decided[tid] = new_id
+            logger.info(
+                "[RECONCILE] Retired technique %s -> %s (%s, matched by %s). "
+                "ATT&CK renumbered it; the finding stands.",
+                tid, new_id, mitre_db.get(new_id, {}).get("name", ""), basis,
+            )
+        else:
+            decided[tid] = None
+            if tid not in mitre_db:
+                note = _retirement_note(tid)
+                if note:
+                    logger.warning("[RECONCILE] %s.", note)
+        return decided[tid]
+
+    remapped = 0
+    kept: list[dict] = []
+    by_key: dict[tuple[str, str], dict] = {}
+
+    def _fold(into: dict, dropped: dict) -> None:
+        """Merge a remapped duplicate into the entry that already held the id."""
+        paths = into.setdefault("context_paths", [])
+        for pid in dropped.get("context_paths") or []:
+            if pid not in paths:
+                paths.append(pid)
+        into.setdefault(
+            "technique_id_retired_from", dropped.get("technique_id_retired_from", "")
+        )
+
+    for entry in all_mitre:
+        tid = entry.get("technique_id", "")
+        if tid and tid not in mitre_db:
+            new_id = _current(tid, entry.get("technique_name", ""))
+            if new_id:
+                entry["technique_id"] = new_id
+                entry["technique_id_retired_from"] = tid
+                # The old name described the old numbering; take the current one.
+                entry["technique_name"] = mitre_db.get(new_id, {}).get("name", "")
+                remapped += 1
+
+        key = (entry.get("technique_id", ""), entry.get("tactic", ""))
+        if key[0] and key in by_key:
+            _fold(by_key[key], entry)
+            logger.info(
+                "[RECONCILE] Merged duplicate %s (%s) — the report named both "
+                "the retired id and its successor for this tactic.",
+                key[0], key[1] or "no tactic",
+            )
+            continue
+        if key[0]:
+            by_key[key] = entry
+        kept.append(entry)
+
+    all_mitre[:] = kept
+
+    # The graph carries the same ids in steps and in leads_to.
+    for path in attack_graph.get("paths", []):
+        for step in path.get("steps", []):
+            tid = step.get("technique_id", "")
+            if tid and tid not in mitre_db:
+                new_id = _current(tid, step.get("technique_name", ""))
+                if new_id:
+                    step["technique_id"] = new_id
+                    step["technique_id_retired_from"] = tid
+            leads = step.get("leads_to")
+            if leads:
+                step["leads_to"] = [
+                    (_current(t) or t) if t and t not in mitre_db else t
+                    for t in leads
+                ]
+    return remapped
+
+
 def _reconcile_mitre_mappings(
     all_mitre: list[dict],
     attack_graph: dict,
@@ -828,6 +951,9 @@ def _reconcile_mitre_mappings(
     multiple times with different tactics when it serves different roles
     across attack paths.
 
+    0a. Rewrites retired technique ids to their current equivalent across
+       both *all_mitre* and *attack_graph*, so a technique ATT&CK has
+       renumbered is not demoted to "non-ATT&CK" in step 3.
     0. Runs ``_normalize_tactics`` to apply deterministic tactic fixes
        (retired tactics such as "Defense Evasion", Stealth / Defense
        Impairment sibling swaps, single-tactic techniques), then
@@ -843,6 +969,11 @@ def _reconcile_mitre_mappings(
     Returns the (mutated) *all_mitre* list.
     """
     mitre_db = _get_mitre_db()
+
+    # --- Step 0a: retired ids first, so every later step sees one vocabulary ---
+    retired_count = _canonicalize_retired_techniques(
+        all_mitre, attack_graph, mitre_db
+    )
 
     # --- Step 0: deterministic tactic fixes, then progression in attack_graph ---
     all_mitre, migrated_count, corrected_count = _normalize_tactics(
@@ -1068,14 +1199,16 @@ def _reconcile_mitre_mappings(
 
     if (
         migrated_count or corrected_count or backfill_count or enrich_count
-        or unvalidated_count or tactic_mismatch_count
+        or unvalidated_count or tactic_mismatch_count or retired_count
     ):
         logger.info(
-            "[RECONCILE] Summary: %d legacy tactics migrated, %d tactics "
+            "[RECONCILE] Summary: %d retired ids remapped, %d legacy tactics "
+            "migrated, %d tactics "
             "auto-corrected, %d backfilled, %d enriched, %d unvalidated, "
             "%d tactics needing analyst review, "
             "%d total mitre_mappings (local DB has %d techniques)",
-            migrated_count, corrected_count, backfill_count, enrich_count,
+            retired_count, migrated_count, corrected_count, backfill_count,
+            enrich_count,
             unvalidated_count, tactic_mismatch_count,
             len(all_mitre), len(mitre_db),
         )

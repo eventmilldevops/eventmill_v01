@@ -50,6 +50,25 @@ Stage E).
   whole. The default is now "read it all"; an explicit `max_pages` (1–1000) is
   honoured as a cost ceiling and reported as `pages_dropped`.
 
+**Ingestion, validated 2026-09-14 on a 154-page report:** 154 pages read in
+~345 s, 169 IOCs, 45 attack paths, artifact consumed by the visualizer. Two
+things that run exposed:
+
+- **Retired ATT&CK ids no longer demote a finding.** The bundled DB is 19.2;
+  models emit pre-v19 numbering (`T1562.001`, `T1656`), which used to be
+  marked non-ATT&CK. `resolve_retired_technique()` now remaps them — curated
+  map for renamed ids, name matching for the rest — across both
+  `mitre_mappings` and the attack graph, recording
+  `technique_id_retired_from`. A split technique (`T1562` -> six successors)
+  is deliberately left flagged rather than guessed at.
+- **The latency model is ~6.3x pessimistic** and is **not** yet corrected:
+  it estimated 2185 s for that 345 s run, 85% of it from
+  `seconds_per_page=12.0`. The symptom is over-splitting (24 batches sized by
+  pages, not by work), which separates pages that should be read together.
+  Recalibrate via `EVENTMILL_NATIVE_S_PER_PAGE` etc. before trusting any
+  estimate — and **do not** add a planner budget check first: against this
+  model it would refuse runs that succeed.
+
 **Most likely to bite next:**
 
 1. **`run --file_path C:\Users\...` silently loses its backslashes.**

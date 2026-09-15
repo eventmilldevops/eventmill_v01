@@ -43,6 +43,11 @@ logger = logging.getLogger("eventmill.reference_data.mitre")
 _DATA_FILE = Path(__file__).parent / "mitre_techniques.json"
 _TECHNIQUE_DB: dict[str, dict] | None = None
 
+_RETIRED_FILE = Path(__file__).parent / "mitre_retired_techniques.json"
+_RETIRED: dict[str, dict] | None = None
+# technique name (normalised) -> ids carrying it, built on first use
+_NAME_INDEX: dict[str, list[str]] | None = None
+
 _RELATIONSHIPS_FILE = Path(__file__).parent / "mitre_relationships.json"
 _RELATIONSHIPS: dict | None = None
 # Reverse indexes over the relationships file, built on first use
@@ -193,6 +198,138 @@ def enrich_technique(technique_id: str) -> dict[str, Any]:
 def technique_count() -> int:
     """Return the number of techniques in the loaded database."""
     return len(get_mitre_db())
+
+
+def _retired_map() -> dict[str, dict]:
+    """Curated map of retired technique ids, loaded at most once."""
+    global _RETIRED
+    if _RETIRED is not None:
+        return _RETIRED
+    try:
+        with open(_RETIRED_FILE, encoding="utf-8") as fh:
+            _RETIRED = json.load(fh).get("retired") or {}
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to load retired-technique map: %s", exc)
+        _RETIRED = {}
+    return _RETIRED
+
+
+def _normalise_name(name: str) -> str:
+    return " ".join(str(name or "").split()).strip().lower()
+
+
+def _name_index() -> dict[str, list[str]]:
+    """Technique name -> every id carrying that name.
+
+    A list, not a single id: 23 enterprise names are shared by two or three
+    sub-techniques under different parents ("Botnet" is both T1583.005 and
+    T1584.005), so a name alone is not always an identifier.
+    """
+    global _NAME_INDEX
+    if _NAME_INDEX is not None:
+        return _NAME_INDEX
+    index: dict[str, list[str]] = {}
+    for tid, meta in get_mitre_db().items():
+        key = _normalise_name(meta.get("name", ""))
+        if key:
+            index.setdefault(key, []).append(tid)
+    _NAME_INDEX = index
+    return _NAME_INDEX
+
+
+def _resolve_by_name(technique_name: str) -> str | None:
+    """The one current id carrying this name, or None if that is not unique.
+
+    Tries the whole name first, then the part after the last colon, because a
+    retired id often arrives with its old parent attached ("Impair Defenses:
+    Disable or Modify Tools" where 19.2 calls it just "Disable or Modify
+    Tools"). When the leaf name is ambiguous the old parent name is used to
+    choose between the candidates, and anything still ambiguous is refused:
+    guessing here would attach a real ATT&CK id to the wrong technique, which
+    is worse than leaving the entry flagged.
+    """
+    index = _name_index()
+    whole = _normalise_name(technique_name)
+    if not whole:
+        return None
+
+    hits = index.get(whole, [])
+    if len(hits) == 1:
+        return hits[0]
+
+    if ":" not in technique_name:
+        return None
+
+    leaf = _normalise_name(technique_name.rsplit(":", 1)[1])
+    candidates = index.get(leaf, [])
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) < 2:
+        return None
+
+    # Ambiguous leaf: keep only candidates whose parent still carries the
+    # parent name the caller supplied.
+    parent_name = _normalise_name(technique_name.split(":", 1)[0])
+    db = get_mitre_db()
+    narrowed = [
+        tid for tid in candidates
+        if _normalise_name(db.get(tid.split(".")[0], {}).get("name", ""))
+        == parent_name
+    ]
+    return narrowed[0] if len(narrowed) == 1 else None
+
+
+def resolve_retired_technique(
+    technique_id: str, technique_name: str = "",
+) -> tuple[str, str] | None:
+    """Current id for a retired one, with the basis for the decision.
+
+    Returns ``(current_id, basis)`` where *basis* is "curated" or "name", or
+    None when the id needs no remapping, is unknown, or cannot be resolved
+    unambiguously. An id already in the database is never remapped.
+
+    This exists because of version skew, not model error: a model emits the
+    numbering in its training data and in most published reporting, so a
+    correct technique arrives under an id that ATT&CK has since retired. With
+    no resolution it is demoted to "non-ATT&CK" — dropped from every
+    ATT&CK-keyed view and shown to an analyst as though it were not real.
+    """
+    tid = (technique_id or "").strip()
+    if not tid:
+        return None
+    db = get_mitre_db()
+    if not db or tid in db:
+        return None
+
+    entry = _retired_map().get(tid)
+    if entry is not None:
+        target = entry.get("replaced_by")
+        # A split technique records its retirement with replaced_by=null; it
+        # has no single successor, so it stays flagged rather than being
+        # pointed at whichever successor happens to be listed first.
+        if target and target in db:
+            return (str(target), "curated")
+        return None
+
+    by_name = _resolve_by_name(technique_name)
+    if by_name:
+        return (by_name, "name")
+    return None
+
+
+def retirement_note(technique_id: str) -> str:
+    """What the curated map knows about a retired id, for an error message."""
+    entry = _retired_map().get((technique_id or "").strip())
+    if not entry:
+        return ""
+    successors = entry.get("successors") or []
+    if successors:
+        return (
+            f"{technique_id} ({entry.get('former_name', '')}) was retired and "
+            f"split across {', '.join(successors)} — pick the successor the "
+            f"report actually describes"
+        )
+    return f"{technique_id} ({entry.get('former_name', '')}) was retired"
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +512,9 @@ def procedures_for_technique(
 
 def _reset() -> None:
     """Reset the cached databases (for testing only)."""
-    global _TECHNIQUE_DB, _RELATIONSHIPS, _INDEXES
+    global _TECHNIQUE_DB, _RELATIONSHIPS, _INDEXES, _RETIRED, _NAME_INDEX
     _TECHNIQUE_DB = None
     _RELATIONSHIPS = None
     _INDEXES = None
+    _RETIRED = None
+    _NAME_INDEX = None
