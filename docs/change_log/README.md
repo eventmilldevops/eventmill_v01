@@ -12,6 +12,19 @@ not finished.
 Read newest-first. This index covers the current thread only; older entries are
 self-describing and listed by filename.
 
+## Report processing integrity — 2026-09-15
+
+Whether a long threat report survives chunking with its evidence intact. Plan:
+`docs/specs/report_processing_integrity.md`.
+
+| Date | Entry | What landed |
+|---|---|---|
+| 09-15 | `2026-09-15-threat-report-analyzer-pdf-alignment.md` | Provider limits out of plugin code; provider refusals no longer downgrade silently; page coverage reported; stamped exports; the plugin's first 18 tests |
+| 09-15 | `2026-09-15-chunking-integrity-review.md` | **Review only, no code changed.** Eight findings verified against the tree, four corrections to the external analysis, and the budget-starvation cause it missed |
+
+**Next:** Stage 1 of the plan — incomplete work is never reported as complete.
+Seven steps, no schema breaks, no live model calls needed to test it.
+
 ## Multi-provider LLM support — 2026-09-13/14
 
 The thread that took Event Mill from one vendor to three. Plans:
