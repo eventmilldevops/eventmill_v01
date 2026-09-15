@@ -2,7 +2,7 @@
   "provider_id": "openai_daybreak_blue",
   "vendor": "openai",
   "display_name": "OpenAI Daybreak Blue",
-  "_verified": "UNVERIFIED — every value below is documented or inherited from openai.json, none of it probed. The model alias, the token limits, the accepted reasoning levels and the capability list must each be confirmed with 'providers probe openai_daybreak_blue' and a live call before this manifest is treated the way openai.json's _verified block is treated. gpt-5.6 rejects reasoning_effort 'minimal' outright; whether this model shares that is unknown.",
+  "_verified": "UNVERIFIED — this model has never been called. Its sibling openai_daybreak_red was confirmed on Cloud Run 2026-09-14, which proves the shared credential, the secret mount, the deploy wiring and the OpenAI transport this provider also uses — but proves nothing about THIS alias, which has not been listed or pinged. Everything below is documented or inherited from openai.json. Run 'providers probe openai_daybreak_blue' before reading any of it as measured; a working Red is not evidence that Blue is entitled on the same key.",
   "_vendor_note": "A separate provider id, not a tier of 'openai'. It reaches a different model on a different key, so it binds, routes, and is attributed independently — but it is the same vendor, which is what 'vendor' above records. Anything reasoning about how far a finding's support extends must count vendors, not provider ids, or one lab's two models read as two independent opinions.",
   "tiers": {
     "light": {

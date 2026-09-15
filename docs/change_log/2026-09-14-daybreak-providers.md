@@ -113,7 +113,13 @@ record carries no vendor and must not be given one by guesswork at read time.
   `GEMINI_PRO_API_KEY`. It now points at `providers`.
 - `load_provider_manifest`'s LRU cache went from 8 to 16 entries.
 
-## Unverified, and deliberately marked so
+## Unverified at the time of writing
+
+**Superseded in part** — `openai_daybreak_red` was verified on Cloud Run the
+same day: see `docs/change_log/2026-09-14-daybreak-red-verified-cloud-run.md`.
+The secret name and both aliases held as written. Blue remains uncalled, and
+Red's token limits and reasoning levels remain documented rather than measured.
+The section below is what was true when this landed.
 
 Both manifests carry `"_verified": "UNVERIFIED"`. The model aliases, token
 limits, accepted reasoning levels and capability list are **documented or

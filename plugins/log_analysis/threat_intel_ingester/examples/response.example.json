@@ -6,6 +6,8 @@
       "source_organization": "Mandiant",
       "publication_date": "2026-02-15",
       "page_count": 24,
+      "pages_total": 24,
+      "pages_dropped": 0,
       "artifact_type": "pdf_report",
       "campaign_name": "Operation DUSTBRIDGE",
       "attributed_actor": "APT41",

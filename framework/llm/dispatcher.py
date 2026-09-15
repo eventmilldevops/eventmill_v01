@@ -690,12 +690,6 @@ class LLMDispatcher:
         hints = hints or QueryHints(tier="heavy", prefers_native_file=True)
         mime_type = artifact.metadata.get("mime_type", "application/pdf")
 
-        # PDF page cost is set by media_resolution
-        # (low 280 / medium 560 / high 1120 tokens per page). Make the default
-        # explicit rather than relying on the provider's implicit choice.
-        if mime_type == "application/pdf" and hints.media_resolution is None:
-            hints = replace(hints, media_resolution=default_media_resolution())
-
         try:
             client = self._route(
                 max_tokens, hints=hints, document_mime=mime_type,
@@ -705,6 +699,16 @@ class LLMDispatcher:
             return LLMResponse(ok=False, error=str(e))
 
         if mime_type == "application/pdf":
+            # PDF page cost is set by media_resolution
+            # (low 280 / medium 560 / high 1120 tokens per page). Make the
+            # default explicit rather than relying on the provider's implicit
+            # choice — and resolve it against the provider that was actually
+            # routed to, which is only known now that _route has answered.
+            if hints.media_resolution is None:
+                hints = replace(
+                    hints,
+                    media_resolution=default_media_resolution(_provider_of(client)),
+                )
             overflow = self._pdf_context_overflow(client, artifact, hints)
             if overflow:
                 return overflow
@@ -766,9 +770,16 @@ class LLMDispatcher:
         that here with an actionable message instead of an opaque provider
         error partway through the call.
 
+        Every limit is read from the provider that was routed to, never from
+        the default. Anthropic and OpenAI accept 100 pages / 32 MB against
+        Gemini's 1000 / 50 MB, so reading Gemini's numbers for an Anthropic
+        call passes a 150-page document straight through to a vendor rejection
+        — which is the opaque failure this guard exists to replace.
+
         Returns None when the request fits, or when the page count is unknown.
         """
-        handling = pdf_handling()
+        provider = _provider_of(client)
+        handling = pdf_handling(provider)
         max_pages = handling.get("max_pages", 1000)
         max_mb = handling.get("max_size_mb", 50)
 
@@ -777,8 +788,11 @@ class LLMDispatcher:
             return LLMResponse(
                 ok=False,
                 error=(
-                    f"PDF is {size_mb:,.1f} MB, above the provider limit of "
-                    f"{max_mb} MB. Split the document."
+                    f"PDF is {size_mb:,.1f} MB, above {provider}'s limit of "
+                    f"{max_mb} MB. Either run this on a provider with a larger "
+                    f"limit ('use gcp_gemini ...' allows "
+                    f"{pdf_handling('gcp_gemini').get('max_size_mb', 50)} MB) "
+                    f"or split the document."
                 ),
                 model_used=client.model_id,
                 fallback_reason="pdf_exceeds_provider_size_limit",
@@ -792,15 +806,18 @@ class LLMDispatcher:
             return LLMResponse(
                 ok=False,
                 error=(
-                    f"PDF has {pages:,} pages, above the provider limit of "
-                    f"{max_pages:,} pages"
+                    f"PDF has {pages:,} pages, above {provider}'s limit of "
+                    f"{max_pages:,} pages. Either run this on a provider with "
+                    f"a larger limit ('use gcp_gemini ...' allows "
+                    f"{pdf_handling('gcp_gemini').get('max_pages', 1000):,} "
+                    f"pages) or split the document."
                 ),
                 model_used=client.model_id,
                 fallback_reason="pdf_exceeds_provider_page_limit",
             )
 
-        resolution = hints.media_resolution or default_media_resolution()
-        per_page = tokens_per_pdf_page(resolution)
+        resolution = hints.media_resolution or default_media_resolution(provider)
+        per_page = tokens_per_pdf_page(resolution, provider)
         estimated = pages * per_page
 
         context_limit = self._context_cap(client)
@@ -810,7 +827,7 @@ class LLMDispatcher:
 
         # Try a cheaper resolution before giving up.
         for cheaper in ("medium", "low"):
-            if pages * tokens_per_pdf_page(cheaper) <= context_limit:
+            if pages * tokens_per_pdf_page(cheaper, provider) <= context_limit:
                 logger.warning(
                     "PDF %d pages at media_resolution=%s needs ~%d tokens "
                     "(limit %d) — use media_resolution=%r instead",
@@ -823,7 +840,8 @@ class LLMDispatcher:
                         f"media_resolution={resolution!r}, above the "
                         f"{context_limit:,}-token context window. Retry with "
                         f"media_resolution={cheaper!r} (~"
-                        f"{pages * tokens_per_pdf_page(cheaper):,} tokens)."
+                        f"{pages * tokens_per_pdf_page(cheaper, provider):,} "
+                        f"tokens)."
                     ),
                     model_used=client.model_id,
                     fallback_reason="pdf_exceeds_context_at_resolution",

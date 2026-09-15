@@ -686,6 +686,88 @@ class TestPdfContextGuard:
         assert r is not None and not r.ok
         assert r.fallback_reason == "pdf_exceeds_provider_size_limit"
 
+    # --- the limits must come from the provider that was routed to ---
+
+    @staticmethod
+    def _client_for(provider_id):
+        """A heavy client that declares which provider it belongs to."""
+        c = FakeClient("pro")
+        c.provider_id = provider_id
+        return c
+
+    def _check_on(self, dispatcher, provider_id, pages, resolution="medium"):
+        return dispatcher._pdf_context_overflow(
+            self._client_for(provider_id),
+            self._artifact(pages),
+            QueryHints(media_resolution=resolution),
+        )
+
+    def test_150_pages_passes_on_gemini(self, dispatcher):
+        """Gemini takes 1000 pages, so the operator's 150-page report is fine."""
+        assert self._check_on(dispatcher, "gcp_gemini", 150) is None
+
+    def test_150_pages_refused_on_anthropic(self, dispatcher):
+        """Regression: the guard read Gemini's 1000-page cap for every provider,
+        so a 150-page PDF passed here and was rejected by the vendor mid-call."""
+        r = self._check_on(dispatcher, "anthropic", 150)
+        assert r is not None and not r.ok
+        assert r.fallback_reason == "pdf_exceeds_provider_page_limit"
+        assert "100" in r.error, "must name the limit that was exceeded"
+        assert "anthropic" in r.error, "must name the provider that imposes it"
+
+    def test_150_pages_refused_on_openai(self, dispatcher):
+        r = self._check_on(dispatcher, "openai", 150)
+        assert r is not None and not r.ok
+        assert r.fallback_reason == "pdf_exceeds_provider_page_limit"
+
+    def test_refusal_offers_the_two_ways_out(self, dispatcher):
+        """Triage tool: a limit is acceptable, an unexplained one is not."""
+        r = self._check_on(dispatcher, "anthropic", 150)
+        assert "gcp_gemini" in r.error, "must point at the provider that can"
+        assert "split" in r.error.lower(), "must offer splitting as the other way"
+
+    def test_daybreak_inherits_openai_pdf_limits(self, dispatcher):
+        """A provider id is not a vendor, but each reads its OWN manifest."""
+        r = self._check_on(dispatcher, "openai_daybreak_red", 150)
+        assert r is not None and not r.ok
+        assert r.fallback_reason == "pdf_exceeds_provider_page_limit"
+
+    def test_size_limit_read_from_the_selected_provider(self, dispatcher):
+        """40 MB: inside Gemini's 50 MB, outside Anthropic's 32 MB."""
+        art = ArtifactRef(
+            "a1", "pdf_report", "",
+            metadata={
+                "mime_type": "application/pdf",
+                "pages": 40,
+                "size_bytes": 40 * 1024 * 1024,
+            },
+        )
+        assert dispatcher._pdf_context_overflow(
+            self._client_for("gcp_gemini"), art, QueryHints(),
+        ) is None
+        r = dispatcher._pdf_context_overflow(
+            self._client_for("anthropic"), art, QueryHints(),
+        )
+        assert r is not None and not r.ok
+        assert r.fallback_reason == "pdf_exceeds_provider_size_limit"
+        assert "32 MB" in r.error
+
+    def test_page_cost_uses_the_selected_provider_rate(self, dispatcher):
+        """Anthropic bills 1500 tokens/page against Gemini's 560 at medium.
+
+        Costing an Anthropic call at Gemini's rate understates it by ~2.7x,
+        which is the same class of error as reading the wrong page cap.
+        """
+        from framework.llm.providers import tokens_per_pdf_page
+        assert tokens_per_pdf_page("medium", "gcp_gemini") == 560
+        assert tokens_per_pdf_page("medium", "anthropic") == 1500
+
+    def test_unknown_provider_client_still_defaults(self, dispatcher):
+        """A fake declaring no provider_id must not crash the guard."""
+        assert dispatcher._pdf_context_overflow(
+            FakeClient("pro"), self._artifact(150), QueryHints(),
+        ) is None
+
     def test_page_count_comes_from_metadata_when_present(self):
         """A GCS-resolved artifact has no local file to read."""
         art = ArtifactRef(

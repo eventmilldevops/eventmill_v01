@@ -12,10 +12,11 @@ terminal (ttyd) on Cloud Run.
 
 ## Where the work stands — 2026-09-14
 
-Branch `llm_multi`. **Three LLM providers bind concurrently and a tool can be
-pointed at any of them.** Plan: `docs/specs/multi_provider_llm_clients.md`
-(Part 1, the framework) and `docs/specs/projector_three_vendor_run.md` (the
-demonstration).
+Branch `llm_5`. **Five providers bind concurrently, a tool can be pointed at
+any of them, and the projector has been run across vendors.** Plan:
+`docs/specs/multi_provider_llm_clients.md` (Part 1, the framework) and
+`docs/specs/projector_three_vendor_run.md` (the demonstration, now through
+Stage E).
 
 | | State |
 |---|---|
@@ -23,24 +24,44 @@ demonstration).
 | `(provider_id, tier)` routing, no cross-vendor fallback | done |
 | `connect` binds every configured provider; `use <provider> [for <tool>]` | done |
 | `EVENTMILL_LLM_PROVIDERS` defaults to every known provider everywhere | done |
-| Daybreak Red + Blue as their own providers; `vendor` split from `provider_id` | done 2026-09-14 (`llm_5`), manifests UNVERIFIED |
+| Daybreak Red + Blue as their own providers; `vendor` split from `provider_id` | done 2026-09-14 (`f84adfc`) |
+| Daybreak **Red** probed + full projector run on Cloud Run | done 2026-09-14 — manifest PARTIAL: limits and `thinking_levels` still documented, not measured |
+| Daybreak **Blue** | **registered, never called, and will not be** — manifest stays UNVERIFIED |
+| Adding a provider needs no code | **proven** — Red was the first provider added after the seam settled: one manifest, one secret, worked first time out. Swapping Red for e.g. Kimi 3 should need no code either (a vendor with its own SDK surface still needs a client) |
+| Daybreak Red access | **short-term** — treat it as a temporary tenant of the seam, not a fixture |
 | Projector run record names provider **and** vendor, hashes the prompt (schema v5) | done |
 | Group summary: recurrence per provider, agreement across them | done |
-| **The live three-vendor run** | **next — Stage E of the projector plan** |
+| **The live cross-vendor run (Stage E)** | done 2026-09-14 — Gemini 3.1 Pro vs Daybreak Red completed with very similar output; `openai` and `anthropic` worked; `summarize_run_group` worked. Qualitative sign-off: runs-per-vendor and the `stepstate-medium-2` score were not captured |
+| Group summary counts **provider ids**, not vendors | **live overclaim**: `openai` and `openai_daybreak_red` are both `vendor: openai` and both bound by default, so a route the two of them find grades as two-provider agreement. Recommendation: grade on `model.vendor` (can only lower a grade). Recurrence stays per provider id |
+| ~~Probe Blue, then the Red/Blue A/B~~ | **retired, not deferred** — no Blue access, so the experiment that was to settle the grading row above will never run. Decide it on judgment: recommendation is to grade on `model.vendor` |
+| Does the agreement grade discriminate? | **open** — two independent vendors converging is also consistent with the prompt admitting few readings. Needs a flow map with ambiguous routes |
 
-**The two things most likely to bite next:**
+**PDF page limits — fixed 2026-09-14, and how they work now:**
 
-1. **The PDF guard reads Gemini's limits whatever provider is selected**
-   (`pdf_handling()` / `tokens_per_pdf_page()` called with no `provider_id`).
-   Anthropic's are 100 pages / 32 MB against Gemini's 1000 / 50 MB. A wrong
-   answer, not a missing feature — and it gates the two document modules.
-   It is **not** on the projector's path, which is why the projector went first.
-2. **`run --file_path C:\Users\...` silently loses its backslashes.**
+- The guard reads **the provider actually routed to**
+  (`_pdf_context_overflow`). Gemini takes 1000 pages / 50 MB; Anthropic and
+  OpenAI take 100 / 32 MB and cost pages at 1500 tokens against Gemini's 560.
+- Over a provider's limit the call is **refused up front** with both ways out
+  named: run it on Gemini, or split the document. That is the intended
+  behaviour for a triage tool, not a gap to close.
+- `threat_intel_ingester` no longer imposes a **second** page limit. It had a
+  `max_pages` default of 50 that truncated silently, so a 150-page report
+  ingested as 50 pages was indistinguishable from a 50-page report ingested
+  whole. The default is now "read it all"; an explicit `max_pages` (1–1000) is
+  honoured as a cost ceiling and reported as `pages_dropped`.
+
+**Most likely to bite next:**
+
+1. **`run --file_path C:\Users\...` silently loses its backslashes.**
    `_parse_flag_payload` uses `shlex.split` in POSIX mode, so the path arrives
    as `C:Usersdleecemap.json` and the tool reports `ARTIFACT_UNREADABLE` naming
    the mangled path. Quote it, or use forward slashes. Unfixed.
+2. **`validate_manifests.py` exits non-zero on 16 pre-existing errors** — 15
+   `stability` values the schema does not define, plus a capability-namespace
+   pattern that rejects underscores. Both are behaviour decisions, not typos;
+   nothing in the build or deploy path runs the validator.
 
-Read `docs/change_log/` newest-first for how any of it got that way; the five
+Read `docs/change_log/` newest-first for how any of it got that way; the
 entries dated 2026-09-14 are this thread.
 
 ---

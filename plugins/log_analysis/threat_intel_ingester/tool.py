@@ -127,12 +127,18 @@ ENTRY_ONLY_TACTICS: set[str] = {"Reconnaissance", "Resource Development", "Initi
 # ---------------------------------------------------------------------------
 
 
-def extract_pdf_page_texts(file_path: str, max_pages: int = 50) -> list[str]:
+def extract_pdf_page_texts(
+    file_path: str, max_pages: int | None = None
+) -> list[str]:
     """Extract text per page from a PDF using pdfplumber.
 
     One entry per page in document order (empty string for pages with no
     extractable text), so list index + 1 is the 1-based page number used by
     page-range batching.
+
+    ``max_pages`` of None reads the whole document, and is the default. The
+    page limit belongs to the provider manifest; a second limit here would
+    silently cap a document the selected provider could have taken whole.
     """
     try:
         import pdfplumber
@@ -142,13 +148,31 @@ def extract_pdf_page_texts(file_path: str, max_pages: int = 50) -> list[str]:
     pages: list[str] = []
     with pdfplumber.open(file_path) as pdf:
         for i, page in enumerate(pdf.pages):
-            if i >= max_pages:
+            if max_pages is not None and i >= max_pages:
                 break
             pages.append(page.extract_text() or "")
     return pages
 
 
-def extract_text_from_pdf(file_path: str, max_pages: int = 50) -> str:
+def pdf_page_total(file_path: str) -> int | None:
+    """How many pages the PDF has, or None when that cannot be read.
+
+    Needed only when extraction was capped: a capped read cannot report what
+    it left behind, and counting the pages read as though they were the whole
+    document is what made truncation invisible.
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        return None
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            return len(pdf.pages)
+    except Exception:
+        return None
+
+
+def extract_text_from_pdf(file_path: str, max_pages: int | None = None) -> str:
     """Extract text from a PDF file using pdfplumber."""
     return "\n\n".join(t for t in extract_pdf_page_texts(file_path, max_pages) if t)
 
@@ -1252,8 +1276,8 @@ class ThreatIntelIngester:
 
         if "max_pages" in payload:
             mp = payload["max_pages"]
-            if not isinstance(mp, int) or mp < 1 or mp > 200:
-                errors.append("max_pages must be an integer between 1 and 200")
+            if not isinstance(mp, int) or mp < 1 or mp > 1000:
+                errors.append("max_pages must be an integer between 1 and 1000")
 
         return ValidationResult(ok=len(errors) == 0, errors=errors if errors else None)
 
@@ -1280,7 +1304,12 @@ class ThreatIntelIngester:
             ["ip", "domain", "hash_sha256", "url", "cve", "mitre_technique"],
         )
         confidence_threshold = payload.get("confidence_threshold", "low")
-        max_pages = payload.get("max_pages", 50)
+        # None means "no limit here" — the provider manifest's max_pages is
+        # the one that matters, and it is enforced by the dispatcher's guard
+        # against the provider actually routed to. An explicit max_pages is a
+        # deliberate cost ceiling and is honoured, but it is then reported as
+        # a truncation rather than as the document's size.
+        max_pages = payload.get("max_pages")
 
         # --- Resolve artifact ---
         artifact = None
@@ -1334,8 +1363,25 @@ class ThreatIntelIngester:
                 message=f"Failed to extract text: {e}",
             )
 
+        pages_total: int | None = None
+        pages_dropped = 0
         if artifact.artifact_type == "pdf_report":
             page_count = len(page_texts)
+            # A capped read cannot see past its own cap, so ask the file.
+            pages_total = (
+                pdf_page_total(str(artifact.file_path))
+                if max_pages is not None
+                else page_count
+            )
+            if pages_total and pages_total > page_count:
+                pages_dropped = pages_total - page_count
+                logger.warning(
+                    "[TRUNCATED] Read %d of %d pages from %s — pages %d-%d were "
+                    "NOT examined and any indicator on them is missing from this "
+                    "result. Raise max_pages (up to 1000) or split the document.",
+                    page_count, pages_total, artifact_id,
+                    page_count + 1, pages_total,
+                )
         else:
             page_count = len(raw_text.splitlines())
 
@@ -1437,9 +1483,21 @@ class ThreatIntelIngester:
                     A range covering every page is the artifact itself; any
                     narrower range becomes a sub-PDF, so the model still sees
                     page images and layout rather than extracted text.
+
+                    "Every page" is measured against the file, not against
+                    doc_profile.pages. Those differ exactly when extraction
+                    was capped, and attaching the whole artifact there would
+                    send the model pages the plan never counted — so the
+                    profile would describe a 50-page document while the model
+                    read 150.
                     """
                     nonlocal tmp_dir
-                    if rng.start == 1 and rng.end == doc_profile.pages:
+                    covers_whole_file = (
+                        rng.start == 1
+                        and rng.end == doc_profile.pages
+                        and not pages_dropped
+                    )
+                    if covers_whole_file:
                         return artifact
                     if rng.label not in sub_paths:
                         try:
@@ -2057,6 +2115,8 @@ class ThreatIntelIngester:
                     "source_organization": report_meta.get("source_organization", ""),
                     "publication_date": report_meta.get("publication_date", ""),
                     "page_count": page_count,
+                    "pages_total": pages_total if pages_total else page_count,
+                    "pages_dropped": pages_dropped,
                     "artifact_type": artifact.artifact_type,
                     "campaign_name": report_meta.get("campaign_name", ""),
                     "attributed_actor": report_meta.get("attributed_actor", ""),
@@ -2112,6 +2172,17 @@ class ThreatIntelIngester:
         pages = meta.get("page_count", "?")
         size_label = "pages" if artifact_type == "pdf_report" else "lines"
         parts.append(f"Ingested {artifact_type} ({pages} {size_label}): {title}.")
+
+        # Coverage before content: a reader told only what was found cannot
+        # tell that a third of the document was never examined.
+        dropped = meta.get("pages_dropped") or 0
+        if dropped:
+            total = meta.get("pages_total", "?")
+            parts.append(
+                f"INCOMPLETE COVERAGE: only {pages} of {total} pages were "
+                f"read; {dropped} pages were not examined, so absence of an "
+                f"indicator here is not evidence it is absent from the report."
+            )
 
         # Attribution
         actor = meta.get("attributed_actor")
