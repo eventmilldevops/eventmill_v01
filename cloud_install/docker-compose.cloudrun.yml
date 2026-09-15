@@ -33,6 +33,10 @@ services:
       - EVENTMILL_LLM_PROVIDERS=${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue}
       # Storage — must match the GCS bucket prefix used during provisioning
       - EVENTMILL_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX:-eventmill}
+      # Native-document latency model; empty keeps the plugin's own values.
+      - EVENTMILL_NATIVE_BASE_S=${EVENTMILL_NATIVE_BASE_S:-}
+      - EVENTMILL_NATIVE_S_PER_PAGE=${EVENTMILL_NATIVE_S_PER_PAGE:-}
+      - EVENTMILL_NATIVE_S_PER_CANDIDATE=${EVENTMILL_NATIVE_S_PER_CANDIDATE:-}
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
       - GCS_LOG_BUCKET=${GCS_LOG_BUCKET:-}
       # GCS credentials — set GOOGLE_APPLICATION_CREDENTIALS on host or use ADC volume below

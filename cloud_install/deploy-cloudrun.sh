@@ -160,6 +160,9 @@ gcloud run deploy "${SERVICE_NAME}" \
     --set-env-vars="EVENTMILL_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX:-${PROJECT_ID}-eventmill}" \
     --set-env-vars="GCS_LOG_BUCKET=${GCS_LOG_BUCKET:-}" \
     --set-env-vars="EVENTMILL_LOG_LEVEL=${EVENTMILL_LOG_LEVEL:-INFO}" \
+    --set-env-vars="EVENTMILL_NATIVE_BASE_S=${EVENTMILL_NATIVE_BASE_S:-}" \
+    --set-env-vars="EVENTMILL_NATIVE_S_PER_PAGE=${EVENTMILL_NATIVE_S_PER_PAGE:-}" \
+    --set-env-vars="EVENTMILL_NATIVE_S_PER_CANDIDATE=${EVENTMILL_NATIVE_S_PER_CANDIDATE:-}" \
     --set-env-vars="TTYD_USERNAME=${TTYD_USERNAME:-admin}" \
     --set-env-vars="TTYD_PASSWORD=${TTYD_PASSWORD:-changeme}" \
     --allow-unauthenticated

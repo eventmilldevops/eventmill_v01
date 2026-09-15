@@ -1,0 +1,23 @@
+{
+  "_purpose": "Technique IDs that ATT&CK has retired, mapped to their current equivalent. LLMs emit the numbering in their training data and in most published reporting; this file is what stops a correct-but-old ID being demoted to 'non-ATT&CK'. Built from observed evidence, NOT a complete ATT&CK migration table - name-stable renumbers are resolved automatically by name in mitre_attack.resolve_retired_technique(), so only entries whose NAME also changed, or which have no single successor, need to be listed here.",
+  "_target_attack_version": "19.2",
+  "_how_to_add": "Add an entry only with evidence. 'replaced_by' must be an ID present in mitre_techniques.json; set it to null for a technique that was split across several successors, which records the retirement without asserting a single target. Put the evidence in 'note'.",
+  "retired": {
+    "T1562": {
+      "former_name": "Impair Defenses",
+      "replaced_by": null,
+      "successors": ["T1685", "T1686", "T1687", "T1688", "T1689", "T1690"],
+      "note": "Split in v19, not renamed. The v19 Defense Impairment tactic carries the former sub-techniques as top-level techniques (T1685 Disable or Modify Tools, T1686 Disable or Modify System Firewall, T1687 Exploitation for Defense Impairment, T1688 Safe Mode Boot, T1689 Downgrade Attack, T1690 Prevent Command History Logging). There is no single successor, so a bare T1562 cannot be remapped - it needs the sub-technique the report actually describes. Verified: no T1562* id exists in mitre_techniques.json 19.2."
+    },
+    "T1562.001": {
+      "former_name": "Impair Defenses: Disable or Modify Tools",
+      "replaced_by": "T1685",
+      "note": "Verified by exact name: T1685 in 19.2 is named 'Disable or Modify Tools' under Defense Impairment. Observed emitted by the heavy tier on a 2026-09 report ingestion."
+    },
+    "T1656": {
+      "former_name": "Impersonation",
+      "replaced_by": "T1684.001",
+      "note": "Verified by exact name: T1684.001 in 19.2 is named 'Impersonation' under Stealth. Observed emitted by the heavy tier on a 2026-09 report ingestion."
+    }
+  }
+}

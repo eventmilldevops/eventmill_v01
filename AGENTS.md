@@ -65,9 +65,18 @@ things that run exposed:
   it estimated 2185 s for that 345 s run, 85% of it from
   `seconds_per_page=12.0`. The symptom is over-splitting (24 batches sized by
   pages, not by work), which separates pages that should be read together.
-  Recalibrate via `EVENTMILL_NATIVE_S_PER_PAGE` etc. before trusting any
-  estimate — and **do not** add a planner budget check first: against this
-  model it would refuse runs that succeed.
+  Retune with `EVENTMILL_NATIVE_BASE_S` / `_S_PER_PAGE` / `_S_PER_CANDIDATE`
+  before trusting any estimate — and **do not** add a planner budget check
+  first: against this model it would refuse runs that succeed.
+
+  Those three are read per execution, so **no rebuild is needed** — but they
+  must be passed to the service. All four deploy paths now forward them
+  (`cloudbuild.yaml` substitutions `_NATIVE_*`, `deploy-cloudrun-secrets.sh`,
+  `deploy-cloudrun.sh`, `docker-compose.cloudrun.yml`), so set them in
+  `~/.eventmill/deploy.env` and redeploy. For a one-off experiment use
+  `gcloud run services update --update-env-vars=...`; note `--update-env-vars`,
+  not `--set-env-vars`, which replaces the whole environment and would drop
+  `GOOGLE_CLOUD_PROJECT`, the bucket prefix and the provider list.
 
 **Most likely to bite next:**
 

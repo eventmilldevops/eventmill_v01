@@ -157,6 +157,16 @@ LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_day
 SA_NAME="${EVENTMILL_SA_NAME:-eventmill-runner}"
 
 LOG_LEVEL="${EVENTMILL_LOG_LEVEL:-INFO}"
+
+# Native-document latency model, read per execution by threat_intel_ingester's
+# _latency_model(). Empty means "use the value compiled into the plugin", so
+# these are safe to leave unset; set them to retune page-range batching without
+# rebuilding the image. Forwarded even when empty, because --set-env-vars
+# replaces the whole environment: a value set by hand with
+# 'gcloud run services update' is wiped by the next deploy unless it is here.
+NATIVE_BASE_S="${EVENTMILL_NATIVE_BASE_S:-}"
+NATIVE_S_PER_PAGE="${EVENTMILL_NATIVE_S_PER_PAGE:-}"
+NATIVE_S_PER_CANDIDATE="${EVENTMILL_NATIVE_S_PER_CANDIDATE:-}"
 ALLOW_UNAUTH="${ALLOW_UNAUTH:-true}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -871,7 +881,7 @@ if ! gcloud run deploy "${SERVICE_NAME}" \
         --session-affinity \
         --service-account="${SA_EMAIL}" \
         --set-secrets="${SECRET_MOUNTS}" \
-        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},EVENTMILL_BUCKET_PREFIX=${BUCKET_PREFIX},EVENTMILL_LOG_LEVEL=${LOG_LEVEL},EVENTMILL_LLM_PROVIDERS=${LLM_PROVIDERS}" \
+        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},EVENTMILL_BUCKET_PREFIX=${BUCKET_PREFIX},EVENTMILL_LOG_LEVEL=${LOG_LEVEL},EVENTMILL_LLM_PROVIDERS=${LLM_PROVIDERS},EVENTMILL_NATIVE_BASE_S=${NATIVE_BASE_S},EVENTMILL_NATIVE_S_PER_PAGE=${NATIVE_S_PER_PAGE},EVENTMILL_NATIVE_S_PER_CANDIDATE=${NATIVE_S_PER_CANDIDATE}" \
         "${AUTH_FLAG}"; then
     echo ""
     if [ "${SERVICE_EXISTS}" = "1" ]; then

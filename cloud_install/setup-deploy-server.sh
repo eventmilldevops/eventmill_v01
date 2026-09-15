@@ -136,6 +136,17 @@ export TTYD_PASSWORD="changeme"
 
 # Log level for the deployed service
 export EVENTMILL_LOG_LEVEL="INFO"
+
+# Native-document latency model for threat_intel_ingester's page-range
+# batching (seconds). Leave unset to use the values compiled into the plugin.
+# These decide how a large PDF is split, NOT how long a run may take, and the
+# shipped model overestimates a 154-page report by ~6x — which over-splits it
+# into many small calls and separates pages that should be read together.
+# Retune here rather than rebuilding the image, then confirm against the
+# "[PLAN] ... est. Ns" line the next run logs.
+#   export EVENTMILL_NATIVE_BASE_S="10"
+#   export EVENTMILL_NATIVE_S_PER_PAGE="0.3"
+#   export EVENTMILL_NATIVE_S_PER_CANDIDATE="0.7"
 ENVEOF
     echo "✓ Created ${CONFIG_DIR}/deploy.env"
     echo "  Edit this file with your project settings before deploying."
