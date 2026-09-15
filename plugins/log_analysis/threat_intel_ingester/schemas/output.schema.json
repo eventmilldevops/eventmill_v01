@@ -69,6 +69,50 @@
                 "high"
               ],
               "description": "Confidence level of actor attribution."
+            },
+            "actors": {
+              "type": "array",
+              "description": "Every threat actor named anywhere in the report, in order of first mention. attributed_actor above is the first of these and is kept for consumers that read it \u2014 a report describing two groups is not a report about whichever one a batch happened to name first.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Actor as named."
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "description": "Attribution confidence stated alongside this actor. Per actor, not per report: a later section qualifying an earlier assertion keeps its own confidence."
+                  },
+                  "batch_label": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Which call named it: a native page range (p12-19) or a chunk label (chunk 3/8)."
+                  }
+                }
+              }
+            },
+            "campaigns": {
+              "type": "array",
+              "description": "Every campaign or operation named anywhere in the report, in order of first mention. campaign_name above is the first of these.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Campaign as named."
+                  },
+                  "batch_label": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Which call named it."
+                  }
+                }
+              }
             }
           }
         },
@@ -343,7 +387,7 @@
                   "properties": {
                     "field": {
                       "type": "string",
-                      "description": "The disagreeing field: confidence. Not technique_name — two batches naming one technique differently agree about the technique, and the reconciler overwrites the name from the local ATT&CK lookup anyway.",
+                      "description": "The disagreeing field: confidence. Not technique_name \u2014 two batches naming one technique differently agree about the technique, and the reconciler overwrites the name from the local ATT&CK lookup anyway.",
                       "enum": [
                         "confidence"
                       ]
@@ -373,6 +417,77 @@
                 "type": "boolean",
                 "description": "Present and True when this record survives only because a truncated reply mentioned it and the attempt that replaced that reply did not restate it. The evidence is kept rather than dropped, and the run is reported partial."
               }
+            }
+          }
+        },
+        "attack_graph": {
+          "type": "object",
+          "description": "Multi-path attack graph the LLM described. Empty when no path was reported. Paths from separate calls are unioned and reconciled on their step sequence, not on path_id \u2014 separate calls coin slugs independently, so a shared slug is not evidence of a shared path.",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path_id": {
+                    "type": "string",
+                    "description": "Slug for this path. Namespaced with the reporting batch label (p11-20:slug) only when another, structurally different path already claimed the slug, so ids are unchanged on any run without a collision."
+                  },
+                  "original_path_id": {
+                    "type": "string",
+                    "description": "The slug the model emitted, present only when path_id was namespaced away from it."
+                  },
+                  "batch_labels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Every call that reported this path. More than one means independent calls described the same step sequence."
+                  },
+                  "recovered_from_partial": {
+                    "type": "boolean",
+                    "description": "This path survives only from a truncated reply that the attempt replacing it did not restate."
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "technique_id": {
+                          "type": "string"
+                        },
+                        "tactic": {
+                          "type": "string"
+                        },
+                        "leads_to": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Technique ids this step enables. Technique ids, never path ids."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "convergence_points": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Technique ids several paths pass through."
+            },
+            "branch_points": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Technique ids from which paths diverge."
             }
           }
         },
@@ -520,6 +635,10 @@
                 "occurrences": {
                   "type": "integer",
                   "description": "Total sightings kept across every indicator and technique role."
+                },
+                "paths_namespaced": {
+                  "type": "integer",
+                  "description": "Attack paths whose path_id was rewritten because another, structurally different path had already claimed that slug. Separate calls coin slugs independently; before this the later path was dropped. Zero on any run with no collision, which is every single-batch run."
                 }
               }
             },

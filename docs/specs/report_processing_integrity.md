@@ -534,12 +534,16 @@ removes the starvation in practice, are unmeasured.
 
 # Stage 2 — evidence the model produced is never destroyed
 
-**Status: in progress.** 2.0 and 2.1+2.2 landed 2026-09-15 (change logs
-`2026-09-15-submitted-baseline.md`, `2026-09-15-retry-supersedes-partial.md`);
-suite 1319 → 1372. **2.3, 2.4, 2.5 and 2.6 remain**, to be done as the third
-change set. **Nothing in Stage 2 is signed off**: the single live run against
-the 154-page report has not been made, and Stage 1's lesson was that control
-flow alone is not sufficient.
+**Status: code-complete, not signed off.** 2.0 and 2.1+2.2 landed 2026-09-15
+(change logs `2026-09-15-submitted-baseline.md`,
+`2026-09-15-retry-supersedes-partial.md`) and are live-verified on Gemini
+light. **2.3, 2.4, 2.5 and 2.6 landed the same day** as the third change set
+(`2026-09-15-stage-2-second-half.md`); suite 1319 → 1445. **Nothing in Stage 2
+is signed off**: the single live run against the 154-page report has not been
+made, none of 2.3–2.6 has ever been run against a model, and 2.5 changed what
+the prompts contain — which is the class of change every live finding so far
+has come from. Stage 1's lesson was that control flow alone is not
+sufficient.
 
 Two corrections came out of implementing the first two steps, both recorded in
 their steps below: **2.0's defect turned out to be unreachable** (it is kept as
@@ -777,7 +781,24 @@ must merge to one technique with two occurrences.
 
 ### 2.3 — Namespace `path_id` before deduplicating attack paths
 
-**Where:** `ti:519-521`.
+**LANDED 2026-09-15.** `2026-09-15-stage-2-second-half.md`.
+
+**Operator decision, 2026-09-15: namespace only on collision**, not every
+path. Prefixing every id would rewrite the ids on every run, single-batch runs
+included, and both consumers render them. The first path keeps its slug; a
+colliding, structurally different path is namespaced and keeps
+`original_path_id`. `merge_stats.paths_namespaced` is 0 on any run without a
+collision.
+
+**Corrections found in implementation.** Reconciling "on actual nodes and
+edges" cuts both ways — two batches that described the same path with
+*different* slugs were two paths under the old rule, and are now one carrying
+both `batch_labels`. An empty step list is deliberately not an identity; every
+pathless path would share it. And a superseded partial contributes a path on
+2.2's terms — only one nothing else reported — so its truncated draft of a path
+its own retry restated is not a second path.
+
+**Where:** `ti:519-521` (stale; `ti:684-690` at `59dca48`).
 
 **Change:** prefix each path's id with its batch label before the union, so two
 batches that independently coin `path_id: "initial_access_to_exfil"` produce
@@ -791,6 +812,19 @@ must yield two paths.
 
 ### 2.4 — Support more than one actor and campaign
 
+**LANDED 2026-09-15.** `2026-09-15-stage-2-second-half.md`.
+
+**Correction found in implementation.** The defect is wider than the write-up
+said. `report_metadata` was taken object-at-a-time, so the *first batch to fill
+in any field* took the whole record — a batch that recognised only the title
+discarded the batch that identified the actor. Attribution was the visible
+symptom of a field-level loss.
+
+**A second actor is deliberately not an analysis note.** Every note but `NO
+INDICATORS ACCEPTED` forces `partial`, and two groups in one report is complete
+work. It reaches the reader through `report_metadata.actors` and
+`summarize_for_llm` instead.
+
 **Where:** `ti:523` (first non-empty `report_metadata` wins) and `ti:2246-2258`
 (`campaign_name`, `attributed_actor`, `attribution_confidence` are scalars).
 
@@ -802,6 +836,24 @@ not dropped.
 **Test:** chunk 1 naming actor A and chunk 2 naming actor B must yield both.
 
 ### 2.5 — Align candidate batches with the text they came from
+
+**LANDED 2026-09-15.** `2026-09-15-stage-2-second-half.md`.
+
+**Operator decision, 2026-09-15: global candidate dedupe.** A value on pages 3
+and 40 is still submitted once, with the unit whose text contains it. Asking
+about it in each unit would pair it with every context at the cost of a longer
+prompt per repeat — a cost decision, not a correctness one, and not one to make
+in the same change as the correctness fix.
+
+**Two knock-on changes.** Chunk results now carry a page range, so a chunked
+occurrence can say where in the report it was seen; and `_mark_superseded` now
+skips chunked records, because supersession asks "did a later attempt re-read
+these pages" and nothing re-reads a chunk — without the guard a truncated chunk
+would look replaced by `chunked_pages`, which holds its own pages, or by a
+sibling unit sharing its page range after a candidate-cap split.
+
+**A gap is a page the run was never asked to cover**, not a blank page skipped
+while packing.
 
 **Where:** `ti:2028-2033` (the two independent splits) and `ti:2048`.
 
@@ -828,6 +880,16 @@ indicator with an unrelated narrative section.
 that chunk's page range.
 
 ### 2.6 — The analyzer's hard caps destroy evidence, one nondeterministically
+
+**LANDED 2026-09-15.** `2026-09-15-stage-2-second-half.md`.
+
+**Operator decision, 2026-09-15: raise the limits, keep a bound** — 50 findings
+and 200 techniques, so the cap is there for a runaway summary rather than for
+ordinary work, and anything it cuts is stated.
+
+**Correction found in implementation.** The cross-chunk union at `tra:734-735`
+was `list({...})` as well, so it was a second unordered cap the write-up did
+not name. It is order-stable and counted now too.
 
 **Added 2026-09-15.** Stage 2 was scoped to `ti`, but this is the same Goal B
 failure in `tra`, and it is the one place in either tool where two identical

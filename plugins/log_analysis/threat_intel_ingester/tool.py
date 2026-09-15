@@ -393,6 +393,189 @@ def _page_iocs(page_texts: list[str], ioc_types: list[str]) -> list[list[RawIOC]
     return [extract_iocs_regex(t, ioc_types) for t in page_texts]
 
 
+@dataclass
+class ChunkUnit:
+    """One chunked LLM call's input: some text, and the candidates in it.
+
+    The two used to be split independently - ``fallback_iocs`` sliced by index
+    and ``fallback_text`` split by paragraph - and chunk *i* paired slice *i*
+    with paragraph-chunk *i*, which have no relationship at all. On the
+    whole-document path that put the first fifty candidates, in practice all
+    of one type and drawn from anywhere in the report, beside the report's
+    first 6,000 characters. A unit is the fix: the text is chosen first and
+    the candidates are the ones that text contains.
+    """
+    text: str
+    iocs: list[RawIOC]
+    page_start: int | None = None
+    page_end: int | None = None
+    gap_before: bool = False
+    gap_pages: tuple[int, int] | None = None
+
+    @property
+    def page_label(self) -> str | None:
+        if self.page_start is None:
+            return None
+        if self.page_start == self.page_end:
+            return f"page {self.page_start}"
+        return f"pages {self.page_start}-{self.page_end}"
+
+
+def _pack_pages(
+    pages: list[int],
+    page_texts: list[str],
+    max_chars: int,
+) -> list[tuple[list[int], str]]:
+    """Group pages into runs of text under ``max_chars``, in page order.
+
+    A page whose own text exceeds the budget is returned alone and is split
+    further by the caller; nothing is dropped to make a page fit.
+    """
+    runs: list[tuple[list[int], str]] = []
+    current: list[int] = []
+    parts: list[str] = []
+    size = 0
+    for pg in pages:
+        text = page_texts[pg - 1]
+        if not text:
+            continue
+        cost = len(text) + 2
+        if current and size + cost > max_chars:
+            runs.append((current, "\n\n".join(parts)))
+            current, parts, size = [], [], 0
+        current.append(pg)
+        parts.append(text)
+        size += cost
+    if current:
+        runs.append((current, "\n\n".join(parts)))
+    return runs
+
+
+def _build_chunk_units(
+    page_texts: list[str],
+    page_iocs: list[list[RawIOC]],
+    ioc_types: list[str],
+    pages: list[int] | None = None,
+    paged: bool = True,
+    max_chars: int | None = None,
+    max_iocs: int | None = None,
+) -> list[ChunkUnit]:
+    """Build the chunked path's calls, text first and candidates from that text.
+
+    ``pages`` is the 1-based pages the chunked path has to cover: every page
+    on a pure chunked run, only the pages the native path could not finish
+    otherwise. Gaps between non-adjacent runs are marked so the prompt can say
+    that the missing pages were read elsewhere rather than leaving the model
+    to infer a jump in the narrative.
+
+    Candidates are deduplicated across units as they always were, so a value
+    seen on pages 3 and 40 is still asked about once - in the unit whose text
+    contains it, which is the part that was wrong. Submitting it in both would
+    pair it with each context at the cost of a longer prompt per repeat; that
+    is a cost decision, not a correctness one, and it is not made here.
+
+    A unit holding more than ``max_iocs`` candidates is split **within the
+    unit**, every piece keeping the same text, so a candidate is never paired
+    with text it did not come from just because its unit was crowded.
+    """
+    # Read at call time, not bound as a default: these are module-level
+    # knobs, and a default argument would freeze whatever they were at import.
+    if max_chars is None:
+        max_chars = _MAX_TEXT_CHARS_PER_CHUNK
+    if max_iocs is None:
+        max_iocs = _MAX_IOC_PER_CHUNK
+    if pages is None:
+        pages = list(range(1, len(page_texts) + 1))
+
+    units: list[ChunkUnit] = []
+    requested = set(pages)
+    prev_page: int | None = None
+    for run_pages, run_text in _pack_pages(pages, page_texts, max_chars):
+        start, end = run_pages[0], run_pages[-1]
+        pieces: list[tuple[str, list[RawIOC]]]
+        if len(run_text) > max_chars:
+            # One page bigger than the whole budget. Split its text and
+            # re-extract per piece: on a single-page artifact this is the only
+            # thing standing between a candidate and text it never appeared in.
+            pieces = [
+                (part, extract_iocs_regex(part, ioc_types))
+                for part in _chunk_text(run_text, max_chars)
+            ]
+        else:
+            pieces = [(run_text, _dedupe_iocs(
+                [ioc for pg in run_pages for ioc in page_iocs[pg - 1]]
+            ))]
+        for text, iocs in pieces:
+            unit = ChunkUnit(
+                text=text,
+                iocs=iocs,
+                page_start=start if paged else None,
+                page_end=end if paged else None,
+            )
+            # A gap is pages this run was never asked to cover, not pages
+            # that were skipped here for being blank - saying a blank page was
+            # "analysed separately" would be a claim nobody can check.
+            missing = sorted(set(range(prev_page + 1, start)) - requested) \
+                if (paged and prev_page is not None) else []
+            if missing:
+                unit.gap_before = True
+                unit.gap_pages = (missing[0], missing[-1])
+            units.append(unit)
+        prev_page = end
+
+    # Deduplicate across units, keeping the first unit that holds each value.
+    seen: set[tuple[str, str]] = set()
+    for unit in units:
+        kept = []
+        for ioc in unit.iocs:
+            key = (ioc.ioc_type, ioc.value.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(ioc)
+        unit.iocs = kept
+
+    # Then cap, within the unit, so every piece keeps the text its candidates
+    # were found in.
+    capped: list[ChunkUnit] = []
+    for unit in units:
+        if len(unit.iocs) <= max_iocs:
+            capped.append(unit)
+            continue
+        for i in range(0, len(unit.iocs), max_iocs):
+            capped.append(ChunkUnit(
+                text=unit.text,
+                iocs=unit.iocs[i:i + max_iocs],
+                page_start=unit.page_start,
+                page_end=unit.page_end,
+                gap_before=unit.gap_before if i == 0 else False,
+                gap_pages=unit.gap_pages if i == 0 else None,
+            ))
+    return capped
+
+
+def _unit_report_text(unit: ChunkUnit) -> str:
+    """The text as the prompt carries it, with its page label and any gap.
+
+    Without the label the model cannot cite a page, and without the gap note a
+    section starting at page 30 reads as continuous with one ending at 19.
+    """
+    header = []
+    label = unit.page_label
+    if label:
+        header.append(f"[Report {label}]")
+    if unit.gap_before and unit.gap_pages:
+        a, b = unit.gap_pages
+        span = f"page {a}" if a == b else f"pages {a}-{b}"
+        header.append(
+            f"[{span} are not shown here - they were analysed separately, so "
+            f"this section does not continue directly from the one before it]"
+        )
+    if not header:
+        return unit.text
+    return "\n".join(header) + "\n\n" + unit.text
+
+
 def _dedupe_iocs(iocs: list[RawIOC]) -> list[RawIOC]:
     seen: set[tuple[str, str]] = set()
     out: list[RawIOC] = []
@@ -509,6 +692,15 @@ def _mark_superseded(provenance: list[dict], chunked_pages: set[int]) -> int:
         rec = provenance[i]
         if not rec.get("truncated") or rec.get("superseded_by"):
             continue
+        if rec.get("source") == "chunked":
+            # Supersession answers "did a later attempt re-read these pages".
+            # Nothing re-reads a chunk: the chunked path is the last one, and
+            # 2.5 gave its results a page range that would otherwise make a
+            # truncated chunk look covered - by `chunked_pages`, which
+            # contains its own pages, or by a sibling unit that shares its
+            # page range because the candidate cap split it and that assessed
+            # a different set of candidates entirely.
+            continue
         start, end = rec.get("page_start"), rec.get("page_end")
         if start is None or end is None:
             # A chunked result has no page range, so nothing can be shown to
@@ -610,6 +802,130 @@ def _merge_entity(
         stats["conflicts"] += 1
 
 
+def _path_shape(path: dict) -> tuple:
+    """Structural identity of an attack path: its steps, not its slug.
+
+    Separate model calls coin slugs independently, so a shared slug says
+    nothing about whether two batches described the same path - and two
+    different slugs say nothing about whether they described different ones.
+    The step sequence is the only thing that does.
+    """
+    shape = []
+    for step in path.get("steps", []) or []:
+        leads = step.get("leads_to") or []
+        shape.append((
+            str(step.get("technique_id", "")),
+            str(step.get("tactic", "")),
+            tuple(sorted(str(t) for t in leads)),
+        ))
+    return tuple(shape)
+
+
+def _merge_path(
+    path: dict,
+    prov: dict,
+    by_shape: dict,
+    used_ids: set,
+    out: list,
+    stats: dict,
+) -> None:
+    """Fold one reported attack path into the unioned graph.
+
+    The union used to keep the first path to claim a slug and drop every later
+    one that reused it, however different its steps - so two batches that both
+    coined "initial-access-to-exfil" for unrelated paths yielded one path and
+    no record that a second existed.
+
+    Reconciliation is on the step sequence. An id is namespaced with its batch
+    label only when it collides with a structurally different path, so a run
+    whose slugs do not collide - which is every single-batch run - emits
+    exactly the ids it emitted before.
+
+    A superseded partial contributes on the same terms as any other record it
+    supplies: only a path nothing else reported. Its version of a path its own
+    retry restated is not a second path, it is the cut-off draft of one.
+    """
+    label = str(prov.get("label") or "")
+    superseded = bool(prov.get("superseded_by"))
+    shape = _path_shape(path)
+    # An empty shape is not an identity - every path with no steps would share
+    # it - so those fall through to the id rules below.
+    existing = by_shape.get(shape) if shape else None
+    if existing is not None:
+        labels = existing.setdefault("batch_labels", [])
+        if label and label not in labels:
+            labels.append(label)
+        return
+
+    pid = str(path.get("path_id") or "")
+    if superseded and pid in used_ids:
+        return
+
+    record = dict(path)
+    if not pid or pid in used_ids:
+        base = f"{label}:{pid}" if (label and pid) else (
+            pid or f"path-{len(out) + 1}"
+        )
+        candidate = base
+        n = 2
+        while candidate in used_ids:
+            candidate = f"{base}-{n}"
+            n += 1
+        if candidate != pid:
+            record["path_id"] = candidate
+            if pid:
+                record["original_path_id"] = pid
+            stats["paths_namespaced"] += 1
+    record["batch_labels"] = [label] if label else []
+    if superseded:
+        record["recovered_from_partial"] = True
+        stats["recovered_from_partial"] += 1
+    used_ids.add(str(record["path_id"]))
+    if shape:
+        by_shape[shape] = record
+    out.append(record)
+
+
+def _merge_metadata(
+    meta: dict,
+    prov: dict,
+    canonical: dict,
+    actors: list[dict],
+    campaigns: list[dict],
+) -> None:
+    """Fold one batch's report metadata into the canonical record, per field.
+
+    First-wins object-at-a-time discarded every field a later batch filled in
+    as soon as an earlier one had answered any field at all: a batch that
+    recognised only the title took the whole record, and the batch that
+    identified the actor was dropped with it.
+
+    Attribution is also not a scalar property of a report. One report can name
+    two groups, and a later section can qualify what an earlier one asserted.
+    The scalars keep their first value because consumers read them; every
+    actor and campaign named anywhere is collected beside them.
+    """
+    label = prov.get("label")
+    for key, value in meta.items():
+        # An empty value is the model emitting a key it did not answer, so it
+        # neither claims the field nor stops a later batch filling it.
+        if value and not canonical.get(key):
+            canonical[key] = value
+
+    actor = str(meta.get("attributed_actor") or "").strip()
+    if actor and not any(a["name"].lower() == actor.lower() for a in actors):
+        actors.append({
+            "name": actor,
+            "confidence": str(meta.get("attribution_confidence") or ""),
+            "batch_label": label,
+        })
+    campaign = str(meta.get("campaign_name") or "").strip()
+    if campaign and not any(
+        c["name"].lower() == campaign.lower() for c in campaigns
+    ):
+        campaigns.append({"name": campaign, "batch_label": label})
+
+
 def _merge_llm_chunk_results(
     chunk_results: list[dict],
     provenance: list[dict] | None = None,
@@ -638,10 +954,14 @@ def _merge_llm_chunk_results(
     mitre_canonical: dict[tuple[str, str], dict] = {}
     mitre_order: list[tuple[str, str]] = []
     report_meta: dict = {}
+    actors: list[dict] = []
+    campaigns: list[dict] = []
     ag_paths: list[dict] = []
+    ag_shapes: dict[tuple, dict] = {}
+    ag_used_ids: set[str] = set()
     ag_convergence: set[str] = set()
     ag_branches: set[str] = set()
-    stats = {"conflicts": 0, "recovered_from_partial": 0}
+    stats = {"conflicts": 0, "recovered_from_partial": 0, "paths_namespaced": 0}
 
     provenance = provenance or []
     pairs = [
@@ -673,23 +993,31 @@ def _merge_llm_chunk_results(
                 prov, _MITRE_CONFLICT_FIELDS, stats,
             )
 
-        # A superseded partial supplies metadata only if nothing else did:
-        # incomplete beats absent, but it never overrides its own retry.
-        if not report_meta:
-            report_meta = result.get("report_metadata") or {}
+        # Field by field, not object at a time: a superseded partial still
+        # supplies only what nothing else did, but a later batch that names
+        # the actor is no longer discarded because an earlier one named the
+        # title. Actors and campaigns are collected rather than chosen.
+        _merge_metadata(
+            result.get("report_metadata") or {}, prov,
+            report_meta, actors, campaigns,
+        )
 
         # The graph is unioned rather than chosen, so a superseded partial's
-        # paths are kept - 2.3 namespaces the ids that collide here.
+        # paths are kept. Reconciliation is on the steps, not the slug.
         ag = result.get("attack_graph") or {}
         for path in ag.get("paths", []):
-            pid = path.get("path_id")
-            if not any(p.get("path_id") == pid for p in ag_paths):
-                ag_paths.append(path)
+            _merge_path(path, prov, ag_shapes, ag_used_ids, ag_paths, stats)
         ag_convergence.update(ag.get("convergence_points", []))
         ag_branches.update(ag.get("branch_points", []))
 
     merged_iocs = [ioc_canonical[k] for k in ioc_order]
     merged_mitre = [mitre_canonical[k] for k in mitre_order]
+    # Only when something was reported: an empty metadata block stays empty
+    # rather than growing two empty lists nobody wrote.
+    if report_meta or actors or campaigns:
+        report_meta = dict(report_meta)
+        report_meta["actors"] = actors
+        report_meta["campaigns"] = campaigns
     return {
         "refined_iocs": merged_iocs,
         "additional_mitre_techniques": merged_mitre,
@@ -705,6 +1033,7 @@ def _merge_llm_chunk_results(
             "superseded_results": sum(
                 1 for p in provenance if p.get("superseded_by")
             ),
+            "paths_namespaced": stats["paths_namespaced"],
             "occurrences": sum(
                 len(e.get("occurrences", ())) for e in merged_iocs + merged_mitre
             ),
@@ -1952,10 +2281,11 @@ class ThreatIntelIngester:
         # Indicators the canonical verdict rejected while another batch called
         # them real. The rejection stands, but it is not silent.
         rejected_with_dissent: list[str] = []
-        # Text and candidates for the chunked path: the whole document unless
-        # native batches covered some pages, in which case only the failed ones.
-        fallback_text = raw_text
-        fallback_iocs = raw_iocs
+        # Pages the chunked path must cover: the whole document unless native
+        # batches covered some, in which case only the ones that failed. Pages
+        # rather than a prebuilt text blob, because the text and the candidates
+        # have to be chosen together - see _build_chunk_units.
+        fallback_pages = list(range(1, len(page_texts) + 1))
 
         def _record_submitted(iocs: list[RawIOC]) -> None:
             """Remember the candidates going into a prompt, once each.
@@ -2281,33 +2611,34 @@ class ThreatIntelIngester:
                         timings["native_s"], len(native_batch_results),
                     )
                 elif failed_pages:
-                    fallback_text = "\n\n".join(
-                        page_texts[pg - 1] for pg in failed_pages if page_texts[pg - 1]
-                    )
-                    fallback_iocs = _dedupe_iocs([
-                        ioc for pg in failed_pages for ioc in page_iocs[pg - 1]
-                    ])
+                    fallback_pages = list(failed_pages)
                     logger.warning(
                         "[NATIVE] %d call(s) returned usable JSON; %d page(s) (%s) with "
                         "%d candidates fall back to the chunked text path",
                         len(native_batch_results), len(failed_pages),
                         ", ".join(str(pg) for pg in failed_pages[:12])
                         + (" ..." if len(failed_pages) > 12 else ""),
-                        len(fallback_iocs),
+                        sum(len(page_iocs[pg - 1]) for pg in failed_pages),
                     )
 
             # Split large inputs into chunks to stay within LLM context limits.
             # Large PDFs previously caused repeated 503s even with backoff because
             # the monolithic prompt (100 IOCs + 8 kB text) exceeded the model's
             # comfortable input window.  Each chunk call is ~7-10 kB total.
-            ioc_batches = [
-                fallback_iocs[i:i + _MAX_IOC_PER_CHUNK]
-                for i in range(0, max(1, len(fallback_iocs)), _MAX_IOC_PER_CHUNK)
-            ]
-            text_chunks = _chunk_text(fallback_text, _MAX_TEXT_CHARS_PER_CHUNK)
-            n_chunks = max(len(ioc_batches), len(text_chunks))
+            # One split, not two. Candidates used to be sliced by index and
+            # the text split by paragraph, and chunk i paired slice i with
+            # paragraph-chunk i - two orderings with no relationship to each
+            # other, so an appendix indicator was routinely asked about beside
+            # an unrelated narrative section.
+            chunk_units = _build_chunk_units(
+                page_texts, page_iocs, ioc_types,
+                pages=fallback_pages,
+                paged=(artifact.artifact_type == "pdf_report"),
+            )
+            n_chunks = len(chunk_units)
 
             if native_pdf_succeeded:
+                chunk_units = []
                 n_chunks = 0
                 logger.info(
                     "Skipping chunked LLM path — native PDF "
@@ -2315,8 +2646,9 @@ class ThreatIntelIngester:
                 )
 
             logger.info(
-                "Splitting into %d LLM chunk(s) (%d IOC batches, %d text chunks)",
-                n_chunks, len(ioc_batches), len(text_chunks),
+                "Splitting into %d LLM chunk(s) over %d page(s), %d candidate(s)",
+                n_chunks, len(fallback_pages),
+                sum(len(u.iocs) for u in chunk_units),
             )
 
             # Native batch results are merged together with any chunk results
@@ -2324,12 +2656,15 @@ class ThreatIntelIngester:
             chunk_provenance: list[dict] = [dict(p) for p in native_provenance]
             chunks_attempted = n_chunks
             t_chunks = time.monotonic()
-            for i in range(n_chunks):
+            for i, unit in enumerate(chunk_units):
                 t_chunk = time.monotonic()
-                ioc_batch = ioc_batches[i] if i < len(ioc_batches) else []
-                text_chunk = text_chunks[i] if i < len(text_chunks) else ""
+                ioc_batch = unit.iocs
+                # The page label and any gap travel with the text, so the model
+                # can cite a page and is told when a section does not continue
+                # from the one before it.
+                text_chunk = _unit_report_text(unit)
 
-                if not ioc_batch and not text_chunk:
+                if not ioc_batch and not unit.text:
                     continue
 
                 candidates_text = (
@@ -2433,10 +2768,19 @@ class ThreatIntelIngester:
                             )
                             chunk_results.append(parsed)
                             chunk_provenance.append({
-                                "label": f"chunk {i + 1}/{n_chunks}",
+                                # The page label as well as the ordinal: a
+                                # chunk now covers a known page range, so an
+                                # occurrence recorded against it can say where
+                                # in the report it was seen.
+                                "label": (
+                                    f"chunk {i + 1}/{n_chunks}"
+                                    + (f" ({unit.page_label})"
+                                       if unit.page_label else "")
+                                ),
                                 "attempt_id": i + 1,
-                                "page_start": None,
-                                "page_end": None,
+                                "source": "chunked",
+                                "page_start": unit.page_start,
+                                "page_end": unit.page_end,
                                 "truncated": (
                                     bool(llm_response.truncated) or repaired
                                 ),
@@ -2811,6 +3155,13 @@ class ThreatIntelIngester:
                     "attribution_confidence": report_meta.get(
                         "attribution_confidence", ""
                     ),
+                    # Every actor and campaign named anywhere in the report,
+                    # in order of first mention. The scalars above are the
+                    # first of each and are kept for consumers that read
+                    # them; a report describing two groups is not a report
+                    # about whichever one a batch happened to name first.
+                    "actors": list(report_meta.get("actors", [])),
+                    "campaigns": list(report_meta.get("campaigns", [])),
                 },
                 "iocs": filtered_iocs,
                 "mitre_mappings": all_mitre,
@@ -2907,6 +3258,22 @@ class ThreatIntelIngester:
                 + (f" ({conf} confidence)" if conf else "")
                 + (f", campaign: {campaign}" if campaign else "")
                 + "."
+            )
+        # The scalars above carry one of each. Saying so is what stops a
+        # reader taking a single-actor line as the report's whole attribution.
+        others = [
+            a.get("name") for a in meta.get("actors", [])[1:] if a.get("name")
+        ]
+        if others:
+            parts.append(
+                f"Also attributed, elsewhere in the report: {', '.join(others)}."
+            )
+        other_campaigns = [
+            c.get("name") for c in meta.get("campaigns", [])[1:] if c.get("name")
+        ]
+        if other_campaigns:
+            parts.append(
+                f"Other campaigns named: {', '.join(other_campaigns)}."
             )
 
         # IOC counts

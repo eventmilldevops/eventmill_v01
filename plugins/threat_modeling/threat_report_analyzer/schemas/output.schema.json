@@ -62,13 +62,15 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Bulleted or numbered findings lifted from the summary, in document order and bounded at 50. Anything the bound cut is stated in analysis_notes."
           },
           "relevant_techniques": {
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "MITRE ATT&CK technique ids named in the summary, deduplicated in first-appearance order and bounded at 200. Read as \u201cthe techniques this report covers\u201d, so the ordering is stable across identical runs and anything the bound cut is stated in analysis_notes rather than dropped in silence."
           },
           "truncated": {
             "type": "boolean",

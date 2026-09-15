@@ -216,6 +216,25 @@ Generate a final markdown report with:
 Output ONLY the markdown report, no preamble."""
 
 
+# Bounds on the two extracted lists. Raised from 10 and 20 on 2026-09-15:
+# the old values fired on ordinary reports and dropped what they cut without
+# saying so. A cap is defensible - a runaway or adversarial summary should not
+# put an unbounded list into the result - but only a reported one, and these
+# are set where a real report does not reach them.
+def _first_seen(values: list[str]) -> list[str]:
+    """Deduplicate, keeping first-appearance order.
+
+    ``list(set(...))`` was what made the technique list unreproducible: two
+    runs over identical text disagreed about which ids survived the cap,
+    because the cap sliced an unordered collection.
+    """
+    return list(dict.fromkeys(values))
+
+
+_MAX_KEY_FINDINGS: int = 50
+_MAX_RELEVANT_TECHNIQUES: int = 200
+
+
 class ThreatReportAnalyzer:
     """Analyze threat intelligence reports from common bucket.
 
@@ -290,6 +309,9 @@ class ThreatReportAnalyzer:
     # and contributed raw extracted text instead, or a synthesis that failed
     # and left a bare concatenation as the final report.
     _degradations: list[str] | None = None
+
+    # How many entries each capped list left out, by label. Reset per run.
+    _dropped: dict[str, int] | None = None
 
     # Local intake and chunking limits. These are NOT provider limits and
     # must not be read as any: what a vendor accepts lives in
@@ -472,6 +494,11 @@ class ThreatReportAnalyzer:
         self._provenance = []
         self._truncations = []
         self._degradations = []
+        # What the two extraction caps cut, per list. Counted rather than
+        # silently discarded: `relevant_techniques` is read as "the techniques
+        # this report covers", and a list quietly holding twenty of twenty-five
+        # makes that claim false with nothing to show it.
+        self._dropped: dict[str, int] = {}
         # One stamp for every file this run writes, so a run's summary and its
         # chunk summaries sort together in the bucket.
         stamp = self._run_stamp()
@@ -731,8 +758,16 @@ class ThreatReportAnalyzer:
                 final_summary = self._synthesize_summaries(
                     chunk_summaries, report_name, focus_areas, max_words, context
                 )
-                relevant_techniques = list(
-                    {t for cs in chunk_summaries for t in cs.get("techniques", [])}
+                # Also order-stable, and also capped out loud. The per-chunk
+                # cap at _extract_techniques is not the only one a 16-batch
+                # report meets: this union runs after it, so a report could
+                # lose techniques at both levels.
+                relevant_techniques = self._cap(
+                    _first_seen(
+                        [t for cs in chunk_summaries
+                         for t in cs.get("techniques", [])]
+                    ),
+                    _MAX_RELEVANT_TECHNIQUES, "technique",
                 )
             effective_chunk_count = len(chunks)
 
@@ -1079,6 +1114,12 @@ class ThreatReportAnalyzer:
                 f"{coverage['pages_total']} pages could not be read as text "
                 f"(scanned or damaged), so their content is absent from this "
                 f"summary"
+            )
+        for label, count in sorted((self._dropped or {}).items()):
+            notes.append(
+                f"LIST TRUNCATED: {count} {label}(s) were found and left out "
+                f"of this result because the list is capped, so what is listed "
+                f"is not everything the report described"
             )
         notes.extend(f"TRUNCATED OUTPUT: {n}" for n in self._truncations or [])
         notes.extend(f"DEGRADED INPUT: {n}" for n in self._degradations or [])
@@ -1867,6 +1908,26 @@ class ThreatReportAnalyzer:
         else:
             return "Threat Intelligence Report"
 
+    def _cap(self, items: list[str], limit: int, label: str) -> list[str]:
+        """Trim to ``limit``, recording what was cut.
+
+        Both caps used to drop in silence, with nothing counting the remainder
+        and no note reaching analysis_status - so a reader had no way to tell a
+        list that is the whole answer from one that is a fraction of it.
+        """
+        if len(items) <= limit:
+            return items
+        if self._dropped is None:
+            self._dropped = {}
+        dropped = len(items) - limit
+        self._dropped[label] = self._dropped.get(label, 0) + dropped
+        _log = logging.getLogger("eventmill.plugin.threat_report_analyzer")
+        _log.warning(
+            "[CAP] %d %s(s) beyond the limit of %d were dropped from this "
+            "extraction", dropped, label, limit,
+        )
+        return items[:limit]
+
     def _extract_key_findings(self, summary: str) -> list[str]:
         """Extract key findings from summary."""
         findings = []
@@ -1884,10 +1945,20 @@ class ThreatReportAnalyzer:
                 if match:
                     findings.append(match.group(1).strip())
 
-        return findings[:10]  # Limit to 10 findings
+        return self._cap(findings, _MAX_KEY_FINDINGS, "key finding")
 
     def _extract_techniques(self, summary: str) -> list[str]:
-        """Extract MITRE ATT&CK technique IDs from summary."""
+        """Extract MITRE ATT&CK technique IDs from summary, in first-appearance
+        order.
+
+        This used to be ``list(set(techniques))[:20]``. ``set`` has no ordering,
+        so *which* twenty ids survived varied between identical runs over
+        identical text - the one place in either report tool where two runs
+        disagreed about what the report said. A cap is arguable; an
+        unreproducible one is not.
+        """
         # Match patterns like T1234, T1566, etc.
         techniques = re.findall(r"T\d{4}(?:\.\d{3})?", summary)
-        return list(set(techniques))[:20]  # Dedupe and limit
+        return self._cap(
+            _first_seen(techniques), _MAX_RELEVANT_TECHNIQUES, "technique",
+        )

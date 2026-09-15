@@ -668,7 +668,7 @@ class TestTheSchemaDeclaresTheNewEvidence:
         assert "native_attempts" in summary
         assert set(summary["merge_stats"]["properties"]) == {
             "conflicts", "recovered_from_partial", "superseded_results",
-            "occurrences",
+            "occurrences", "paths_namespaced",
         }
 
     def test_merge_stats_keys_match_what_the_merge_returns(self):
