@@ -104,6 +104,18 @@ When LLM is connected, it generates structured markdown summaries with:
 - Detection Opportunities
 - Recommended Security Controls
 
+### Reasoning depth
+
+The whole-document pass runs at `medium` reasoning. Raise it per deployment
+with `EVENTMILL_REPORT_NATIVE_THINKING=low|medium|high` (in
+`~/.eventmill/deploy.env`) — Cloud Run has latency headroom an interactive
+session does not, and reasoning depth is what dominates latency. The budget
+this call asks for is sized from the level, so the two move together. An
+unrecognised value warns and falls back to `medium`.
+
+Section summaries stay at `low` (bulk, repetitive work) and the synthesis pass
+at `high`; both are deliberate and not exposed.
+
 ## Chains
 
 - **To**: `risk_assessment_analyzer`, `attack_path_visualizer`

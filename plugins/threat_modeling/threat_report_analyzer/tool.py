@@ -18,9 +18,11 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from framework.llm.providers import max_output_tokens_for_tier, thinking_reserve_tokens
 from framework.logging.structured import log_llm_interaction
 from framework.plugins.protocol import ArtifactRef, QueryHints
 
@@ -49,6 +51,57 @@ class Chunk:
     source_type: str
     page_start: int | None = None
     page_end: int | None = None
+
+
+# Reasoning depth for the native whole-PDF pass. Pinned rather than left to the
+# provider default, because the defaults disagree — gcp_gemini declares medium
+# and anthropic high — so a call naming no level gets a different depth per
+# vendor for identical work, and a budget sized against one vendor's reserve is
+# wrong for the other. The three levels below are what every provider's heavy
+# tier accepts; "minimal" is declared only by gcp_gemini.
+NATIVE_THINKING_LEVELS = ("low", "medium", "high")
+
+# medium, because this pass runs against a whole document and thinking_level
+# dominates latency — the 180 s client deadline is the real ceiling here, not
+# the token cap.
+DEFAULT_NATIVE_THINKING_LEVEL = "medium"
+
+# Operator override for the above, mirroring EVENTMILL_PROJECTION_THINKING in
+# adversary_path_projector: Cloud Run has latency headroom an interactive
+# session does not, and that is a deployment decision rather than a code edit.
+NATIVE_THINKING_ENV_OVERRIDE = "EVENTMILL_REPORT_NATIVE_THINKING"
+
+
+def _native_thinking_level() -> str:
+    """Reasoning depth for the whole-PDF pass: env override > the constant.
+
+    Read at call time rather than import time so a .env loaded after this
+    module is imported still takes effect, and so tests can set it without
+    reloading. An unusable value warns and falls back rather than failing the
+    run — an operator typo should not cost a summary.
+    """
+    value = (os.environ.get(NATIVE_THINKING_ENV_OVERRIDE) or "").strip().lower()
+    if not value:
+        return DEFAULT_NATIVE_THINKING_LEVEL
+    if value in NATIVE_THINKING_LEVELS:
+        return value
+    logging.getLogger("eventmill.plugin.threat_report_analyzer").warning(
+        "Ignoring %s=%r — must be one of: %s. Using %r.",
+        NATIVE_THINKING_ENV_OVERRIDE, value,
+        ", ".join(NATIVE_THINKING_LEVELS), DEFAULT_NATIVE_THINKING_LEVEL,
+    )
+    return DEFAULT_NATIVE_THINKING_LEVEL
+
+
+def _budget(tier: str, thinking_level: str, content_tokens: int) -> int:
+    """Output budget that leaves room for both thinking and content.
+
+    Gemini spends thinking from the reply budget, so a bare content figure is
+    silently a thinking cap. Ask for the content plus the reserve the provider
+    declares for the level actually requested, bounded by the tier cap.
+    """
+    cap = max_output_tokens_for_tier(tier)
+    return min(cap, content_tokens + thinking_reserve_tokens(thinking_level))
 
 
 SUMMARIZATION_PROMPT_TEMPLATE = """You are a Senior Threat Intelligence Analyst creating a concise reference document.
@@ -164,9 +217,38 @@ class ThreatReportAnalyzer:
     # Other tools discover pre-built summaries by scanning common/generated/.
     GENERATED_BASE = "generated"
 
-    # Intake and chunking limits
-    MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024
-    MAX_PDF_PAGES = 1000
+    # Guard refusals that mean "this provider will not take this document",
+    # as opposed to a transport or model failure. The difference decides
+    # whether falling back to extracted text is a reasonable degradation or a
+    # way of hiding the operator's decision from them: a provider that cannot
+    # read the PDF at all is a choice to make (run it on a provider with
+    # larger limits, or split the document), not a condition to work around
+    # by silently analysing worse input.
+    PROVIDER_LIMIT_REFUSALS = frozenset({
+        "pdf_exceeds_provider_page_limit",
+        "pdf_exceeds_provider_size_limit",
+        "pdf_exceeds_context_at_resolution",
+        "pdf_exceeds_context_at_all_resolutions",
+    })
+
+    # (document_pages, pages_read) from the most recent _split_pdf_into_chunks
+    # call, or None when the text path did not run (native ingestion read the
+    # whole document, so coverage is total by construction).
+    _last_pdf_pages: tuple[int, int] | None = None
+
+    # Local intake and chunking limits. These are NOT provider limits and
+    # must not be read as any: what a vendor accepts lives in
+    # framework/llm/providers/<id>.json and is enforced by the dispatcher's
+    # PDF guard against the provider actually routed to. These two bound what
+    # this process will read off disk with pypdf — a resource ceiling, which
+    # is the plugin's own business.
+    #
+    # They previously held 50 MB / 1000 pages, which are Gemini's figures, and
+    # read as though the plugin were deciding provider policy. Anthropic and
+    # OpenAI accept 100 pages / 32 MB, so the numbers were also wrong for two
+    # of the three vendors.
+    MAX_LOCAL_PDF_BYTES = 200 * 1024 * 1024
+    MAX_LOCAL_PDF_PAGES = 2000
     MAX_PAGES_PER_CHUNK = 100
     MAX_TOKENS_PER_CHUNK = 100_000
     MAX_TEXT_TOKENS_SINGLE_PASS = 150_000
@@ -249,7 +331,21 @@ class ThreatReportAnalyzer:
                 stored = s.get("summary_path")
                 location = f" → {stored}" if stored else ""
                 chunk_info = f", {chunks} chunk(s)" if chunks > 1 else ""
-                return f"Summarized {s['report_path']} ({wc} words{chunk_info}){location}"
+                dropped = s.get("pages_dropped") or 0
+                coverage = ""
+                if dropped:
+                    # Stated first and in full: a reader told only what the
+                    # summary contains cannot tell what was never read.
+                    coverage = (
+                        f" INCOMPLETE COVERAGE: only {s.get('pages_read')} of "
+                        f"{s.get('pages_total')} pages were read; {dropped} "
+                        f"pages were not examined, so a topic missing here may "
+                        f"simply be in the part that was not read."
+                    )
+                return (
+                    f"Summarized {s['report_path']} ({wc} words{chunk_info})"
+                    f"{location}.{coverage}"
+                )
             return "Report summarized"
 
         elif action == "search_reports":
@@ -315,6 +411,13 @@ class ThreatReportAnalyzer:
         file_ext = Path(report_name).suffix.lower()
         _log = logging.getLogger("eventmill.plugin.threat_report_analyzer")
 
+        # Coverage is unknown until something reads the document; a value left
+        # over from a previous run would describe the wrong report.
+        self._last_pdf_pages = None
+        # One stamp for every file this run writes, so a run's summary and its
+        # chunk summaries sort together in the bucket.
+        stamp = self._run_stamp()
+
         # --- Build chunks based on file type ---
         chunks: list[Chunk] = []
 
@@ -332,13 +435,19 @@ class ThreatReportAnalyzer:
                     message=f"Report not found: {report_path}",
                 )
             size_bytes = file_obj.stat().st_size
-            if size_bytes > self.MAX_PDF_SIZE_BYTES:
+            if size_bytes > self.MAX_LOCAL_PDF_BYTES:
+                # A local resource ceiling, deliberately generous. The
+                # provider's own limit is smaller and is enforced downstream
+                # against whichever provider is routed to, so this message
+                # must not quote a vendor figure.
                 return ToolResult(
                     ok=False,
                     error_code="ARTIFACT_TOO_LARGE",
                     message=(
-                        f"PDF exceeds 50 MB limit "
-                        f"({size_bytes // 1024 // 1024} MB): {report_path}"
+                        f"PDF is {size_bytes // 1024 // 1024} MB, above this "
+                        f"tool's local read ceiling of "
+                        f"{self.MAX_LOCAL_PDF_BYTES // 1024 // 1024} MB: "
+                        f"{report_path}. Split the document."
                     ),
                 )
 
@@ -371,6 +480,7 @@ class ThreatReportAnalyzer:
                     file_path=str(file_obj),
                     metadata={"mime_type": "application/pdf"},
                 )
+                native_level = _native_thinking_level()
                 try:
                     native_response = context.llm_query.query_with_document(
                         prompt=native_prompt,
@@ -379,9 +489,10 @@ class ThreatReportAnalyzer:
                             "You are a Senior Threat Intelligence Analyst. "
                             "Produce a well-structured markdown summary."
                         ),
-                        max_tokens=max(2048, min(8192, max_words * 8)),
+                        max_tokens=_budget("heavy", native_level, max_words * 8),
                         hints=QueryHints(
                             tier="heavy",
+                            thinking_level=native_level,
                             prefers_native_file=True,
                         ),
                     )
@@ -408,6 +519,33 @@ class ThreatReportAnalyzer:
                             native_response.model_used,
                             len(native_summary.split()),
                             len(native_techniques),
+                        )
+                    elif (native_response.fallback_reason
+                            in self.PROVIDER_LIMIT_REFUSALS):
+                        # The provider will not take this document. Falling
+                        # back to pypdf text would return a summary that looks
+                        # like every other summary while being built from
+                        # markedly worse input, with the reason visible only
+                        # in the logs. Surface the choice instead.
+                        _log.warning(
+                            "Native PDF refused by provider policy (%s) — "
+                            "not falling back to text | %s",
+                            native_response.fallback_reason,
+                            native_response.error,
+                        )
+                        return ToolResult(
+                            ok=False,
+                            error_code="ARTIFACT_TOO_LARGE",
+                            message=(
+                                f"{native_response.error} "
+                                f"This tool reads the PDF natively, so it "
+                                f"cannot analyse a document the selected "
+                                f"provider will not accept. Either point this "
+                                f"tool at a provider with larger limits "
+                                f"('use gcp_gemini for threat_report_analyzer') "
+                                f"or split {report_path} and summarize the "
+                                f"parts."
+                            ),
                         )
                     else:
                         _log.warning(
@@ -487,7 +625,9 @@ class ThreatReportAnalyzer:
                 )
                 chunk_summaries.append(cs)
                 if len(chunks) > 1:
-                    artifact = self._write_chunk_artifact(cs, report_path, context)
+                    artifact = self._write_chunk_artifact(
+                        cs, report_path, context, stamp,
+                    )
                     if artifact:
                         chunk_artifacts.append(artifact)
 
@@ -510,7 +650,7 @@ class ThreatReportAnalyzer:
         # --- Persist final summary ---
         output_artifacts: list[dict[str, Any]] = list(chunk_artifacts)
         summary_relative = None
-        summary_path = self._summary_output_path(report_path, context)
+        summary_path = self._summary_export_path(report_path, context, stamp)
         if summary_path:
             try:
                 summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -533,7 +673,10 @@ class ThreatReportAnalyzer:
         else:
             # No local mirror — upload directly to GCS
             normalized = report_path.replace("\\", "/")
-            gcs_object = f"{self.GENERATED_BASE}/threat_report_analyzer/{normalized}.summary.md"
+            gcs_object = (
+                f"{self.GENERATED_BASE}/threat_report_analyzer/"
+                f"{self._export_name(normalized, stamp, 'summary.md')}"
+            )
             if self._upload_to_gcs(final_summary, gcs_object, context):
                 bucket_name = self._get_common_bucket_name(context)
                 summary_relative = f"gs://{bucket_name}/{gcs_object}"
@@ -556,6 +699,7 @@ class ThreatReportAnalyzer:
                         "summary_path": summary_relative,
                         "chunk_count": effective_chunk_count,
                         "word_count": word_count,
+                        **self._coverage_fields(),
                         "summary": final_summary,
                         "key_findings": key_findings,
                         "relevant_techniques": relevant_techniques,
@@ -644,15 +788,80 @@ class ThreatReportAnalyzer:
         generated.mkdir(parents=True, exist_ok=True)
         return generated
 
-    def _summary_output_path(self, report_relative_path: str, context: Any) -> Path | None:
-        """Derive the .summary.md output path, mirroring the source directory structure."""
+    @staticmethod
+    def _run_stamp() -> str:
+        """UTC stamp identifying one run's exports.
+
+        Basic ISO 8601, so it sorts lexicographically in the order it sorts
+        chronologically — which is what a bucket listing gives you.
+        """
+        return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    @staticmethod
+    def _export_name(normalized: str, stamp: str, suffix: str) -> str:
+        """``<source path>.<stamp>.<suffix>`` for one exported file.
+
+        The stamp goes before the suffix, not after, so anything globbing for
+        ``*.summary.md`` keeps matching. Runs no longer overwrite each other:
+        the same report summarised twice leaves both copies, which is the
+        intent — storage is cheap and a replaced summary cannot be compared
+        against the one it replaced.
+        """
+        return f"{normalized}.{stamp}.{suffix}"
+
+    def _coverage_fields(self) -> dict[str, Any]:
+        """Page coverage for the report just processed.
+
+        Empty when nothing measured it, which means native ingestion read the
+        whole document — coverage is total by construction there and claiming
+        a page count the plugin never counted would be worse than saying
+        nothing.
+        """
+        if not self._last_pdf_pages:
+            return {}
+        document_pages, pages_read = self._last_pdf_pages
+        return {
+            "pages_total": document_pages,
+            "pages_read": pages_read,
+            "pages_dropped": max(0, document_pages - pages_read),
+        }
+
+    def _summary_export_path(
+        self, report_relative_path: str, context: Any, stamp: str,
+    ) -> Path | None:
+        """Where this run writes its summary, mirroring the source directory."""
         generated = self._get_generated_path(context)
         if generated is None:
             return None
         normalized = report_relative_path.replace("\\", "/")
-        output = generated / (normalized + ".summary.md")
+        output = generated / self._export_name(normalized, stamp, "summary.md")
         output.parent.mkdir(parents=True, exist_ok=True)
         return output
+
+    def _summary_output_path(self, report_relative_path: str, context: Any) -> Path | None:
+        """The newest existing summary for a report, or None if there is none.
+
+        Used to answer "has this been summarised?", which a stamped filename
+        cannot answer by existence check alone. Unstamped summaries written
+        before stamping are still found, so nothing already in the bucket
+        becomes invisible.
+        """
+        generated = self._get_generated_path(context)
+        if generated is None:
+            return None
+        normalized = report_relative_path.replace("\\", "/")
+        legacy = generated / (normalized + ".summary.md")
+        stamped = sorted(
+            (generated / normalized).parent.glob(
+                Path(normalized).name + ".*.summary.md"
+            ),
+            reverse=True,
+        )
+        # Exclude chunk summaries, which share the prefix.
+        stamped = [p for p in stamped if ".chunk_" not in p.name]
+        if stamped:
+            return stamped[0]
+        return legacy
 
     def _get_common_bucket_name(self, context: Any) -> str:
         """Return the common GCS bucket name from context config or environment.
@@ -791,11 +1000,24 @@ class ThreatReportAnalyzer:
         chunks: list[Chunk] = []
         try:
             reader = pypdf.PdfReader(str(file_path))
-            total_pages = min(len(reader.pages), self.MAX_PDF_PAGES)
-            _log.info(
-                "PDF %s: %d pages total, processing up to %d",
-                file_path.name, len(reader.pages), total_pages,
-            )
+            document_pages = len(reader.pages)
+            total_pages = min(document_pages, self.MAX_LOCAL_PDF_PAGES)
+            # Recorded so the caller can report coverage. A summary built from
+            # part of a report must say so: "not mentioned" and "never read"
+            # are different answers, and only one of them is about the report.
+            self._last_pdf_pages = (document_pages, total_pages)
+            if total_pages < document_pages:
+                _log.warning(
+                    "PDF %s: read %d of %d pages — pages %d-%d were NOT "
+                    "examined and nothing in them reaches this summary. "
+                    "Split the document to cover it fully.",
+                    file_path.name, total_pages, document_pages,
+                    total_pages + 1, document_pages,
+                )
+            else:
+                _log.info(
+                    "PDF %s: %d pages, all read", file_path.name, document_pages,
+                )
             for start in range(0, total_pages, max_pages):
                 end = min(start + max_pages, total_pages)
                 texts = []
@@ -895,7 +1117,7 @@ class ThreatReportAnalyzer:
                 focus_areas=", ".join(focus_areas) if focus_areas else "General threat overview",
                 content=chunk.content,
             )
-            out_tokens = max(2048, min(8192, max_words * 8))  # ~8 chars/token
+            out_tokens = _budget("light", "low", max_words * 8)  # ~8 chars/token
         else:
             prompt = CHUNK_SUMMARIZATION_PROMPT_TEMPLATE.format(
                 report_name=report_name,
@@ -904,7 +1126,7 @@ class ThreatReportAnalyzer:
                 focus_areas=", ".join(focus_areas) if focus_areas else "General threat overview",
                 content=chunk.content,
             )
-            out_tokens = 3072
+            out_tokens = _budget("light", "low", 3072)
         summary_text = chunk.content[:3000]
         techniques: list[str] = []
         if context and hasattr(context, "llm_query") and context.llm_query:
@@ -973,8 +1195,8 @@ class ThreatReportAnalyzer:
                 # the pass that earns the heavy tier (the manifest default).
                 response = context.llm_query.query_text(
                     prompt=prompt,
-                    max_tokens=4096,
-                    hints=QueryHints(tier="heavy", needs_reasoning=True),
+                    max_tokens=_budget("heavy", "high", max_words * 8),
+                    hints=QueryHints(tier="heavy", thinking_level="high"),
                 )
                 log_llm_interaction(
                     prompt=f"[tra synthesis] {prompt[:500]}",
@@ -993,16 +1215,22 @@ class ThreatReportAnalyzer:
         chunk_summary: dict[str, Any],
         report_path: str,
         context: Any,
+        stamp: str,
     ) -> dict[str, Any] | None:
-        """Persist a chunk summary to disk (or GCS) and return its artifact descriptor."""
+        """Persist a chunk summary to disk (or GCS) and return its artifact descriptor.
+
+        Takes the run's *stamp* rather than making its own, so every file one
+        run writes carries the same one and they group together in the bucket.
+        """
         _log = logging.getLogger("eventmill.plugin.threat_report_analyzer")
         idx = chunk_summary["chunk_index"]
         normalized = report_path.replace("\\", "/")
+        suffix = f"chunk_{idx:03d}.summary.md"
         generated = self._get_generated_path(context)
 
         if generated is not None:
             # Local mirror path
-            chunk_file = generated / f"{normalized}.chunk_{idx:03d}.summary.md"
+            chunk_file = generated / self._export_name(normalized, stamp, suffix)
             chunk_file.parent.mkdir(parents=True, exist_ok=True)
             try:
                 chunk_file.write_text(chunk_summary["summary"], encoding="utf-8")
@@ -1032,7 +1260,10 @@ class ThreatReportAnalyzer:
                 return None
         else:
             # No local mirror — upload chunk to GCS
-            gcs_object = f"{self.GENERATED_BASE}/threat_report_analyzer/{normalized}.chunk_{idx:03d}.summary.md"
+            gcs_object = (
+                f"{self.GENERATED_BASE}/threat_report_analyzer/"
+                f"{self._export_name(normalized, stamp, suffix)}"
+            )
             if self._upload_to_gcs(chunk_summary["summary"], gcs_object, context):
                 bucket_name = self._get_common_bucket_name(context)
                 return {

@@ -28,6 +28,9 @@
         "properties": {
           "report_path": {"type": "string"},
           "word_count": {"type": "integer"},
+          "pages_total": {"type": "integer", "description": "Pages the source PDF has. Absent when native ingestion read the whole document, where coverage is total by construction."},
+          "pages_read": {"type": "integer", "description": "Pages actually examined on the text path. Equal to pages_total unless the local page ceiling truncated the read."},
+          "pages_dropped": {"type": "integer", "description": "pages_total - pages_read. Non-zero means the summary was built from part of the report, so a topic's absence is not evidence it is absent from the document."},
           "summary": {"type": "string"},
           "key_findings": {
             "type": "array",

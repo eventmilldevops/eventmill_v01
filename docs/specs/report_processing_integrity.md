@@ -1,7 +1,8 @@
 # Plan — report processing integrity
 
 **Date:** 2026-09-15
-**Status:** proposed, nothing built
+**Status:** Stage 1.1 implemented 2026-09-15 (`docs/change_log/2026-09-15-analyzer-output-budgets.md`).
+Stages 1.2-1.7, 2, 3 and 4 are still proposed, nothing built.
 **Parent review:** `docs/change_log/2026-09-15-chunking-integrity-review.md` —
 the eight findings, their verification, and the four corrections to the
 external analysis are settled there and are not restated.
@@ -108,7 +109,13 @@ testable with synthetic `LLMResponse` objects and no network.
 **Estimated size:** one change set, ~1 day. **This is the recommended next
 piece of work, and the recommended stopping point before reassessing.**
 
+**Progress:** 1.1 done. 1.2-1.7 outstanding.
+
 ### 1.1 — Size every analyzer LLM budget from the provider's declared reserve
+
+**Status: DONE, 2026-09-15.** Landed as written except for step 4's native
+level — see "Correction found in implementation" below. Full record in
+`docs/change_log/2026-09-15-analyzer-output-budgets.md`.
 
 **Where:** `tra:441` (native), `tra:1075` (section), `tra:1144` (synthesis).
 **Currently:** three bare integer constants, no reserve subtracted, no import
@@ -154,6 +161,51 @@ plugin declares an explicit `thinking_level` on every `QueryHints` it builds.
 
 **Done when:** no analyzer call passes a `max_tokens` smaller than
 `thinking_reserve_tokens()` for its own thinking level.
+
+**Met.** Budgets now run 7,168-48,768 against a 65,536 tier cap; every one was
+previously below the reserve for its own level. 14 tests in
+`plugins/threat_modeling/threat_report_analyzer/tests/test_output_budget.py`;
+full suite 1191 passing, up from the 1177 baseline. Mutation-checked: 7 of the
+14 fail when the change is reverted.
+
+#### Correction found in implementation
+
+Two things in this step were wrong as written.
+
+**There are four call sites, not three.** The single-pass branch of
+`_summarize_chunk` carries its own copy of the same
+`max(2048, min(8192, max_words * 8))` constant. It is now
+`_budget("light", "low", max_words * 8)`.
+
+**Step 4's native `"medium"` is `gcp_gemini`'s default applied to every
+vendor.** The step justified it as preserving today's behaviour, but the
+manifests disagree: `gcp_gemini`, `openai` and both daybreak ids declare
+`medium`, and `anthropic` declares **`high`**. `anthropic.py:71-75` sends no
+effort control when `thinking_level` is `None` and `needs_reasoning` is
+`False`, so Anthropic's own default applies today. Pinning `"medium"` would
+have silently demoted the native pass whenever the operator routed this plugin
+to Anthropic — one vendor's figure applied to all of them, which is the defect
+class this step's own **Do not** warns against.
+
+The plugin cannot fix this by reading the routed provider: `shell.py:2982-2984`
+makes the wrapper "the one place a plugin cannot reach either of them", and
+`QueryHints` must not carry a provider. The plugin owns reasoning depth, the
+operator owns the vendor, so the level is pinned and vendor-independent, with a
+deployment override in the shape of `EVENTMILL_PROJECTION_THINKING`:
+
+```
+EVENTMILL_REPORT_NATIVE_THINKING=low|medium|high   # default: medium
+```
+
+resolved once per call into a local that feeds both the budget and the hint, so
+they cannot drift. Only those three levels are offered — `minimal` is declared
+solely by `gcp_gemini` and is a 400 on `gemini-3.8-flash` and both `gpt-5.6`
+models.
+
+**Carry this forward:** any later step that pins a `thinking_level`,
+`media_resolution` or token figure must check it against every provider
+manifest, not just the default one. Stage 3.1's recalibration and Stage 3.6's
+retry budgets are both exposed to this.
 
 ### 1.2 — Read `truncated` at the four call sites that ignore it
 
@@ -506,6 +558,7 @@ Stage 1 ──► reassess ──► Stage 2 ──► reassess ──► [Appen
 
 - **Stage 1 alone removes every failure that currently misleads an operator.**
   It is the recommended next change set and a legitimate stopping point.
+  1.1 has landed; 1.2-1.7 are what remain of it.
 - Stage 2 is independently valuable and does not depend on Stage 3.
 - Stage 3 without Appendix A is unmeasurable. Treat the gate as hard.
 
