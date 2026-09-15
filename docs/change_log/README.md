@@ -21,9 +21,32 @@ Whether a long threat report survives chunking with its evidence intact. Plan:
 |---|---|---|
 | 09-15 | `2026-09-15-threat-report-analyzer-pdf-alignment.md` | Provider limits out of plugin code; provider refusals no longer downgrade silently; page coverage reported; stamped exports; the plugin's first 18 tests |
 | 09-15 | `2026-09-15-chunking-integrity-review.md` | **Review only, no code changed.** Eight findings verified against the tree, four corrections to the external analysis, and the budget-starvation cause it missed |
+| 09-15 | `2026-09-15-analyzer-output-budgets.md` | **Stage 1.1.** Every analyzer call was sized *below* the thinking reserve for the level it requested, so thinking could consume the whole budget and return empty text with `ok=True`. Budgets now read the provider manifest. Also corrects the plan's own recommendation: its native `"medium"` was Gemini's default, which would have silently demoted Anthropic |
+| 09-15 | `2026-09-15-truncation-is-recorded.md` | **Stage 1.2.** Four call sites discarded `LLMResponse.truncated`; the ingester's text path also dropped the bracket-repair flag. Both signals are read now, and the affected chunk or page range is named |
+| 09-15 | `2026-09-15-section-status-and-substitution.md` | **Stage 1.3.** Raw pypdf text was initialised into `summary`, so a failed section was persisted to a file named `.summary.md` and fed to synthesis as though a model had written it. Sections now carry `complete/partial/empty/failed`, and substitutions are labelled everywhere they travel |
+| 09-15 | `2026-09-15-analysis-status.md` | **Stage 1.4.** One `analysis_status` per run, stated *first* — `summarize_for_llm` is capped at 2000 characters and truncates from the end, so the warnings were the part being cut |
+| 09-15 | `2026-09-15-chunk-failures-and-rejection.md` | **Stage 1.5.** `if not refined_iocs:` reinstated the exact indicators the model had rejected, as a regex baseline. Split from "refinement never ran". Per-chunk failures also reach the result now, closing a Goal A gap 1.4 left open |
+| 09-15 | `2026-09-15-persisted-provenance-and-page-outcomes.md` | **Stages 1.6 + 1.7.** Coverage and status are written into the exports, not just the result; an unreadable page no longer counts as read, and a blank one is not a defect. **Stage 1 complete** |
+| 09-15 | `2026-09-15-unassessed-candidates-and-units.md` | **Post-Stage-1, found by running the tools.** The rejection note counted verdicts returned and called them "all candidates"; coverage counted lines and named them pages; the analyzer's export stated no page count on the native path. Three Goal A failures a deterministic review could not catch |
 
-**Next:** Stage 1 of the plan — incomplete work is never reported as complete.
-Seven steps, no schema breaks, no live model calls needed to test it.
+**Stage 1 is complete.** Goal A — *incomplete work is never reported as
+complete* — holds for both plugins. Suite went 1177 → 1319.
+
+**The seven steps were verified on control flow alone, and the first live run
+found three more Goal A failures** (last row above). A deterministic review is
+necessary and not sufficient: **run the tools before calling a stage done.**
+That run also gave Stage 3.1 its first calibration point — a 154-page document
+estimated at 2105s finished in ~260s, 8.1x pessimistic.
+
+**Next:** the plan's recommended stopping point is here, before Stage 2
+(*evidence the model produced is never destroyed* — the first-wins merge, the
+partial that beats its own successful retry, `path_id` collisions across
+batches). Stage 3 stays hard-gated on the Appendix A fixture set.
+
+Two items carried out of Stage 1 and still open: native batch outcomes sit
+outside `analysis_status` (Stage 2.1's subject), and the
+`adversary_path_projector` run-group ordering defect diagnosed in
+`2026-09-15-analysis-status.md`, which is unrelated to this plan.
 
 ## Multi-provider LLM support — 2026-09-13/14
 

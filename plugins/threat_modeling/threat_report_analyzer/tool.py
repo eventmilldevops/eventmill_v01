@@ -272,6 +272,12 @@ class ThreatReportAnalyzer:
     # inventing per-page counts it never made would be worse than silence.
     _last_pdf_page_outcomes: dict[str, int] | None = None
 
+    # Page count of a PDF read natively, where no per-page extraction ran.
+    # Native ingestion sends the whole document, so "all of them" is true by
+    # construction — but the export still has to say how many that was, or a
+    # reader cannot tell a 9-page advisory from a 154-page report.
+    _native_pages: int | None = None
+
     # Who answered, for this run. An export outlives the session, and a summary
     # read back from the bucket with no attribution cannot be compared against
     # another vendor's, or re-run against the same one.
@@ -462,6 +468,7 @@ class ThreatReportAnalyzer:
         # over from a previous run would describe the wrong report.
         self._last_pdf_pages = None
         self._last_pdf_page_outcomes = None
+        self._native_pages = None
         self._provenance = []
         self._truncations = []
         self._degradations = []
@@ -502,6 +509,10 @@ class ThreatReportAnalyzer:
                         f"{report_path}. Split the document."
                     ),
                 )
+
+            # Counted before deciding how to read it, so the export can state
+            # the document's size whichever path runs.
+            self._native_pages = self._pdf_page_count(file_obj)
 
             # Attempt native PDF ingestion before text extraction
             if (context and hasattr(context, "llm_query") and context.llm_query
@@ -936,6 +947,19 @@ class ThreatReportAnalyzer:
             self._truncations = []
         self._truncations.append(label)
 
+    @staticmethod
+    def _pdf_page_count(file_path: Path) -> int | None:
+        """How many pages the PDF has, or None if it cannot be read.
+
+        Cheap: pypdf parses the page tree without extracting any text. This
+        counts what exists — it is not a claim about what was read.
+        """
+        try:
+            import pypdf
+            return len(pypdf.PdfReader(str(file_path)).pages)
+        except Exception:
+            return None
+
     def _note_model(self, response: Any) -> None:
         """Record which provider and model answered, once per distinct pair."""
         model = getattr(response, "model_version", None) or getattr(
@@ -985,6 +1009,15 @@ class ThreatReportAnalyzer:
                     if coverage.get("pages_dropped") else ""
                 )
                 + "  "
+            )
+        elif self._native_pages:
+            # Native ingestion sent the whole document, so every page reached
+            # the model. Stated differently from the extracted case because it
+            # is a different measurement: no page-level text extraction ran,
+            # so there is nothing to report as blank or unreadable.
+            lines.append(
+                f"> **Pages:** {self._native_pages} of {self._native_pages}, "
+                f"read natively as a whole document (no text extraction)  "
             )
         return "\n".join(lines) + "\n\n---\n\n"
 

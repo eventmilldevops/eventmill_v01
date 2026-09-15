@@ -87,6 +87,12 @@ class MockExecutionContext:
     limits: dict = field(default_factory=dict)
 
 
+# Every IP the fixture report contains. A stub that answers about only
+# some of them is a partial assessment, which the run now reports as such
+# — so a test about rejection or a clean run has to answer about all.
+ALL_CANDIDATES = ["198.51.100.7", "203.0.113.9", "192.0.2.44"]
+
+
 def _reply(values, false_positive=False):
     return json.dumps({
         "refined_iocs": [
@@ -171,12 +177,12 @@ class TestAllCandidatesRejected:
         assert summary["ingestion_mode"] == "llm", "not the regex baseline"
 
     def test_the_empty_result_is_reported_as_complete(self, tool_instance, run):
-        llm = _ScriptedLLM([_Resp(text=_reply(["198.51.100.7"], True))])
+        llm = _ScriptedLLM([_Resp(text=_reply(ALL_CANDIDATES, True))])
         summary = run(tool_instance, llm).result["summary"]
         assert summary["analysis_status"] == "complete"
 
     def test_it_says_the_emptiness_is_the_assessment(self, tool_instance, run):
-        llm = _ScriptedLLM([_Resp(text=_reply(["198.51.100.7"], True))])
+        llm = _ScriptedLLM([_Resp(text=_reply(ALL_CANDIDATES, True))])
         result = run(tool_instance, llm)
         summary = result.result["summary"]
         assert summary["candidates_rejected"] >= 1
@@ -187,7 +193,7 @@ class TestAllCandidatesRejected:
         assert "NO INDICATORS ACCEPTED" in tool_instance.summarize_for_llm(result)
 
     def test_accepted_candidates_still_come_through(self, tool_instance, run):
-        llm = _ScriptedLLM([_Resp(text=_reply(["198.51.100.7"], False))])
+        llm = _ScriptedLLM([_Resp(text=_reply(ALL_CANDIDATES, False))])
         result = run(tool_instance, llm)
         assert result.result["iocs"], "a normal run is unaffected"
         assert result.result["summary"]["analysis_status"] == "complete"
@@ -229,7 +235,7 @@ class TestRefinementUnavailable:
 
 class TestChunkFailuresAreCounted:
     def test_a_clean_run_reports_no_failures(self, tool_instance, run):
-        llm = _ScriptedLLM([_Resp(text=_reply(["198.51.100.7"]))])
+        llm = _ScriptedLLM([_Resp(text=_reply(ALL_CANDIDATES))])
         summary = run(tool_instance, llm).result["summary"]
         assert summary["chunks_failed"] == 0
         assert summary["analysis_status"] == "complete"
@@ -315,3 +321,81 @@ class TestPartialChunkFailureIsNotComplete:
             },
         })()
         assert tool_instance.summarize_for_llm(result).startswith("PARTIAL")
+
+
+# ---------------------------------------------------------------------------
+# Candidates the model never answered about
+# ---------------------------------------------------------------------------
+
+
+class TestUnassessedCandidates:
+    """The count of rejections says nothing about candidates the model never
+    mentioned. Rejecting three of three is an assessment; rejecting three of
+    forty is not, and both used to report identically as "complete"."""
+
+    def test_a_partial_verdict_is_not_a_complete_assessment(
+        self, tool_instance, run,
+    ):
+        # Three candidates in the report, a verdict on one.
+        llm = _ScriptedLLM([_Resp(text=_reply(["198.51.100.7"], True))])
+        summary = run(tool_instance, llm).result["summary"]
+        assert summary["candidates_unassessed"] == 2
+        assert summary["analysis_status"] == "partial", (
+            "two candidates were neither accepted nor ruled out"
+        )
+
+    def test_the_gap_is_named(self, tool_instance, run):
+        llm = _ScriptedLLM([_Resp(text=_reply(["198.51.100.7"], True))])
+        result = run(tool_instance, llm)
+        notes = result.result["summary"]["analysis_notes"]
+        assert any(n.startswith("UNASSESSED CANDIDATES") for n in notes)
+        assert "UNASSESSED CANDIDATES" in tool_instance.summarize_for_llm(result)
+
+    def test_a_full_verdict_reports_none_unassessed(self, tool_instance, run):
+        llm = _ScriptedLLM([_Resp(text=_reply(ALL_CANDIDATES, True))])
+        summary = run(tool_instance, llm).result["summary"]
+        assert summary["candidates_unassessed"] == 0
+        assert summary["analysis_status"] == "complete"
+
+    def test_the_rejection_note_counts_verdicts_not_candidates(
+        self, tool_instance, run,
+    ):
+        """It said "all N candidate(s)" while N was what came back, so a
+        verdict on 3 of 40 read as an assessment of everything."""
+        llm = _ScriptedLLM([_Resp(text=_reply(["198.51.100.7"], True))])
+        notes = run(tool_instance, llm).result["summary"]["analysis_notes"]
+        rejection = next(n for n in notes if n.startswith("NO INDICATORS"))
+        assert "the model assessed 1 candidate" in rejection
+        assert "all 1" not in rejection
+
+    def test_technique_matches_are_not_counted_as_unassessed(
+        self, tool_instance, run, tmp_path,
+    ):
+        """mitre_technique candidates are asked for as techniques, not as
+        indicators, so their absence from refined_iocs is correct."""
+        report = tmp_path / "report.txt"
+        report.write_text(
+            "T1566 and T1078 and T1027 seen; beaconing to 198.51.100.7.\n",
+            encoding="utf-8",
+        )
+        llm = _ScriptedLLM([_Resp(text=_reply(["198.51.100.7"], False))])
+        summary = run(tool_instance, llm).result["summary"]
+        assert summary["candidates_unassessed"] == 0
+
+
+class TestCoverageUnit:
+    """A text artifact is measured in lines. Reporting 114 lines as 114 pages
+    is how a summary gets mistaken for the report it summarises."""
+
+    def test_a_text_artifact_is_counted_in_lines(self, tool_instance, run):
+        llm = _ScriptedLLM([_Resp(text=_reply(ALL_CANDIDATES, False))])
+        result = run(tool_instance, llm)
+        assert result.result["summary"]["coverage_unit"] == "lines"
+
+    def test_the_note_names_the_unit(self):
+        note = _tool_mod._analysis_fields(
+            ingestion_mode="llm", pages_total=114, pages_read=40,
+            truncated_chunks=[], unit="lines",
+        )["analysis_notes"][0]
+        assert "40 of 114 lines" in note
+        assert "pages" not in note

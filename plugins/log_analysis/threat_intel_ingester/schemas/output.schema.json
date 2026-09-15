@@ -322,6 +322,18 @@
             "candidates_rejected": {
               "type": "integer",
               "description": "Candidates the model assessed as false positives. When every candidate is rejected the IOC list is legitimately empty and ingestion_mode stays 'llm'."
+            },
+            "candidates_unassessed": {
+              "type": "integer",
+              "description": "Regex candidates the model was given but returned no verdict on \u2014 neither accepted nor ruled out. Non-zero makes analysis_status partial. mitre_technique matches are excluded: they are requested as techniques, not indicators."
+            },
+            "coverage_unit": {
+              "type": "string",
+              "enum": [
+                "pages",
+                "lines"
+              ],
+              "description": "What pages_total/pages_read count. A PDF is measured in pages; every other artifact type in lines. Without this a 114-line summary reads as a 114-page report."
             }
           }
         }

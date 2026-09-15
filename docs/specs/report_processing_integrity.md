@@ -7,7 +7,9 @@
 `2026-09-15-section-status-and-substitution.md`,
 `2026-09-15-analysis-status.md`,
 `2026-09-15-chunk-failures-and-rejection.md`,
-`2026-09-15-persisted-provenance-and-page-outcomes.md`.
+`2026-09-15-persisted-provenance-and-page-outcomes.md`,
+`2026-09-15-unassessed-candidates-and-units.md` (post-Stage-1 repairs
+found by running the tools).
 Stages 2, 3 and 4 are still proposed, nothing built.
 Full suite **1308 passing**, from a 1177 baseline before Stage 1.
 **Parent review:** `docs/change_log/2026-09-15-chunking-integrity-review.md` —
@@ -229,6 +231,15 @@ Both state it in `summarize_for_llm`. These are shaped so **1.4 can absorb them
 into `analysis_status` / `analysis_notes` without a schema break** — 1.2's test
 criterion refers to a status field that 1.4 introduces, so until then these
 fields are the record.
+
+**Amended 2026-09-15 by a live run.** The rejection note counted verdicts
+the model *returned* and called them "all candidates", with nothing reconciling
+that against what it was *given*. Rejecting three of three is an assessment;
+rejecting three of forty is not, and both reported `complete`.
+`candidates_unassessed` now closes it — see
+`docs/change_log/2026-09-15-unassessed-candidates-and-units.md`. **Stage 2 work
+on the merge must keep this reconciliation intact**, since 2.2's occurrence
+records change what "returned a verdict" means.
 
 **Note for 1.4:** `_parse_llm_json` (`ti:532`) still exists and still discards
 the repair flag; it is retained only because `test_contract.py:1302` exercises
@@ -466,13 +477,33 @@ and reporting it as a defect trains operators to ignore the field.
 `extract_text()` raises must report `pages_read=1, pages_empty=1,
 pages_extract_failed=1` and status `partial`.
 
-### Stage 1 acceptance
+### Stage 1 acceptance — **MET, 2026-09-15**
 
-- Full suite green (baseline: **1177 passing** as of 2026-09-15).
-- New tests in `plugins/threat_modeling/threat_report_analyzer/tests/` and a
-  new `tests/` directory under `threat_intel_ingester` if none exists.
-- No live model calls required by any new test.
-- A dated entry in `docs/change_log/`.
+- Full suite green: **1308 passing**, from the 1177 baseline. ✔
+- New tests in both plugins — `test_output_budget`, `test_truncation`,
+  `test_section_status`, `test_analysis_status`,
+  `test_page_outcomes_and_provenance` (`tra`); `test_truncation`,
+  `test_analysis_status`, `test_chunk_failures`, `test_persisted_coverage`
+  (`ti`, which already had a `tests/` directory). ✔
+- No live model calls required by any new test. ✔
+- A dated entry in `docs/change_log/` per step, indexed in its README. ✔
+
+Beyond the stated bar, every step was **mutation-checked**: the change was
+reverted and the new tests were confirmed to fail on the defect rather than
+merely pass on the fix.
+
+**Amended 2026-09-15.** Stage 1 was signed off on control flow alone, and
+the first live run found three defects it could not have caught: a note that
+overclaimed assessment, coverage counting lines while naming pages, and an
+export that stated no page count on the native path. All three are Goal A
+failures, and all three are now fixed. The lesson for Stage 2 is that a
+deterministic review is necessary and not sufficient — **run the tools before
+declaring a stage done.**
+
+**Not covered by any of this:** no live model requests were made at any point
+in Stage 1. Every conclusion is about control flow. How often these failures
+fire against real reports, and whether Stage 1.1's budget sizing actually
+removes the starvation in practice, are unmeasured.
 
 ---
 
@@ -595,6 +626,12 @@ Build Appendix A. Record, for the current code, a baseline result per fixture.
 Only then proceed.
 
 ### 3.1 — Recalibrate the latency model before changing boundaries
+
+**Calibration data, 2026-09-15 (live).** A 154-page PDF planned 16 native
+batches at **est. 2105s** and completed in **~260s** — **8.1x pessimistic**,
+against the ~6.3x previously recorded. The estimate also exceeded the 600s
+plugin timeout, so a slightly larger document would be refused work it can
+comfortably do. One data point, not a calibration set.
 
 **Where:** `profile:43-62`.
 
@@ -739,6 +776,16 @@ not either model output as ground truth.**
 
 Every line reference in this plan, so it can be re-verified after the code
 moves. Tree: `e1dda3a` plus the uncommitted analyzer changes.
+
+> **STALE AFTER STAGE 1 — do not trust these numbers.** Stage 1 added roughly
+> 250 lines to `tra` and 120 to `ti`, so every `tra:` reference below is off by
+> well over 100 lines and the `ti:` ones by tens. The *subjects* are still
+> correct and are what this table is for. Re-derive the line by grepping for
+> the construct before citing it — the Stage 1.2 work found the same drift and
+> re-derived all four of its sites that way. Several referenced constructs have
+> also changed shape: `ti:2011`'s `_parse_llm_json` call is now
+> `_parse_llm_json_result`, and `tra`'s `summary_text` initialiser no longer
+> holds the raw excerpt.
 
 | Subject | Location |
 |---|---|

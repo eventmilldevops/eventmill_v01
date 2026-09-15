@@ -538,7 +538,9 @@ def _analysis_fields(
     chunks_attempted: int = 0,
     chunks_failed: int = 0,
     candidates_rejected: int = 0,
+    candidates_unassessed: int = 0,
     accepted_none: bool = False,
+    unit: str = "pages",
 ) -> dict:
     """One status for the whole ingestion, with the reasons behind it.
 
@@ -554,8 +556,11 @@ def _analysis_fields(
     notes: list[str] = []
     dropped = max(0, (pages_total or 0) - (pages_read or 0))
     if dropped:
+        # `unit` because a text artifact is measured in lines, not pages, and
+        # a coverage figure that names the wrong unit invites a reader to think
+        # a 114-line summary was a 114-page report.
         notes.append(
-            f"INCOMPLETE COVERAGE: only {pages_read} of {pages_total} pages "
+            f"INCOMPLETE COVERAGE: only {pages_read} of {pages_total} {unit} "
             f"were read, so absence of an indicator here is not evidence it is "
             f"absent from the report"
         )
@@ -578,11 +583,22 @@ def _analysis_fields(
     # Not a defect and not a degradation: the model looked at every candidate
     # and rejected all of them. Said plainly so an empty IOC list is not read
     # as a failure to produce one.
-    if accepted_none:
+    # Candidates the model was given but never answered about. Reported before
+    # the rejection note, because it changes what that note means: rejecting
+    # three of three is an assessment, rejecting three of forty is not.
+    if candidates_unassessed:
         notes.append(
-            f"NO INDICATORS ACCEPTED: all {candidates_rejected} candidate(s) "
-            f"were assessed as false positives; the empty result is the "
-            f"assessment, not a failure to produce one"
+            f"UNASSESSED CANDIDATES: {candidates_unassessed} indicator "
+            f"candidate(s) received no verdict from the model, so they are "
+            f"neither accepted nor ruled out"
+        )
+    if accepted_none:
+        # Deliberately says "the model assessed N" rather than "all N": this
+        # counts verdicts returned, and the line above carries what was missed.
+        notes.append(
+            f"NO INDICATORS ACCEPTED: the model assessed {candidates_rejected} "
+            f"candidate(s) and judged every one a false positive; that empty "
+            f"result is the assessment, not a failure to produce one"
         )
 
     if ingestion_mode == "regex_only":
@@ -1676,6 +1692,14 @@ class ThreatIntelIngester:
         # every candidate is a real answer, not a failure to answer.
         refinement_ran = False
         candidates_rejected = 0
+        # Candidates the model never returned a verdict on. The count of
+        # rejections says nothing about these: a model that answers about three
+        # of forty candidates and rejects all three is not the same as one that
+        # assessed forty and accepted none, and the two used to be reported
+        # identically. mitre_technique matches are excluded — they are asked
+        # for as techniques, not as indicators, so their absence from
+        # refined_iocs is correct rather than a gap.
+        candidates_unassessed: list[str] = []
         # Text and candidates for the chunked path: the whole document unless
         # native batches covered some pages, in which case only the failed ones.
         fallback_text = raw_text
@@ -2191,6 +2215,25 @@ class ThreatIntelIngester:
                 all_refined = merged.get("refined_iocs", [])
                 non_fp = [r for r in all_refined if not r.get("is_false_positive", False)]
                 candidates_rejected = len(all_refined) - len(non_fp)
+                # Reconcile what was asked about against what came back.
+                # Compared on value alone: the model relabels ioc_type freely
+                # and a type disagreement is not a missing verdict.
+                assessed_values = {
+                    str(r.get("value", "")).strip().lower() for r in all_refined
+                }
+                candidates_unassessed = sorted({
+                    ioc.value for ioc in raw_iocs
+                    if ioc.ioc_type != "mitre_technique"
+                    and ioc.value.strip().lower() not in assessed_values
+                })
+                if candidates_unassessed:
+                    logger.warning(
+                        "[DIAG] %d of %d indicator candidate(s) received no "
+                        "verdict from the model — first few: %s",
+                        len(candidates_unassessed),
+                        len([i for i in raw_iocs if i.ioc_type != "mitre_technique"]),
+                        candidates_unassessed[:5],
+                    )
                 logger.info(
                     "[DIAG] Merged result — %d refined_iocs total, "
                     "%d after false-positive filter, "
@@ -2267,10 +2310,15 @@ class ThreatIntelIngester:
         # ToolResult and the persisted artifact. An export outlives the session
         # that produced it, and a file read back from the bucket months later
         # has only what was written into it.
+        # A PDF is counted in pages; every other artifact type is counted in
+        # lines. The keys stay "pages_*" so existing consumers keep working,
+        # and "unit" says what they actually mean.
+        coverage_unit = "pages" if artifact.artifact_type == "pdf_report" else "lines"
         coverage_fields = {
             "pages_total": pages_total if pages_total else page_count,
             "pages_read": page_count,
             "pages_dropped": pages_dropped,
+            "unit": coverage_unit,
         }
         analysis = _analysis_fields(
             ingestion_mode=ingestion_mode,
@@ -2282,10 +2330,12 @@ class ThreatIntelIngester:
                 chunk_json_failures + chunk_llm_failures + chunk_exceptions
             ),
             candidates_rejected=candidates_rejected,
+            candidates_unassessed=len(candidates_unassessed),
             # refined_iocs, not filtered_iocs: an empty result after the
             # confidence threshold is the threshold's doing, not a
             # false-positive assessment.
             accepted_none=(refinement_ran and not refined_iocs),
+            unit=coverage_unit,
         )
 
         # --- Build MITRE mappings from IOCs + additional techniques ---
@@ -2437,6 +2487,9 @@ class ThreatIntelIngester:
                         "exception": chunk_exceptions,
                     },
                     "candidates_rejected": candidates_rejected,
+                    "candidates_unassessed": len(candidates_unassessed),
+                    # What pages_total/pages_read in report_metadata count.
+                    "coverage_unit": coverage_unit,
                     **analysis,
                     "ingestion_mode": ingestion_mode,
                     "document_profile": profile,

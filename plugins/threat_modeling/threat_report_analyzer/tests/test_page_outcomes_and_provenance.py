@@ -266,3 +266,41 @@ class TestExportsCarryTheBlock:
         written = path.read_text(encoding="utf-8")
         assert "**Analysis status:** complete" in written
         assert "gcp_gemini/gemini-3.8-flash" in written
+
+
+class TestNativeRunReportsItsPageCount:
+    """A native run does no per-page extraction, so _coverage_fields() is
+    empty and the export carried no page count at all — a reader could not
+    tell a 9-page advisory from a 154-page report."""
+
+    def test_the_block_states_the_page_count(self, tool, tmp_path, monkeypatch):
+        _patch_pypdf(monkeypatch, [_Page("a")] * 154)
+        tool._native_pages = tool._pdf_page_count(tmp_path / "r.pdf")
+        block = tool._provenance_block("vendor/r.pdf", "20260915T120000Z")
+        assert "154 of 154" in block
+        assert "read natively as a whole document" in block
+
+    def test_it_does_not_claim_per_page_outcomes(self, tool, tmp_path, monkeypatch):
+        """No text extraction ran, so there is nothing blank or unreadable to
+        report and inventing either would be a claim the plugin never made."""
+        _patch_pypdf(monkeypatch, [_Page("a")] * 12)
+        tool._native_pages = tool._pdf_page_count(tmp_path / "r.pdf")
+        block = tool._provenance_block("r.pdf", "s")
+        assert "blank" not in block and "unreadable" not in block
+
+    def test_the_extracted_path_still_wins_when_it_measured_pages(
+        self, tool, tmp_path, monkeypatch,
+    ):
+        """When both are set, the real per-page measurement is the better one."""
+        _patch_pypdf(monkeypatch, [_Page("a"), _Page(""), _Page(raises=True)])
+        tool._native_pages = 3
+        tool._split_pdf_into_chunks(tmp_path / "r.pdf")
+        block = tool._provenance_block("r.pdf", "s")
+        assert "1 read of 3" in block
+        assert "read natively" not in block
+
+    def test_an_unreadable_pdf_reports_no_count_rather_than_a_wrong_one(
+        self, tool, tmp_path,
+    ):
+        assert tool._pdf_page_count(tmp_path / "missing.pdf") is None
+        assert "Pages:" not in tool._provenance_block("r.pdf", "s")
