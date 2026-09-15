@@ -31,13 +31,16 @@ Whether a long threat report survives chunking with its evidence intact. Plan:
 | 09-15 | `2026-09-15-submitted-baseline.md` | **Stage 2.0.** The reconciliation is measured against what actually reached a prompt, with `candidates_not_submitted` reported separately from the model's silence. **Changes no output today** — the defect it was written against turned out to be unreachable, and the entry says so; kept as the invariant tripwire 2.5 needs |
 | 09-15 | `2026-09-15-retry-supersedes-partial.md` | **Stage 2.1 + 2.2.** A truncated partial beat its own bisected retry in the merge — the one finding whose behaviour was the opposite of what the logs reported — and every sighting of an entity after the first was discarded. Supersession is by page-range containment, canonical scalars stay first-wins, and disagreements are recorded rather than resolved |
 | 09-15 | `2026-09-15-stage-2-live-runs.md` | **Stage 2 live runs.** Five runs on Gemini light. Supersession fired on real traffic by both routes, including the cannot-split fall-through — but changed no value, because the model agreed with itself. Found two defects in the 2.1/2.2 code: a dropped false positive took its dissent out of the output, and a MITRE naming variant set whole runs to `partial` |
+| 09-15 | `2026-09-15-report-integrity-results.md` | **Results to date, no new work.** Stage 1 and Stage 2-so-far measured against the plan's three goals: suite 1,177 → 1,380, and **5 of 16 defects were found by running the tools rather than by review or tests** — twice on code that had just passed both. Says plainly what is still unverified |
 
 **Stage 1 is complete.** Goal A — *incomplete work is never reported as
 complete* — holds for both plugins. Suite went 1177 → 1319.
 
 **Stage 2 is in progress.** 2.0 and 2.1+2.2 have landed and are now
 live-verified on Gemini light; 2.3, 2.4, 2.5 and 2.6 are next, as one change
-set. Suite 1319 → 1380.
+set. Suite 1319 → 1380. **Results to date are consolidated in
+`2026-09-15-report-integrity-results.md`** — start there for outcomes against
+the plan's three goals and for the list of what is still unmeasured.
 
 **The live runs found two more defects, both in the code that had just passed a
 green suite and a mutation check** (last row above). That is twice in two

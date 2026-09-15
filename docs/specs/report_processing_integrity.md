@@ -34,6 +34,9 @@ Full suite **1380 passing** — 1177 before Stage 1, 1319 after it, 1380 with
 Stage 2 so far. Committed on `llm_5` at `a83e74e` (1.1), `2d7eec2` (1.2-1.7)
 and `2efb594` (the post-Stage-1 repairs); Stage 2's work is uncommitted at the
 time of writing.
+**Results to date:** `docs/change_log/2026-09-15-report-integrity-results.md`
+— outcomes against the three goals below, the defect count by discovery route,
+and what is still unmeasured. Read it before trusting a step marked LANDED.
 **Parent review:** `docs/change_log/2026-09-15-chunking-integrity-review.md` —
 the eight findings, their verification, and the four corrections to the
 external analysis are settled there and are not restated.
