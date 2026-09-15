@@ -679,3 +679,186 @@ class TestTheSchemaDeclaresTheNewEvidence:
             self._schema()["summary"]["properties"]["merge_stats"]["properties"]
         )
         assert produced == declared
+
+
+# ---------------------------------------------------------------------------
+# Found by the first live runs, 2026-09-15
+# ---------------------------------------------------------------------------
+
+
+class TestTechniqueNameIsNotAConflict:
+    """A live run raised four conflicts for 'Spearphishing Attachment' vs
+    'Phishing: Spearphishing Attachment' - the same technique, named two ways -
+    and any conflict sets the run partial, so a spelling degraded the status.
+    The reconciler overwrites the name from the local ATT&CK lookup anyway."""
+
+    def test_two_namings_of_one_technique_agree(self):
+        merged = _tool_mod._merge_llm_chunk_results(
+            [
+                _result(techs=[_tech(
+                    "T1566.001", tactic="Initial Access",
+                    technique_name="Spearphishing Attachment")]),
+                _result(techs=[_tech(
+                    "T1566.001", tactic="Initial Access",
+                    technique_name="Phishing: Spearphishing Attachment")]),
+            ],
+            [_prov("chunk 1/2", 1), _prov("chunk 2/2", 2)],
+        )
+        tech = merged["additional_mitre_techniques"][0]
+        assert "conflicts" not in tech
+        assert merged["merge_stats"]["conflicts"] == 0
+        assert len(tech["occurrences"]) == 2, "still both sightings"
+
+    def test_a_confidence_disagreement_is_still_a_conflict(self):
+        merged = _tool_mod._merge_llm_chunk_results(
+            [
+                _result(techs=[_tech("T1059", confidence="inferred")]),
+                _result(techs=[_tech("T1059", confidence="explicit")]),
+            ],
+            [_prov("a", 1), _prov("b", 2)],
+        )
+        assert merged["merge_stats"]["conflicts"] == 1
+
+
+class TestRejectionOverDissent:
+    """A live run reported 25 conflicts and showed the reader 17. The missing
+    eight belonged to two indicators whose canonical verdict was
+    `is_false_positive: true` while other chunks called them real: the
+    false-positive filter dropped the records and took their conflict entries
+    with them. The rejection stands - Stage 1.5's rule - but it is not silent.
+    """
+
+    def test_the_note_fires_and_makes_the_run_partial(self):
+        f = _fields(rejected_with_dissent=2)
+        assert f["analysis_status"] == "partial"
+        note = next(
+            n for n in f["analysis_notes"]
+            if n.startswith("REJECTED OVER DISSENT")
+        )
+        assert "another batch assessed them as real" in note
+        assert "only record of the disagreement" in note
+
+    def test_it_is_separate_from_the_conflicts_note(self):
+        f = _fields(merge_conflicts=8, rejected_with_dissent=2)
+        kinds = {n.split(":")[0] for n in f["analysis_notes"]}
+        assert {"UNRESOLVED CONFLICTS", "REJECTED OVER DISSENT"} <= kinds
+
+    def test_silent_when_nothing_was_rejected_over_dissent(self):
+        f = _fields(rejected_with_dissent=0)
+        assert f["analysis_notes"] == []
+
+    def test_it_is_declared_in_the_schema(self):
+        schema = json.loads(
+            (PLUGIN_DIR / "schemas" / "output.schema.json").read_text(
+                encoding="utf-8",
+            )
+        )
+        summary = (
+            schema["properties"]["result"]["properties"]["summary"]["properties"]
+        )
+        assert "rejected_with_dissent" in summary
+        assert summary["rejected_with_dissent"]["type"] == "array"
+
+    def test_an_undisputed_rejection_is_not_dissent(self, tool_instance, pdf_run):
+        """Every attempt agreeing it is a false positive is an assessment, not
+        a disagreement - it must not raise this note."""
+        class _AllFP(_PartialThenRetryLLM):
+            @staticmethod
+            def _body(values, confidence, label):
+                return json.dumps({
+                    "refined_iocs": [
+                        {"value": v, "ioc_type": "ip", "confidence": "low",
+                         "priority": "low", "context": label,
+                         "related_mitre": [], "is_false_positive": True}
+                        for v in values
+                    ],
+                    "additional_mitre_techniques": [],
+                    "report_metadata": {"title": "t"},
+                    "attack_graph": {"paths": [], "convergence_points": [],
+                                     "branch_points": []},
+                })
+
+            def query_with_document(self, prompt, artifact, **kw):
+                self.doc_calls.append(
+                    {"label": "whole", "candidates": _candidates(prompt)}
+                )
+                return _Resp(text=self._body(_candidates(prompt), "low", "x"))
+
+        result = pdf_run(tool_instance, FOUR_PAGES, _AllFP())
+        s = result.result["summary"]
+        assert s["rejected_with_dissent"] == []
+        assert not any(
+            n.startswith("REJECTED OVER DISSENT") for n in s["analysis_notes"]
+        )
+        assert any(
+            n.startswith("NO INDICATORS ACCEPTED") for n in s["analysis_notes"]
+        ), "the existing rejection reporting is untouched"
+
+    def test_a_disputed_rejection_is_captured_end_to_end(
+        self, tool_instance, tmp_path, monkeypatch,
+    ):
+        """The live shape: one batch calls it a false positive, another calls
+        it real, the canonical verdict is the rejection, and the record leaves
+        the output. Its conflict must not leave with it unrecorded."""
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+        # Two text chunks over one candidate, so two calls see the same value.
+        monkeypatch.setattr(_tool_mod, "_MAX_TEXT_CHARS_PER_CHUNK", 200)
+        report = tmp_path / "disputed.txt"
+        report.write_text(
+            "Section one names 198.51.100.7 as shared CDN space.\n\n"
+            + ("Padding for the second chunk. " * 12)
+            + "\n\nSection two re-confirms 198.51.100.7 as live C2.\n",
+            encoding="utf-8",
+        )
+        artifact = MockArtifactRef(
+            artifact_id="art_disputed", artifact_type="text",
+            file_path=str(report),
+        )
+
+        class _DisputingLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def supports_native_document(self, mime_type):
+                return False
+
+            def query_text(self, prompt, **kw):
+                self.calls += 1
+                # First call rejects it, second says it is real.
+                fp = self.calls == 1
+                return _Resp(text=json.dumps({
+                    "refined_iocs": [{
+                        "value": "198.51.100.7", "ioc_type": "ip",
+                        "confidence": "low" if fp else "high",
+                        "priority": "low" if fp else "high",
+                        "context": f"call {self.calls}", "related_mitre": [],
+                        "is_false_positive": fp,
+                    }],
+                    "additional_mitre_techniques": [],
+                    "report_metadata": {"title": "Disputed"},
+                    "attack_graph": {"paths": [], "convergence_points": [],
+                                     "branch_points": []},
+                }))
+
+        llm = _DisputingLLM()
+        ctx = MockExecutionContext(
+            artifacts=[artifact], llm_enabled=True, llm_query=llm,
+            register_artifact=lambda artifact_type, file_path, source_tool,
+            metadata: MockArtifactRef("out", artifact_type, file_path),
+        )
+        result = tool_instance.execute({"artifact_id": "art_disputed"}, ctx)
+        assert result.ok, result.message
+        assert llm.calls >= 2, "the text must have split into two calls"
+
+        s = result.result["summary"]
+        assert [i["value"] for i in result.result["iocs"]] == [], (
+            "the rejection stands - Stage 1.5's rule is not undone"
+        )
+        assert s["rejected_with_dissent"] == ["198.51.100.7"], (
+            "a rejection another batch argued against must be named, or the "
+            "conflict leaves the output with the record"
+        )
+        assert any(
+            n.startswith("REJECTED OVER DISSENT") for n in s["analysis_notes"]
+        )
+        assert s["analysis_status"] == "partial"

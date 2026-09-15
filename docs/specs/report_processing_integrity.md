@@ -12,10 +12,16 @@
 found by running the tools).
 **Stage 2 is IN PROGRESS.** 2.0 and 2.1+2.2 landed 2026-09-15 — change logs
 `2026-09-15-submitted-baseline.md`,
-`2026-09-15-retry-supersedes-partial.md`. **2.3, 2.4, 2.5 and 2.6 are
-outstanding**, and **no part of Stage 2 is signed off**: the single live run
-its acceptance requires has not been made. Stages 3 and 4 are still proposed,
-nothing built.
+`2026-09-15-retry-supersedes-partial.md`, and the live runs in
+`2026-09-15-stage-2-live-runs.md`, which found and fixed two further defects in
+that code. **2.3, 2.4, 2.5 and 2.6 are outstanding.** Stages 3 and 4 are still
+proposed, nothing built.
+
+**Live-run status:** the three landed steps ran against a real provider
+(`gcp_gemini` light) across five shapes, and supersession fired by both routes
+on real traffic. Two limits remain before Stage 2 can be called signed off: the
+154-page report named in the acceptance has not been run, and only one of the
+three keyed providers was exercised.
 
 Stage 2's pre-flight review on 2026-09-15 added two steps and re-derived every
 line number: **2.0** (measure the reconciliation against what was submitted —
@@ -24,7 +30,7 @@ against turned out to be unreachable, which the step records) and **2.6** (the
 analyzer's silent caps). The three operator decisions it settled are recorded
 in the step text.
 
-Full suite **1372 passing** — 1177 before Stage 1, 1319 after it, 1372 with
+Full suite **1380 passing** — 1177 before Stage 1, 1319 after it, 1380 with
 Stage 2 so far. Committed on `llm_5` at `a83e74e` (1.1), `2d7eec2` (1.2-1.7)
 and `2efb594` (the post-Stage-1 repairs); Stage 2's work is uncommitted at the
 time of writing.
@@ -697,7 +703,11 @@ a no-op with a tripwire attached.
 
 ### 2.1 — A successful retry must supersede the partial it replaces
 
-**LANDED 2026-09-15.** `2026-09-15-retry-supersedes-partial.md`.
+**LANDED 2026-09-15.** `2026-09-15-retry-supersedes-partial.md`. Live-verified
+2026-09-15: four partials superseded on real traffic by both routes. The
+machinery works; **no superseded sighting disagreed with the retry that
+replaced it**, so the defect's output impact on that run was nil and its
+real-world severity is still unmeasured.
 
 **Where:** `ti:1829` — the partial parse is appended to `native_batch_results`
 *before* the bisected retry runs, and `_merge_llm_chunk_results` is first-wins,
@@ -730,7 +740,13 @@ successful retry asserting `confidence: "high"` must merge to `high`.
 
 ### 2.2 — Separate canonical entities from evidence occurrences
 
-**LANDED 2026-09-15.** `2026-09-15-retry-supersedes-partial.md`.
+**LANDED 2026-09-15.** `2026-09-15-retry-supersedes-partial.md`. **Two defects
+found live 2026-09-15 and fixed** (`2026-09-15-stage-2-live-runs.md`): the
+false-positive filter dropped a record and took its `conflicts` out of the
+output with it, hiding the one disagreement an analyst most needs (now
+`rejected_with_dissent` plus a note, with the rejection still standing); and
+`technique_name` as a conflict field made a naming variant set whole runs to
+`partial` (now `_MITRE_CONFLICT_FIELDS = ("confidence",)`).
 
 **Where:** `ti:478-528`.
 

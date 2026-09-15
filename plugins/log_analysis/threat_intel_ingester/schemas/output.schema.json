@@ -343,10 +343,9 @@
                   "properties": {
                     "field": {
                       "type": "string",
-                      "description": "The disagreeing field: confidence, technique_name.",
+                      "description": "The disagreeing field: confidence. Not technique_name — two batches naming one technique differently agree about the technique, and the reconciler overwrites the name from the local ATT&CK lookup anyway.",
                       "enum": [
-                        "confidence",
-                        "technique_name"
+                        "confidence"
                       ]
                     },
                     "canonical": {
@@ -523,6 +522,14 @@
                   "description": "Total sightings kept across every indicator and technique role."
                 }
               }
+            },
+            "rejected_with_dissent": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Indicator values dropped as false positives although another batch assessed them as real. The rejection stands (a rejection is an answer, per the Stage 1.5 rule against reinstating one), so these records are absent from iocs and their conflict entries are absent with them \u2014 this list and the REJECTED OVER DISSENT note are the only record. Capped at 25 values; the note carries the full count. Non-empty makes analysis_status partial.",
+              "maxItems": 25
             },
             "native_attempts": {
               "type": "integer",

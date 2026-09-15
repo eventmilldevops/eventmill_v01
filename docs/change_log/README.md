@@ -30,14 +30,22 @@ Whether a long threat report survives chunking with its evidence intact. Plan:
 | 09-15 | `2026-09-15-unassessed-candidates-and-units.md` | **Post-Stage-1, found by running the tools.** The rejection note counted verdicts returned and called them "all candidates"; coverage counted lines and named them pages; the analyzer's export stated no page count on the native path. Three Goal A failures a deterministic review could not catch |
 | 09-15 | `2026-09-15-submitted-baseline.md` | **Stage 2.0.** The reconciliation is measured against what actually reached a prompt, with `candidates_not_submitted` reported separately from the model's silence. **Changes no output today** — the defect it was written against turned out to be unreachable, and the entry says so; kept as the invariant tripwire 2.5 needs |
 | 09-15 | `2026-09-15-retry-supersedes-partial.md` | **Stage 2.1 + 2.2.** A truncated partial beat its own bisected retry in the merge — the one finding whose behaviour was the opposite of what the logs reported — and every sighting of an entity after the first was discarded. Supersession is by page-range containment, canonical scalars stay first-wins, and disagreements are recorded rather than resolved |
+| 09-15 | `2026-09-15-stage-2-live-runs.md` | **Stage 2 live runs.** Five runs on Gemini light. Supersession fired on real traffic by both routes, including the cannot-split fall-through — but changed no value, because the model agreed with itself. Found two defects in the 2.1/2.2 code: a dropped false positive took its dissent out of the output, and a MITRE naming variant set whole runs to `partial` |
 
 **Stage 1 is complete.** Goal A — *incomplete work is never reported as
 complete* — holds for both plugins. Suite went 1177 → 1319.
 
-**Stage 2 is in progress.** 2.0 and 2.1+2.2 have landed; 2.3, 2.4, 2.5 and 2.6
-are next, as one change set. Suite 1319 → 1372. Every step is verified on
-control flow only — the single live run that Stage 2's sign-off requires has
-not been made, so no part of Stage 2 is signed off yet.
+**Stage 2 is in progress.** 2.0 and 2.1+2.2 have landed and are now
+live-verified on Gemini light; 2.3, 2.4, 2.5 and 2.6 are next, as one change
+set. Suite 1319 → 1380.
+
+**The live runs found two more defects, both in the code that had just passed a
+green suite and a mutation check** (last row above). That is twice in two
+stages: Stage 1 was signed off on control flow and a live run found three, and
+Stage 2's deterministic verification missed two. The lesson is holding — run
+the tools. What remains unmeasured is scale: these ran against a 3-page probe
+and a synthetic text fixture, not the 154-page report, and against one provider
+of the three that are keyed.
 
 **The seven steps were verified on control flow alone, and the first live run
 found three more Goal A failures** (last row above). A deterministic review is

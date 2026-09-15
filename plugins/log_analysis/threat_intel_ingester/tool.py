@@ -479,7 +479,11 @@ def _chunk_text(text: str, max_chars: int = _MAX_TEXT_CHARS_PER_CHUNK) -> list[s
 # fields are excluded by construction: (ioc_type, value) and (technique_id,
 # tactic) are the identities, so a disagreement there is a different entity.
 _IOC_CONFLICT_FIELDS = ("confidence", "priority", "is_false_positive")
-_MITRE_CONFLICT_FIELDS = ("confidence", "technique_name")
+# Not technique_name: two batches naming T1566.001 "Spearphishing Attachment"
+# and "Phishing: Spearphishing Attachment" agree about the technique, and
+# _reconcile_mitre_mappings overwrites the name from the local ATT&CK lookup
+# regardless. Treating that as a conflict set whole runs partial on a spelling.
+_MITRE_CONFLICT_FIELDS = ("confidence",)
 
 
 def _mark_superseded(provenance: list[dict], chunked_pages: set[int]) -> int:
@@ -721,6 +725,7 @@ def _analysis_fields(
     candidates_not_submitted: int = 0,
     merge_conflicts: int = 0,
     recovered_from_partial: int = 0,
+    rejected_with_dissent: int = 0,
     accepted_none: bool = False,
     unit: str = "pages",
 ) -> dict:
@@ -802,6 +807,17 @@ def _analysis_fields(
             f"UNRESOLVED CONFLICTS: {merge_conflicts} reported value(s) "
             f"disagree between batches; the first is reported and every "
             f"reading is kept under the record's conflicts"
+        )
+    # A rejection another batch argued against. Reported separately from the
+    # conflicts note because these records are *not* in the output: the
+    # rejection stands, so the only place the disagreement can be seen is
+    # here.
+    if rejected_with_dissent:
+        notes.append(
+            f"REJECTED OVER DISSENT: {rejected_with_dissent} indicator(s) were "
+            f"dropped as false positives although another batch assessed them "
+            f"as real; they are not in the indicator list, so this note is the "
+            f"only record of the disagreement"
         )
     # A record that exists only because a cut-off reply mentioned it, and that
     # the retry replacing that reply did not confirm.
@@ -1933,6 +1949,9 @@ class ThreatIntelIngester:
         # reported apart from the model's silence, because the two have
         # different causes and one counter cannot say which happened.
         candidates_not_submitted: list[str] = []
+        # Indicators the canonical verdict rejected while another batch called
+        # them real. The rejection stands, but it is not silent.
+        rejected_with_dissent: list[str] = []
         # Text and candidates for the chunked path: the whole document unless
         # native batches covered some pages, in which case only the failed ones.
         fallback_text = raw_text
@@ -2554,9 +2573,24 @@ class ThreatIntelIngester:
                     len(merged.get("additional_mitre_techniques", [])),
                     len(merged.get("attack_graph", {}).get("paths", [])),
                 )
+                # An entity whose canonical verdict is "false positive" is
+                # dropped here, per Stage 1.5 - a rejection is an answer and
+                # must not be reinstated. But dropping it silently took its
+                # conflict records out of the output too, so a run could
+                # report 25 disagreements and show the reader 17. The
+                # rejection stands; the dissent is named.
                 for refined in all_refined:
                     if not refined.get("is_false_positive", False):
                         refined_iocs.append(refined)
+                    elif refined.get("conflicts"):
+                        rejected_with_dissent.append(str(refined.get("value", "")))
+                if rejected_with_dissent:
+                    logger.warning(
+                        "[MERGE] %d indicator(s) were dropped as false "
+                        "positives while another batch disagreed: %s",
+                        len(rejected_with_dissent),
+                        ", ".join(rejected_with_dissent[:8]),
+                    )
                 mitre_mappings = merged.get("additional_mitre_techniques", [])
                 report_meta = merged.get("report_metadata", {})
                 attack_graph = merged.get("attack_graph", {})
@@ -2646,6 +2680,7 @@ class ThreatIntelIngester:
             candidates_not_submitted=len(candidates_not_submitted),
             merge_conflicts=merge_stats.get("conflicts", 0),
             recovered_from_partial=merge_stats.get("recovered_from_partial", 0),
+            rejected_with_dissent=len(rejected_with_dissent),
             # refined_iocs, not filtered_iocs: an empty result after the
             # confidence threshold is the threshold's doing, not a
             # false-positive assessment.
@@ -2805,6 +2840,9 @@ class ThreatIntelIngester:
                     "candidates_unassessed": len(candidates_unassessed),
                     "candidates_not_submitted": len(candidates_not_submitted),
                     "merge_stats": dict(merge_stats),
+                    # Bounded: the note carries the count, this carries enough
+                    # values to go and look.
+                    "rejected_with_dissent": rejected_with_dissent[:25],
                     "native_attempts": len(native_provenance),
                     # What pages_total/pages_read in report_metadata count.
                     "coverage_unit": coverage_unit,
