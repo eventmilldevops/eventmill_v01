@@ -510,6 +510,106 @@ def procedures_for_technique(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Shared reconciliation, for any tool that extracts technique ids from prose
+# ---------------------------------------------------------------------------
+
+
+def attack_version() -> str:
+    """The ATT&CK release the local lookup was built from, e.g. "19.2"."""
+    return str(get_mitre_relationships().get("attack_version") or "") or "unknown"
+
+
+def attack_grounding(include_tactics: bool = True) -> str:
+    """Tell a model which ATT&CK release it is answering against.
+
+    Without this a model answers from its training data, which for every
+    current model predates v19 - so it returns correct techniques under
+    retired ids and, worse, writes retired *tactic* names into its prose.
+    "Defense Evasion" was removed in v19 and split into Stealth and Defense
+    Impairment; a model that has never been told will keep using it, and no
+    amount of post-hoc reconciliation can rewrite narrative text safely.
+
+    Returned as one block so both report tools ground identically. Empty when
+    no lookup has been built, because claiming a version we cannot check would
+    be worse than saying nothing.
+    """
+    if not get_mitre_db():
+        return ""
+    version = attack_version()
+    lines = [
+        f"MITRE ATT&CK v{version} is the authoritative reference for this "
+        f"analysis. Use its technique ids and tactic names, not those of "
+        f"earlier releases.",
+    ]
+    if include_tactics:
+        lines.append(
+            "The valid enterprise tactics are: "
+            + ", ".join(
+                t for t in TACTIC_ORDER
+                if t not in ("Evasion", "Inhibit Response Function",
+                             "Impair Process Control")
+            )
+            + "."
+        )
+        for retired, successors in LEGACY_TACTIC_ALIASES.items():
+            lines.append(
+                f"\"{retired}\" was retired and split into "
+                f"{' and '.join(successors)} - do not use it."
+            )
+    return " ".join(lines)
+
+
+def reconcile_technique_ids(
+    technique_ids: Iterable[str],
+) -> list[dict[str, Any]]:
+    """Validate, remap and enrich technique ids scraped from model output.
+
+    One entry per input id, in first-appearance order, deduplicated after
+    remapping so a retired id and its successor do not both survive. Each
+    entry carries:
+
+    ``technique_id``   the current id
+    ``technique_name`` the official name, or "" when unknown
+    ``tactics``        the tactics ATT&CK allows for it
+    ``mitre_validated``whether the id exists in the matrix at all
+    ``remapped_from``  the retired id it arrived as, when it was remapped
+    ``remap_basis``    "curated" or "name"
+
+    This is the narrow half of what the ingester's reconciler does - no attack
+    graph, no tactic-role assignment - and it is here rather than in either
+    plugin so both answer to one taxonomy. A tool that extracts ids from prose
+    and reports them unchecked is publishing whatever release its model was
+    trained on.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in technique_ids:
+        tid = (raw or "").strip()
+        if not tid:
+            continue
+        remapped_from = ""
+        basis = ""
+        resolved = resolve_retired_technique(tid)
+        if resolved is not None:
+            remapped_from, tid, basis = tid, resolved[0], resolved[1]
+        if tid in seen:
+            continue
+        seen.add(tid)
+        meta = enrich_technique(tid)
+        entry: dict[str, Any] = {
+            "technique_id": tid,
+            "technique_name": meta.get("name", ""),
+            "tactics": list(meta.get("tactics", []) or []),
+            "mitre_validated": bool(meta),
+        }
+        if remapped_from:
+            entry["remapped_from"] = remapped_from
+            entry["remap_basis"] = basis
+        out.append(entry)
+    return out
+
+
 def _reset() -> None:
     """Reset the cached databases (for testing only)."""
     global _TECHNIQUE_DB, _RELATIONSHIPS, _INDEXES, _RETIRED, _NAME_INDEX

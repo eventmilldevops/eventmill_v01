@@ -70,7 +70,7 @@
             "items": {
               "type": "string"
             },
-            "description": "MITRE ATT&CK technique ids named in the summary, deduplicated in first-appearance order. Bounded at 200 unless the run set ignore_caps (see caps_waived). Read as \u201cthe techniques this report covers\u201d, so the ordering is stable across identical runs and anything the bound cut is stated in analysis_notes rather than dropped in silence."
+            "description": "MITRE ATT&CK technique ids named in the summary, deduplicated in first-appearance order and reconciled against the local lookup (retired ids are remapped, so this can differ from the ids in the prose). Bounded at 200 unless the run set ignore_caps. See attack_techniques for names and tactics."
           },
           "truncated": {
             "type": "boolean",
@@ -121,6 +121,50 @@
           "caps_waived": {
             "type": "boolean",
             "description": "True when the run was given ignore_caps, so key_findings and relevant_techniques are complete and unbounded. Two runs of one report can legitimately return lists of different lengths; this says which run it was."
+          },
+          "attack_techniques": {
+            "type": "array",
+            "description": "relevant_techniques reconciled against the local ATT&CK lookup: official name, the tactics ATT&CK allows, whether the id exists at all, and the retired id it arrived under when it was remapped. The ids are extracted from model prose, so without this the tool publishes whatever ATT&CK release its model was trained on \u2014 which for every current model predates v19.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "technique_id": {
+                  "type": "string",
+                  "description": "Current ATT&CK id."
+                },
+                "technique_name": {
+                  "type": "string",
+                  "description": "Official name, or empty when the id is unknown."
+                },
+                "tactics": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Tactics ATT&CK allows for this technique, in v19 vocabulary."
+                },
+                "mitre_validated": {
+                  "type": "boolean",
+                  "description": "False means the id is not in ATT&CK \u2014 treat it as the model's own."
+                },
+                "remapped_from": {
+                  "type": "string",
+                  "description": "The retired id it was reported under, when remapping applied."
+                },
+                "remap_basis": {
+                  "type": "string",
+                  "enum": [
+                    "curated",
+                    "name"
+                  ],
+                  "description": "How the remap was resolved. Never guessed."
+                }
+              }
+            }
+          },
+          "attack_version": {
+            "type": "string",
+            "description": "The ATT&CK release attack_techniques was reconciled against, e.g. \"19.2\". Both report tools answer to the same one."
           }
         },
         "required": [

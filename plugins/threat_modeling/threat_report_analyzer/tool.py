@@ -144,6 +144,8 @@ INSTRUCTIONS:
 4. Highlight detection opportunities and SIEM-relevant indicators
 5. Use clear section headers for scannability
 
+ATT&CK REFERENCE: {attack_grounding}
+
 FOCUS AREAS (if specified): {focus_areas}
 
 REPORT CONTENT:
@@ -173,6 +175,8 @@ INSTRUCTIONS:
 3. Note threat actors, malware families, and targeted industries
 4. Highlight detection opportunities and indicators of compromise
 
+ATT&CK REFERENCE: {attack_grounding}
+
 FOCUS AREAS (if specified): {focus_areas}
 
 SECTION CONTENT:
@@ -199,6 +203,8 @@ INSTRUCTIONS:
 2. Deduplicate and normalize all MITRE ATT&CK technique IDs
 3. Identify overarching threat patterns that span multiple sections
 4. Prioritize the most operationally relevant intelligence
+
+ATT&CK REFERENCE: {attack_grounding}
 
 FOCUS AREAS (if specified): {focus_areas}
 
@@ -230,6 +236,16 @@ def _first_seen(values: list[str]) -> list[str]:
     """
     return list(dict.fromkeys(values))
 
+
+# One taxonomy across both report tools. The ingester already reconciles
+# against this module; the analyzer extracted ids from prose and published
+# them unchecked, which meant publishing whatever ATT&CK release its model was
+# trained on - v14-era tactic names in a v19.2 shop.
+from framework.reference_data.mitre_attack import (  # noqa: E402
+    attack_grounding,
+    attack_version,
+    reconcile_technique_ids,
+)
 
 _MAX_KEY_FINDINGS: int = 50
 _MAX_RELEVANT_TECHNIQUES: int = 200
@@ -312,6 +328,9 @@ class ThreatReportAnalyzer:
 
     # How many entries each capped list left out, by label. Reset per run.
     _dropped: dict[str, int] | None = None
+
+    # The run's techniques, reconciled against the local ATT&CK lookup.
+    _reconciled: list[dict[str, Any]] | None = None
 
     # Set by the run's ignore_caps input. When true the two extraction bounds
     # do not apply at all, so nothing is dropped and nothing needs reporting.
@@ -412,10 +431,10 @@ class ThreatReportAnalyzer:
                 stored = s.get("summary_path")
                 location = f" → {stored}" if stored else ""
                 chunk_info = f", {chunks} chunk(s)" if chunks > 1 else ""
-                # Status leads. summarize_for_llm is capped at 2000
-                # characters by PluginExecutor, and a warning placed after the
-                # content is the part that gets cut. Every cause is already
-                # phrased as a note, so nothing is repeated afterwards.
+                # Status leads. summarize_for_llm is capped at the manifest's
+                # summary_budget by PluginExecutor, and a warning placed after
+                # the content is the part that gets cut. Every cause is
+                # already phrased as a note, so nothing is repeated after.
                 status = s.get("analysis_status", "complete")
                 lead = ""
                 if status != "complete":
@@ -503,6 +522,7 @@ class ThreatReportAnalyzer:
         # this report covers", and a list quietly holding twenty of twenty-five
         # makes that claim false with nothing to show it.
         self._dropped: dict[str, int] = {}
+        self._reconciled = None
         # Bounds off for this run, at the operator's request. Recorded on the
         # result and stamped on the export, because two runs of the same report
         # with different answers here produce lists of different lengths and
@@ -565,6 +585,7 @@ class ThreatReportAnalyzer:
                     "query_with_document() for %s", report_name,
                 )
                 native_prompt = SUMMARIZATION_PROMPT_TEMPLATE.format(
+                    attack_grounding=attack_grounding(),
                     report_name=report_name,
                     report_type=report_type,
                     max_words=max_words,
@@ -785,6 +806,17 @@ class ThreatReportAnalyzer:
                 )
             effective_chunk_count = len(chunks)
 
+        # One taxonomy across both report tools. The ids come out of model
+        # prose, so they arrive under whatever ATT&CK release the model was
+        # trained on; reconciling here is what stops the analyzer publishing a
+        # v14-era answer while the ingester publishes v19.2 for the same
+        # report. The narrative above is the model's own - the prompts are
+        # grounded so it writes current tactic names, but prose cannot be
+        # safely rewritten after the fact, which is why the export carries a
+        # reconciled block of its own.
+        self._reconciled = reconcile_technique_ids(relevant_techniques)
+        relevant_techniques = [e["technique_id"] for e in self._reconciled]
+
         key_findings = self._extract_key_findings(final_summary)
         word_count = len(final_summary.split())
 
@@ -796,7 +828,8 @@ class ThreatReportAnalyzer:
             try:
                 summary_path.parent.mkdir(parents=True, exist_ok=True)
                 summary_path.write_text(
-                    self._provenance_block(report_path, stamp) + final_summary,
+                    self._provenance_block(report_path, stamp)
+                    + self._attack_block() + final_summary,
                     encoding="utf-8",
                 )
                 common_path = self._get_common_bucket_path(context)
@@ -822,7 +855,8 @@ class ThreatReportAnalyzer:
                 f"{self._export_name(normalized, stamp, 'summary.md')}"
             )
             if self._upload_to_gcs(
-                self._provenance_block(report_path, stamp) + final_summary,
+                self._provenance_block(report_path, stamp)
+                    + self._attack_block() + final_summary,
                 gcs_object, context,
             ):
                 bucket_name = self._get_common_bucket_name(context)
@@ -853,6 +887,10 @@ class ThreatReportAnalyzer:
                         "summary": final_summary,
                         "key_findings": key_findings,
                         "relevant_techniques": relevant_techniques,
+                        # The same ids with their official names, allowed
+                        # tactics, and whether ATT&CK knows them at all.
+                        "attack_techniques": list(self._reconciled or []),
+                        "attack_version": attack_version(),
                         # Two runs of one report can legitimately return lists
                         # of different lengths. This is which run it was.
                         "caps_waived": self._caps_waived,
@@ -1080,6 +1118,55 @@ class ThreatReportAnalyzer:
             )
         return "\n".join(lines) + "\n\n---\n\n"
 
+    def _attack_block(self) -> str:
+        """An authoritative ATT&CK table for the exported summary.
+
+        The prose above it is the model's, and a model writes the taxonomy it
+        was trained on however the prompt is grounded. This block is built
+        from the local v19.2 lookup instead, so the file an analyst opens
+        carries at least one technique list that was checked.
+
+        Empty when nothing was extracted or no lookup has been built - an
+        empty table would imply the report named no techniques.
+        """
+        entries = self._reconciled or []
+        if not entries:
+            return ""
+        lines = [
+            f"## ATT&CK techniques (reconciled against v{attack_version()})",
+            "",
+            "| Technique | Name | Tactics |",
+            "| --- | --- | --- |",
+        ]
+        unknown = 0
+        for e in entries:
+            if not e.get("mitre_validated"):
+                unknown += 1
+                name = "*not in ATT&CK - treat as an unverified reference*"
+                tactics = "\u2014"
+            else:
+                name = e.get("technique_name") or ""
+                tactics = ", ".join(e.get("tactics") or []) or "\u2014"
+            tid = e["technique_id"]
+            if e.get("remapped_from"):
+                tid = f"{tid} (reported as {e['remapped_from']})"
+            lines.append(f"| {tid} | {name} | {tactics} |")
+        notes = []
+        remapped = sum(1 for e in entries if e.get("remapped_from"))
+        if remapped:
+            notes.append(
+                f"{remapped} id(s) arrived under a retired number and were "
+                f"remapped to their current one."
+            )
+        if unknown:
+            notes.append(
+                f"{unknown} id(s) are not in ATT&CK v{attack_version()} and "
+                f"could not be resolved; treat them as the model's own."
+            )
+        if notes:
+            lines += ["", "> " + " ".join(notes)]
+        return "\n".join(lines) + "\n\n---\n\n"
+
     def _note_degradation(self, label: str) -> None:
         """Record that part of this run fell back to a worse input path."""
         if self._degradations is None:
@@ -1122,7 +1209,8 @@ class ThreatReportAnalyzer:
         The notes carry the markers that used to be separate sentences, so a
         reader still sees INCOMPLETE COVERAGE / TRUNCATED OUTPUT / DEGRADED
         INPUT — but behind the status rather than after the content, because
-        summarize_for_llm is truncated at 2000 characters from the end.
+        summarize_for_llm is truncated at the manifest's summary_budget,
+        from the end.
         """
         notes: list[str] = []
         coverage = self._coverage_fields()
@@ -1501,10 +1589,12 @@ class ThreatReportAnalyzer:
                 max_words=max_words,
                 focus_areas=", ".join(focus_areas) if focus_areas else "General threat overview",
                 content=chunk.content,
+                attack_grounding=attack_grounding(),
             )
             out_tokens = _budget("light", "low", max_words * 8)  # ~8 chars/token
         else:
             prompt = CHUNK_SUMMARIZATION_PROMPT_TEMPLATE.format(
+                attack_grounding=attack_grounding(),
                 report_name=report_name,
                 report_type=report_type,
                 page_info=page_info,
@@ -1608,6 +1698,7 @@ class ThreatReportAnalyzer:
 
         combined = "\n\n---\n\n".join(_block(cs) for cs in chunk_summaries)
         prompt = SYNTHESIS_PROMPT_TEMPLATE.format(
+            attack_grounding=attack_grounding(),
             report_name=report_name,
             chunk_count=len(chunk_summaries),
             max_words=max_words,

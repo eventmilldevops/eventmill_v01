@@ -3152,8 +3152,9 @@ class EventMillShell(cmd.Cmd):
     def _print_run_output(self, result: Any, artifacts_before: set[str]) -> None:
         """Show the full rendered output and the files a run produced.
 
-        summarize_for_llm() is capped at 2000 characters because it feeds the
-        LLM context; it is not the user's copy of the result.  Tools that
+        summarize_for_llm() is capped at the plugin manifest's
+        summary_budget because it feeds the LLM context; it is not the user's
+        copy of the result.  Tools that
         return a rendering under 'visualization' get it printed in full here,
         and every artifact registered by the run is listed with its path, so
         nothing is lost when the summary is cut short.

@@ -217,7 +217,7 @@ class MyNewTool:
             )
 
     def summarize_for_llm(self, result: ToolResult) -> str:
-        """Compress output for LLM context (max 2000 chars).
+        """Compress output for LLM context (max: manifest summary_budget).
 
         This is critical for Event Mill's context optimization.
         Return only the information the LLM needs to decide
@@ -248,7 +248,7 @@ class MyNewTool:
 
 ### Important Conventions
 
-1. **`summarize_for_llm()`** must return ≤ 2000 characters. The framework will truncate if you exceed this, but aim for ~500-1000 chars with the most actionable findings.
+1. **`summarize_for_llm()`** must return ≤ the manifest's `summary_budget` (default 4000 characters; raise it only for a tool whose result genuinely needs the room, such as a long-report reader). The framework truncates **from the end** if you exceed it, so anything you put last is what disappears — lead with status and findings, and bound every list you narrate rather than relying on the cut. Aim well under the ceiling.
 
 2. **Error codes** should use the standard set: `INPUT_VALIDATION_FAILED`, `ARTIFACT_NOT_FOUND`, `TIMEOUT`, `LLM_QUERY_FAILED`, `INTERNAL_ERROR`, `DEPENDENCY_ERROR`.
 

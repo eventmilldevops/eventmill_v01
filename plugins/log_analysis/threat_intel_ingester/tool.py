@@ -304,6 +304,11 @@ def extract_iocs_regex(
 # Chunked LLM processing helpers
 # ---------------------------------------------------------------------------
 
+# One taxonomy across both report tools; see threat_report_analyzer.
+from framework.reference_data.mitre_attack import (  # noqa: E402
+    attack_grounding,
+)
+
 _MAX_IOC_PER_CHUNK: int = 50        # IOC candidates per LLM call
 _MAX_TEXT_CHARS_PER_CHUNK: int = 6_000  # Report text chars per LLM call
 
@@ -1041,6 +1046,113 @@ def _merge_llm_chunk_results(
     }
 
 
+# PluginExecutor truncates summarize_for_llm at this plugin's manifest
+# summary_budget, from the end. That is the whole reason Stage 1.4 put the
+# status first, and it means any unbounded list in the summary does not merely
+# get long - it deletes everything after itself. On the 154-page Anthropic
+# report the attribution narration alone reached 2,033 characters and took the
+# IOC counts, the analyst-action line and the output artifact id with it.
+#
+# So the plugin decides what to drop rather than letting the truncator decide.
+
+
+@lru_cache(maxsize=1)
+def _summary_cap() -> int:
+    """Characters this plugin's summary may use, from its own manifest.
+
+    Read here as well as by the executor so the plugin can budget itself
+    rather than be cut. Same reason _native_tier() reads model_tier: the
+    manifest stays the single place the number is set.
+    """
+    try:
+        with open(Path(__file__).parent / "manifest.json", encoding="utf-8") as f:
+            return int(json.load(f).get("summary_budget") or 4000)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return 4000
+# Headroom, because the cap is enforced elsewhere and an off-by-a-few there
+# should not cost a whole sentence here.
+_SUMMARY_SAFETY: int = 60
+# Never narrate an unbounded list even when there is room: a summary that is
+# 90% threat-actor names is not a summary.
+_SUMMARY_LIST_BUDGET: int = 180
+
+
+def _bounded_list(
+    names: list[str], budget: int = _SUMMARY_LIST_BUDGET,
+) -> str:
+    """Join names until `budget` characters, then say how many are left.
+
+    The first name always goes in, however long it is - an entry over budget
+    is narrated and counted, never silently reduced to nothing.
+
+    The full lists stay in report_metadata. This bounds only what is narrated.
+    """
+    shown: list[str] = []
+    used = 0
+    for name in names:
+        cost = len(name) + 2
+        if shown and used + cost > budget:
+            break
+        shown.append(name)
+        used += cost
+    remaining = len(names) - len(shown)
+    text = ", ".join(shown)
+    if remaining > 0:
+        text += f" (and {remaining} more)"
+    return text
+
+
+def _attribution_narration(
+    actors: list[str], campaigns: list[str], room: int,
+) -> str:
+    """The attribution lines, sized to whatever room the rest of the summary
+    left.
+
+    Attribution is the part of this summary a reader can most afford to read
+    in the artifact instead, and the part most able to run away - a model asked
+    for "threat actor if attributed" answers with whatever the section named,
+    and on a real report that was thirty-odd entries, several of them
+    themselves comma-separated lists.
+
+    Three tiers, by how much room is left: narrate what fits; or state the
+    counts and where to look; or, when not even that fits, say nothing.
+
+    The last tier looks like the silent dropping this project spends its time
+    removing, and is not. Every actor is in report_metadata and in the
+    artifact either way - what is being rationed is one sentence of narration
+    in a summary that is lossy by construction. Attribution sits *before* the
+    IOC counts in reading order, so a counts-line squeezed in against a cap
+    that is already full does not get added at the end, it pushes the findings
+    off it. Nothing is worth that.
+    """
+    if not actors and not campaigns:
+        return ""
+    counts = []
+    if actors:
+        counts.append(f"{len(actors)} further actor(s)")
+    if campaigns:
+        counts.append(f"{len(campaigns)} further campaign(s)")
+    minimal = (
+        f"{' and '.join(counts)} are named elsewhere in the report; see "
+        f"report_metadata."
+    )
+    if room < len(minimal):
+        return ""
+
+    budget = min(_SUMMARY_LIST_BUDGET, max(0, room - len(minimal)) // 2
+                 + _SUMMARY_LIST_BUDGET // 2)
+    out = []
+    if actors:
+        out.append(
+            "Also attributed, elsewhere in the report: "
+            f"{_bounded_list(actors, budget)}."
+        )
+    if campaigns:
+        out.append(f"Other campaigns named: {_bounded_list(campaigns, budget)}.")
+    text = " ".join(out)
+    return text if len(text) <= room else minimal
+
+
 def _analysis_fields(
     *,
     ingestion_mode: str,
@@ -1066,8 +1178,8 @@ def _analysis_fields(
 
     The notes carry the markers that used to be separate sentences in
     summarize_for_llm, so that the status can lead there. That matters because
-    PluginExecutor truncates the summary at 2000 characters, and a warning
-    placed after the content is the part that gets cut.
+    PluginExecutor truncates the summary at the manifest's summary_budget,
+    and a warning placed after the content is the part that gets cut.
     """
     notes: list[str] = []
     dropped = max(0, (pages_total or 0) - (pages_read or 0))
@@ -2307,14 +2419,22 @@ class ThreatIntelIngester:
             logger.info("Running LLM refinement on %d IOC candidates", len(raw_iocs))
 
             # Use framework reference data for MITRE grounding
+            # Grounded from the local lookup, not from a reference_data key.
+            # This read `context.reference_data.get("mitre_attack_enterprise")`
+            # until 2026-09-16, and nothing has ever written that key - the
+            # shell supplies "mitre_techniques" and "mitre_relationships" - so
+            # `grounding` was always empty and every prompt went out with no
+            # ATT&CK anchor at all. The reconciler downstream was doing the
+            # whole job, which is why a live run needed four tactic
+            # corrections and two analyst flags: the model was never told
+            # which release it was answering against.
+            #
+            # Shared with threat_report_analyzer so both tools state one
+            # taxonomy in the same words.
             grounding: list[str] = []
-            if hasattr(context, "reference_data"):
-                mitre_data = context.reference_data.get("mitre_attack_enterprise")
-                if mitre_data:
-                    grounding.append(
-                        "MITRE ATT&CK Enterprise techniques are available "
-                        "for validation. Use official technique IDs."
-                    )
+            anchor = attack_grounding()
+            if anchor:
+                grounding.append(anchor)
 
             # --- Native PDF path: whole document, or page-range batches ---
             native_pdf_succeeded = False
@@ -3233,8 +3353,9 @@ class ThreatIntelIngester:
         pages = meta.get("page_count", "?")
         size_label = "pages" if artifact_type == "pdf_report" else "lines"
         # Status before anything else, including the report identity. The
-        # summary is capped at 2000 characters by PluginExecutor, so a warning
-        # placed after the content is the part that gets cut.
+        # summary is capped at the manifest's summary_budget by
+        # PluginExecutor, so a warning placed after the content is the part
+        # that gets cut.
         status = summary.get("analysis_status", "complete")
         notes = "; ".join(summary.get("analysis_notes") or [])
         if status != "complete":
@@ -3261,20 +3382,20 @@ class ThreatIntelIngester:
             )
         # The scalars above carry one of each. Saying so is what stops a
         # reader taking a single-actor line as the report's whole attribution.
+        #
+        # A slot, filled once everything else is measured: this is the part
+        # that gets whatever room is left, rather than the part that takes the
+        # room and leaves the findings to be truncated away.
         others = [
             a.get("name") for a in meta.get("actors", [])[1:] if a.get("name")
         ]
-        if others:
-            parts.append(
-                f"Also attributed, elsewhere in the report: {', '.join(others)}."
-            )
         other_campaigns = [
             c.get("name") for c in meta.get("campaigns", [])[1:] if c.get("name")
         ]
-        if other_campaigns:
-            parts.append(
-                f"Other campaigns named: {', '.join(other_campaigns)}."
-            )
+        attribution_slot = None
+        if others or other_campaigns:
+            attribution_slot = len(parts)
+            parts.append("")
 
         # IOC counts
         total = summary.get("total_iocs", 0)
@@ -3364,7 +3485,7 @@ class ThreatIntelIngester:
 
         # The regex-only warning used to live here, at the end. It is now the
         # DEGRADED INPUT note that leads the summary — saying it twice wastes a
-        # budget PluginExecutor caps at 2000 characters, and the copy that got
+        # budget PluginExecutor caps at summary_budget, and the copy that got
         # cut was this one.
 
         # Output artifact + quick chart command
@@ -3380,5 +3501,15 @@ class ThreatIntelIngester:
                 f"Quick chart: run attack_path_visualizer "
                 f"--artifact_id {aid} --format mermaid"
             )
+
+        if attribution_slot is not None:
+            fixed = len(" ".join(
+                p for i, p in enumerate(parts) if i != attribution_slot
+            ))
+            room = _summary_cap() - _SUMMARY_SAFETY - fixed
+            parts[attribution_slot] = _attribution_narration(
+                others, other_campaigns, room,
+            )
+            parts = [p for p in parts if p]
 
         return " ".join(parts)

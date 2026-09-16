@@ -453,7 +453,7 @@ This is the most important communication interface in Event Mill. Every tool res
 
 1. Output MUST be a plain text string (no JSON, no markdown code blocks)
 2. Target length: 200-500 tokens (approximately 150-400 words)
-3. Hard maximum: 2000 characters
+3. Hard maximum: the manifest's `summary_budget` (default 4000 characters)
 4. MUST include: key findings, counts, notable anomalies
 5. MUST NOT include: raw data arrays, full IP lists, complete field inventories
 6. MUST NOT invent findings not present in the result

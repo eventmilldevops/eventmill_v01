@@ -91,7 +91,7 @@ The file is registered as a `text` session artifact. `.mmd` files can be rendere
 The shell prints three things:
 
 1. **Summary** — the short text that also goes into the LLM context. It is
-   capped at 2000 characters by the plugin spec, so it never contains the
+   capped at the manifest's `summary_budget` (default 4000 characters), so it never contains the
    drawing itself; it lists paths, convergence points, unconfirmed tactics,
    and where the files are.
 2. **Rendered output** — the complete ASCII and/or Mermaid rendering, printed

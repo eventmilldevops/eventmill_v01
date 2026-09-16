@@ -357,7 +357,7 @@ class EventMillToolProtocol(Protocol):
         - MUST NOT repeat the full structured output
         - MUST NOT invent facts not present in result
         - MUST NOT include binary data references
-        - Hard maximum: 2000 characters
+        - Hard maximum: the manifest's summary_budget (default 4000 chars)
         
         Args:
             result: The ToolResult from execute().

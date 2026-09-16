@@ -370,6 +370,263 @@ class TestTheSummaryNamesEveryActor:
 
 
 # ---------------------------------------------------------------------------
+# Found by the 154-page live run, 2026-09-16
+# ---------------------------------------------------------------------------
+
+
+class TestTheSummaryStaysInsideItsBudget:
+    """2.4 regressed Stage 1.4's guarantee on a real report.
+
+    `summarize_for_llm` is truncated at 2000 characters by PluginExecutor,
+    **from the end** - which is the entire reason Stage 1.4 moved the status to
+    the front. Collecting every actor and campaign was correct, but narrating
+    all of them was not: the Anthropic 154-page report named thirty-odd actors
+    and twenty-odd campaigns, several of them themselves comma-separated lists,
+    and those two lines alone came to 2,033 characters. The summary reached
+    3,712.
+
+    What that deleted, silently: the IOC counts and breakdown, the technique
+    mappings, the attack graph, the ACTION line naming two tactics that need
+    analyst confirmation, and the output artifact id with its chart command.
+    The status still led, so the run looked correct.
+
+    The full lists stay in report_metadata. Only the narration is bounded.
+    """
+
+    # Taken from the live run rather than invented - the point is the real
+    # volume, including entries that are themselves lists of actors.
+    LIVE_ACTORS = [
+        "Midnight Blizzard (GTG-20006)",
+        "ShinyHunters (affiliates MeowSHA / frkoo / blazespider)",
+        "GTG-10007, GTG-50020, GTG-50021, GTG-50029",
+        "GTG-04001 / Politology (Africa Corps/Wagner / SVR)",
+        "GTG-10002, GTG-50020, GTG-50029, GTG-50021, GTG-50014, GTG-20006",
+        "LKM Company / BBS Bilisim Teknolojileri",
+        "Russian state media (RT, Sputnik, RIA Novosti) and Iranian state "
+        "propaganda entities (ICCO, Islamic Propaganda Office, Bina Cultural "
+        "Observatory)",
+        "MEK/NCRI (People's Mojahedin Organization of Iran) / Pro-Awami "
+        "League Actor",
+        "UAE-directed actors",
+        "S2T Unlocking Cyberspace",
+        "PRC-aligned Public Security and State Security organs / "
+        "Surveillance contractors",
+        "Multiple Threat Actors (Iran-nexus GTG-34007/30004/30005/30006, "
+        "PRC-nexus contractor, Mali ANSE contractor)",
+        "PLA Academy of Military Sciences / PRC and Russian "
+        "military-industrial actors (GTG-17002, GTG-27006, GTG-17003)",
+        "PRC-based AI Labs (Alibaba Qwen/Tongyi Lab, Moonshot AI, DeepSeek, "
+        "Zhipu AI, Xiaomi)",
+        "SenseTime (GTG 16012)",
+        "MiniMax (GTG 16003)",
+    ]
+    LIVE_CAMPAIGNS = [
+        "CaptiveCrunch",
+        "GTG-50014: ShinyHunters smash-and-grab opportunists",
+        "Exploit foundries and autonomous attack frameworks",
+        "AI Supply Chain & Hacktivist Targeting Campaign",
+        "Foreign Information Manipulation and Interference (FIMI) / "
+        "Autonomous Cyber Operations",
+        "GTG-24015 / GTG-34001 Influence Operations",
+        "AI-enabled surveillance and influence operations (GTG-84002, "
+        "GTG-54009, GTG-14010)",
+        "China-based Public and State Security AI Misuse Operations "
+        "(GTG-14020, GTG-14021, GTG-14022)",
+        "Illicit Model Distillation and Scaled Abuse Campaigns (GTG 16005, "
+        "GTG-16002, GTG-16001, GTG-16006, GTG-16008)",
+    ]
+
+    def _live_summary(self):
+        class _R:
+            ok = True
+            message = None
+            output_artifacts = []
+            result = {
+                "report_metadata": {
+                    "title": "Detecting and countering misuse of AI",
+                    "artifact_type": "pdf_report",
+                    "page_count": 154,
+                    "attributed_actor": "Midnight Blizzard (GTG-20006)",
+                    "attribution_confidence": "high",
+                    "campaign_name": "CaptiveCrunch",
+                    "actors": [
+                        {"name": n}
+                        for n in TestTheSummaryStaysInsideItsBudget.LIVE_ACTORS
+                    ],
+                    "campaigns": [
+                        {"name": n}
+                        for n in
+                        TestTheSummaryStaysInsideItsBudget.LIVE_CAMPAIGNS
+                    ],
+                },
+                "summary": {
+                    "analysis_status": "partial",
+                    "analysis_notes": [
+                        "UNASSESSED CANDIDATES: 1 indicator candidate(s) "
+                        "received no verdict from the model, so they are "
+                        "neither accepted nor ruled out",
+                        "UNRESOLVED CONFLICTS: 8 reported value(s) disagree "
+                        "between batches; the first is reported and every "
+                        "reading is kept under the record's conflicts",
+                    ],
+                    "mitre_technique_count": 98,
+                    "unique_technique_count": 91,
+                    "total_iocs": 157,
+                    "ioc_breakdown": {
+                        "cve": 7, "domain": 74, "hash_sha256": 2, "ip": 55,
+                        "social_media_handle": 17, "url": 2,
+                    },
+                    "high_priority_count": 24,
+                },
+                "mitre_mappings": [
+                    {"technique_id": f"T{1500 + i}",
+                     "technique_name": f"Technique Number {i}",
+                     "tactic": "Execution"}
+                    for i in range(98)
+                ],
+                "attack_graph": {
+                    "paths": [{"path_id": f"path-{i}"} for i in range(31)],
+                    "convergence_points": [
+                        "T1567.002", "T1656", "T1589.001", "T1657", "T1119",
+                        "T1078", "T1587", "T1567", "T1041", "T1590",
+                        "T1585.001", "T1528", "T1036", "T1087", "T1090",
+                        "T1102.002", "T1550.001", "T1555.003",
+                    ],
+                    "branch_points": [],
+                },
+                "iocs": [],
+            }
+        return _tool_mod.ThreatIntelIngester().summarize_for_llm(_R())
+
+    def test_the_live_report_fits_the_executor_cap(self):
+        cap = _tool_mod._summary_cap()
+        text = self._live_summary()
+        assert len(text) <= cap, (
+            f"summary is {len(text)} chars against this plugin's manifest "
+            f"summary_budget of {cap}; PluginExecutor cuts from the end"
+        )
+
+    def test_the_cap_is_the_manifests_own_number(self):
+        """Not a framework constant. The ingester reads a whole report, so it
+        asks for more room than a tool that lists files, and the manifest is
+        where that is said - once, for both the plugin and the executor."""
+        import json
+        manifest = json.loads(
+            (PLUGIN_DIR / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert _tool_mod._summary_cap() == manifest["summary_budget"]
+
+    def test_the_findings_survive_the_attribution(self):
+        """The specific loss: the IOC counts sat after the actor list."""
+        text = self._live_summary()
+        assert "Extracted 157 IOCs" in text
+        assert "24 IOCs flagged as high-priority" in text
+
+    def test_the_status_still_leads(self):
+        assert self._live_summary().startswith("PARTIAL")
+
+    def test_the_attack_graph_and_technique_lines_survive(self):
+        """Both sat after the attribution narration too."""
+        text = self._live_summary()
+        assert "91 unique technique" in text or "unique technique" in text
+        assert "31 path(s)" in text
+
+    def test_the_count_of_unnarrated_actors_is_stated(self):
+        """Bounded, not silently cut - the same rule the rest of Stage 1 and 2
+        applied to every other dropped thing."""
+        text = self._live_summary()
+        assert "more" in text
+
+    def test_a_tight_summary_collapses_to_the_counts(self):
+        """Enough room for the counts and where to look, but not to narrate."""
+        line = _tool_mod._attribution_narration(
+            ["APT-" + "X" * 60] * 12, ["Op-" + "Y" * 60] * 8, room=150,
+        )
+        assert "12 further actor(s)" in line
+        assert "8 further campaign(s)" in line
+        assert "report_metadata" in line
+
+    def test_with_no_room_at_all_the_narration_is_omitted(self):
+        """Not even the counts. Attribution sits before the IOC counts in
+        reading order, so a line squeezed in against a full cap does not land
+        at the end - it pushes the findings off it. The actors are in
+        report_metadata and the artifact regardless."""
+        assert _tool_mod._attribution_narration(
+            ["APT-" + "X" * 60] * 12, ["Op-" + "Y" * 60] * 8, room=40,
+        ) == ""
+
+    def test_no_attribution_narration_when_there_is_nothing_extra(self):
+        assert _tool_mod._attribution_narration([], [], room=500) == ""
+
+    @pytest.mark.parametrize(
+        "padding", [0, 2000, 4000, 5500, 6500, 7000, 7400],
+    )
+    def test_the_cap_holds_however_much_room_the_rest_leaves(self, padding):
+        """Swept rather than sampled, because a fixed per-list budget is not
+        enough on its own: it keeps the attribution short, but "short" still
+        overflows once the rest of the summary is already near the cap. The
+        narration has to be sized against the room actually left, and past a
+        point collapse to the counts alone.
+
+        A single well-behaved fixture cannot show that - it never puts the
+        sizing under pressure. This walks the band where it starts to bind.
+        """
+        class _R:
+            ok = True
+            message = None
+            output_artifacts = []
+            result = {
+                "report_metadata": {
+                    "title": "Report " + "T" * padding,
+                    "artifact_type": "pdf_report",
+                    "page_count": 154,
+                    "attributed_actor": "Midnight Blizzard",
+                    "attribution_confidence": "high",
+                    "actors": [
+                        {"name": n} for n in
+                        TestTheSummaryStaysInsideItsBudget.LIVE_ACTORS
+                    ],
+                    "campaigns": [
+                        {"name": n} for n in
+                        TestTheSummaryStaysInsideItsBudget.LIVE_CAMPAIGNS
+                    ],
+                },
+                "summary": {
+                    "analysis_status": "complete",
+                    "analysis_notes": [],
+                    "total_iocs": 157,
+                    "ioc_breakdown": {"ip": 55, "domain": 74},
+                    "high_priority_count": 24,
+                },
+                "mitre_mappings": [],
+                "iocs": [],
+            }
+
+        cap = _tool_mod._summary_cap()
+        text = _tool_mod.ThreatIntelIngester().summarize_for_llm(_R())
+        assert len(text) <= cap, (
+            f"padding={padding}: summary is {len(text)} chars, over the "
+            f"manifest's summary_budget of {cap}"
+        )
+        # The findings sit after the attribution, so they are what an
+        # oversized narration costs. A summary that fits by losing them has
+        # not been fixed.
+        assert "Extracted 157 IOCs" in text
+        assert "24 IOCs flagged as high-priority" in text
+
+    def test_a_short_list_is_narrated_whole(self):
+        assert _tool_mod._bounded_list(["APT-A", "APT-B"]) == "APT-A, APT-B"
+
+    def test_one_oversized_entry_is_still_narrated(self):
+        """A single entry longer than the budget is kept, not dropped to
+        nothing - the first one always goes in."""
+        long_name = "X" * 400
+        out = _tool_mod._bounded_list([long_name, "APT-B"])
+        assert out.startswith(long_name)
+        assert "(and 1 more)" in out
+
+
+# ---------------------------------------------------------------------------
 # End to end, through execute
 # ---------------------------------------------------------------------------
 #

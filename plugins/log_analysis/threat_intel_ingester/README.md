@@ -128,8 +128,16 @@ Everything below is additive — no key an existing consumer reads has moved.
 
 `summary.analysis_status` is `complete`, `partial` or `degraded`, with
 `analysis_notes` naming every cause. It leads `summarize_for_llm()`, because
-`PluginExecutor` truncates that summary at 2000 characters *from the end* — a
-warning placed after the content is exactly the part that gets cut.
+`PluginExecutor` truncates that summary at this plugin's manifest
+`summary_budget` (**8000 characters**, against a framework default of 4000)
+*from the end* — a warning placed after the content is exactly the part that
+gets cut.
+
+Lists inside the summary are bounded regardless of the room available, and say
+how many they did not name. A 154-page report can name thirty threat actors;
+narrating all of them produces a summary that is mostly proper nouns and no
+longer a summary. The complete lists are in `report_metadata` and in the
+artifact.
 
 `degraded` outranks `partial`: a run that fell back to a worse input path is a
 more serious statement than one that analysed less of the report.

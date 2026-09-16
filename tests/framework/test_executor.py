@@ -16,7 +16,7 @@ from framework.plugins.protocol import (
     ValidationResult,
 )
 from framework.plugins.executor import PluginExecutor, ExecutionResult
-from framework.plugins.loader import PluginLoader
+from framework.plugins.loader import DEFAULT_SUMMARY_BUDGET, PluginLoader
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ class LongSummaryPlugin:
         return ToolResult(ok=True, result={"data": "ok"})
 
     def summarize_for_llm(self, result: ToolResult) -> str:
-        return "A" * 5000  # Way over 2000 char limit
+        return "A" * 9000  # Way over any manifest's summary_budget
 
 
 # ---------------------------------------------------------------------------
@@ -127,9 +127,15 @@ class LongSummaryPlugin:
 
 
 class FakeManifest:
-    def __init__(self, tool_name: str, timeout_class: str = "fast"):
+    def __init__(
+        self,
+        tool_name: str,
+        timeout_class: str = "fast",
+        summary_budget: int = DEFAULT_SUMMARY_BUDGET,
+    ):
         self.tool_name = tool_name
         self.timeout_class = timeout_class
+        self.summary_budget = summary_budget
 
 
 class FakeLoadedPlugin:
@@ -222,13 +228,46 @@ class TestPluginExecutor:
         assert "completed successfully" in result.summary
 
     def test_summary_truncation(self, executor: PluginExecutor, context: ExecutionContext):
-        """Test that oversized summaries are truncated to 2000 chars."""
+        """An oversized summary is cut to the manifest's summary_budget."""
         plugin = FakeLoadedPlugin(LongSummaryPlugin(), "long_summary")
         result = executor.execute(plugin, {}, context)
 
         assert result.ok
-        assert len(result.summary) <= 2000
+        assert len(result.summary) <= DEFAULT_SUMMARY_BUDGET
         assert result.summary.endswith("...")
+
+    def test_the_budget_comes_from_the_manifest(
+        self, executor: PluginExecutor, context: ExecutionContext,
+    ):
+        """A tool that reads a 154-page report has more to say than one that
+        lists files, so the ceiling travels with the tool rather than being a
+        constant every plugin shares."""
+        plugin = FakeLoadedPlugin(LongSummaryPlugin(), "long_summary")
+        plugin.manifest.summary_budget = 8000
+        result = executor.execute(plugin, {}, context)
+
+        assert len(result.summary) == 8000
+        assert result.summary.endswith("...")
+
+    def test_a_manifest_without_a_budget_falls_back_to_the_default(
+        self, executor: PluginExecutor, context: ExecutionContext,
+    ):
+        """And does not report the missing field as summarize_for_llm failing
+        - that sends whoever reads the log to the wrong file."""
+        plugin = FakeLoadedPlugin(LongSummaryPlugin(), "long_summary")
+        del plugin.manifest.summary_budget
+        result = executor.execute(plugin, {}, context)
+
+        assert len(result.summary) == DEFAULT_SUMMARY_BUDGET
+        assert result.summary.startswith("A")
+
+    def test_a_summary_inside_the_budget_is_untouched(
+        self, executor: PluginExecutor, context: ExecutionContext,
+    ):
+        plugin = FakeLoadedPlugin(GoodPlugin(), "good_plugin")
+        result = executor.execute(plugin, {}, context)
+
+        assert not result.summary.endswith("...")
 
     def test_to_dict(self, executor: PluginExecutor, context: ExecutionContext):
         """Test ExecutionResult serialization."""

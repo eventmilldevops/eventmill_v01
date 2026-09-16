@@ -76,9 +76,14 @@ means updating `PluginManifest.__init__` in `framework/plugins/loader.py` **and*
 `docs/specs/manifest_schema.json`, which sets `additionalProperties: false` — an
 unregistered field fails validation for every plugin at once.
 
-`summarize_for_llm()` is the context-compression mechanism and is capped at 2000
-characters by `PluginExecutor` (which truncates rather than failing). Keep it well
-under that; it is what downstream reasoning actually sees.
+`summarize_for_llm()` is the context-compression mechanism and is capped by
+`PluginExecutor` at the manifest's `summary_budget` — **default 4000
+characters**, raised to 8000 for `threat_intel_ingester` and
+`threat_report_analyzer`, which read whole reports. It truncates rather than
+failing, and it truncates **from the end**, so whatever a plugin puts last is
+what disappears. Keep well under the ceiling, lead with status, and bound every
+list you narrate rather than relying on the cut; it is what downstream reasoning
+actually sees.
 
 Plugins receive a read-only `ExecutionContext`. The one write they may perform is
 `context.register_artifact()`.

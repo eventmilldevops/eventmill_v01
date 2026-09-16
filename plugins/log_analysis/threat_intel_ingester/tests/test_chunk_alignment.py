@@ -269,6 +269,7 @@ class _RecordingLLM:
     def __init__(self, native=False, fail_pages=()):
         self.prompts: list[str] = []
         self.doc_prompts: list[str] = []
+        self.grounding: list = []
         self.native = native
         self.fail_pages = set(fail_pages)
 
@@ -294,6 +295,7 @@ class _RecordingLLM:
                             max_tokens=8192, grounding_data=None, hints=None):
         label = str((artifact.metadata or {}).get("page_range", "whole"))
         self.doc_prompts.append(prompt)
+        self.grounding.append(grounding_data)
         if any(f"p{p}" == label or label == "whole" and self.fail_pages
                for p in self.fail_pages):
             return _Resp(ok=False, error="forced failure")
@@ -302,6 +304,7 @@ class _RecordingLLM:
     def query_text(self, prompt, system_context=None, max_tokens=4096,
                    grounding_data=None, hints=None):
         self.prompts.append(prompt)
+        self.grounding.append(grounding_data)
         return _Resp(text=self._body(_prompt_candidates(prompt)))
 
 
@@ -476,6 +479,57 @@ class TestThePromptCarriesThePageLabel:
                 f"{ioc['value']} is on page {page}, recorded against pages "
                 f"{first['page_start']}-{first['page_end']}"
             )
+
+
+class TestThePromptsAreGrounded:
+    """Found 2026-09-16: the grounding check read a reference_data key that
+    nothing writes.
+
+    `context.reference_data.get("mitre_attack_enterprise")` - the shell
+    supplies `mitre_techniques` and `mitre_relationships`, and that key is read
+    in one place and written in none. So `grounding` was always empty and every
+    prompt went out with no ATT&CK anchor, on both the native and chunked
+    paths. The reconciler downstream was doing the entire job.
+    """
+
+    @staticmethod
+    def _anchor(grounding):
+        """The plugin's contract is to *pass* grounding_data; the dispatcher
+        composes it into the prompt (`compose_prompt`), so a stub client never
+        sees it in the prompt text. Assert where the plugin's job ends."""
+        return " ".join(grounding or [])
+
+    def test_the_chunked_call_names_the_release(self, run_text_report):
+        from framework.reference_data import mitre_attack
+        body = "\n\n".join(LONG_PAGES)
+        _, llm = run_text_report(body)
+        assert llm.grounding, "no call was made"
+        for g in llm.grounding:
+            assert mitre_attack.attack_version() in self._anchor(g), (
+                "the call carries no ATT&CK release"
+            )
+
+    def test_the_call_rules_out_the_retired_tactic(self, run_text_report):
+        """The concrete cost of no grounding: the model writes v14-era tactic
+        names and the reconciler has to correct them afterwards. The live run
+        needed four corrections and two analyst flags."""
+        body = "\n\n".join(LONG_PAGES)
+        _, llm = run_text_report(body)
+        assert llm.grounding
+        for g in llm.grounding:
+            anchor = self._anchor(g)
+            assert "Defense Evasion" in anchor
+            assert "Stealth" in anchor
+
+    def test_the_native_path_is_grounded_too(self, run_pdf_report):
+        """The path a real report takes, and the one the 154-page run used."""
+        from framework.reference_data import mitre_attack
+        llm = _RecordingLLM(native=True)
+        run_pdf_report(LONG_PAGES, llm)
+        assert llm.doc_prompts, "the native path must have been taken"
+        assert llm.grounding
+        for g in llm.grounding:
+            assert mitre_attack.attack_version() in self._anchor(g)
 
 
 class TestTheChunkedPathIsNotSupersededByItself:

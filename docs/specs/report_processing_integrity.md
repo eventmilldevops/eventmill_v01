@@ -378,11 +378,19 @@ cause, and surface the status **first** in `summarize_for_llm()` — ahead of th
 existing `INCOMPLETE COVERAGE` line, which becomes one of the notes.
 
 **Why:** `summarize_for_llm` is what downstream reasoning actually sees
-(`CLAUDE.md`), and it is capped at 2000 characters by `PluginExecutor`. Status
-must lead so truncation of the summary cannot remove the warning.
+(`CLAUDE.md`), and it is capped by `PluginExecutor` at the manifest's
+`summary_budget`. Status must lead so truncation of the summary cannot remove
+the warning.
 
-**Do not:** exceed the 2000-character cap. Keep `analysis_notes` to one short
-line per cause.
+**Do not:** exceed the budget. Keep `analysis_notes` to one short line per
+cause.
+
+*Amended 2026-09-16:* the cap was a hardcoded 2000 characters when this was
+written; it is now per-manifest, 4000 by default and 8000 for both report
+tools. The reasoning is unchanged and the live run proved it: 2.4's unbounded
+attribution narration reached 3,712 characters and would have pushed the
+findings past any of those ceilings. A larger budget is not a substitute for
+bounding what goes in it.
 
 **Test:** each status reachable from a synthetic scenario; `summarize_for_llm`
 output starts with the status whenever it is not `complete`.

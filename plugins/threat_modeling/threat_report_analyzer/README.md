@@ -148,7 +148,8 @@ lengths; this is what says which run produced which.
 
 `analysis_status` is `complete`, `partial` or `degraded`, with `analysis_notes`
 naming every cause. It leads `summarize_for_llm()`, because `PluginExecutor`
-truncates that summary at 2000 characters *from the end* — a warning placed after
+truncates that summary at this plugin's manifest `summary_budget` (**8000
+characters**, against a framework default of 4000) *from the end* — a warning placed after
 the content is exactly the part that gets cut.
 
 `degraded` outranks `partial`. A run that fell back to a worse input path is the
@@ -304,10 +305,57 @@ text as a labelled substitution — never presented as a summary.
 
 **safe_for_auto_invoke: false** — this tool writes files to the common bucket.
 
+## ATT&CK taxonomy
+
+**Both report tools answer to the same ATT&CK release** — v19.2, the one
+`scripts/build_mitre_lookup.py` pins. That takes two mechanisms, because
+neither does the job alone.
+
+**The prompts are grounded.** Every summarization prompt carries the release,
+the valid enterprise tactic list, and the fact that *Defense Evasion* was
+retired in v19 and split into **Stealth** and **Defense Impairment**. Without
+it a model answers from its training data — which for every current model
+predates v19 — and writes retired tactic names into its narrative. A live run
+on 2026-09-16 produced a table headed `Defense Evasion | T1027` and cited
+"MITRE ATT&CK Framework (v14+)"; neither string exists anywhere in this
+repository.
+
+**The extracted ids are reconciled.** `relevant_techniques` is scraped from the
+model's prose, so it arrives under whatever numbering the model learned. Every
+id is validated against the local lookup, retired ids are remapped from the
+curated map (**never guessed**), and the result carries:
+
+| Field | Means |
+|---|---|
+| `attack_techniques[]` | each id with its official `technique_name`, the `tactics` ATT&CK allows, and `mitre_validated` |
+| `attack_techniques[].remapped_from` / `remap_basis` | the retired id it was reported under, and whether the remap was `curated` or resolved by name |
+| `attack_version` | the release it was reconciled against |
+
+`relevant_techniques` keeps its shape — a list of id strings — so existing
+consumers are unaffected, but the ids in it are the reconciled ones and can
+differ from those in the prose above.
+
+**The export carries a checked table.** Narrative text cannot be safely
+rewritten after the fact, so the summary file gets its own
+`## ATT&CK techniques (reconciled against v19.2)` block between the provenance
+header and the model's prose. An id ATT&CK does not know is listed and marked
+*not in ATT&CK*, not quietly dropped and not presented as fact.
+
+**The analyzer does not build attack paths.** `threat_intel_ingester` produces
+the reconciled `attack_graph`, and `attack_path_visualizer` and
+`adversary_path_projector` consume it. A second, prose-derived path
+representation here would be unreconciled by construction — the exact
+divergence this section exists to remove.
+
+The shared primitives live in `framework/reference_data/mitre_attack.py`
+(`attack_grounding`, `reconcile_technique_ids`, `attack_version`), so both
+tools call one implementation rather than keeping two in step.
+
 ## Notes
 
 - Extracts MITRE ATT&CK technique IDs (T1234 format) from summaries, in stable
-  first-appearance order
+  first-appearance order, then reconciles them — see
+  [ATT&CK taxonomy](#attck-taxonomy)
 - PDF handling here is **separate from `threat_intel_ingester`'s**; the two do
   not share PDF code, and only the ingester uses `framework/documents`
 - Section summaries are written for multi-section reports even when a section
