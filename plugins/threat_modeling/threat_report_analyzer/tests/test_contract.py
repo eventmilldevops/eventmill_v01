@@ -316,3 +316,43 @@ class TestStampedExports:
         )
         found = tool_instance._summary_output_path("r.pdf", None)
         assert found == legacy and found.exists()
+
+
+class TestDeclaredChainsAreExecutable:
+    """A chain this tool cannot actually feed is worse than no chain.
+
+    `chains_to` drives the router's chain recommendations, so a dead edge
+    sends an operator to a tool that will reject the artifact outright.
+    `attack_path_visualizer` was listed here until 2026-09-16: it consumes
+    only `json_events` and hard-rejects anything else, while this tool
+    produces `text` and deliberately builds no attack paths.
+    """
+
+    def _manifest(self, tool_name: str) -> dict:
+        import json
+        path = (
+            PLUGIN_DIR.parent.parent / "threat_modeling" / tool_name
+            / "manifest.json"
+        )
+        if not path.exists():
+            path = PLUGIN_DIR.parent.parent / "log_analysis" / tool_name / "manifest.json"
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_every_declared_chain_can_consume_what_this_tool_produces(
+        self, manifest,
+    ):
+        produced = set(manifest.get("artifacts_produced") or [])
+        assert produced, "this tool must declare what it produces"
+        for target in manifest.get("chains_to") or []:
+            consumed = set(self._manifest(target).get("artifacts_consumed") or [])
+            assert produced & consumed, (
+                f"chains_to names {target}, which consumes {sorted(consumed)} "
+                f"and cannot take this tool's {sorted(produced)}"
+            )
+
+    def test_the_visualizer_is_not_claimed_as_a_chain(self, manifest):
+        """Named rather than left to the general rule above: the fix is to
+        feed the visualizer from threat_intel_ingester, and re-adding it here
+        would look reasonable to anyone who had not tried it."""
+        assert "attack_path_visualizer" not in (manifest.get("chains_to") or [])

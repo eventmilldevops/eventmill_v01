@@ -35,8 +35,7 @@
     "context"
   ],
   "chains_to": [
-    "risk_assessment_analyzer",
-    "attack_path_visualizer"
+    "risk_assessment_analyzer"
   ],
   "chains_from": []
 }

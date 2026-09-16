@@ -61,7 +61,19 @@ def _build_config(
     Unset hints leave the provider default in place. Note that Gemini 3.x
     deprecates temperature/top_p/top_k — this deliberately sets none of them.
     """
-    config = genai_types.GenerateContentConfig(max_output_tokens=max_tokens)
+    config = genai_types.GenerateContentConfig(
+        max_output_tokens=max_tokens,
+        # No plugin passes tools, so automatic function calling has nothing to
+        # call. Left unset, the SDK still routes generate_content through its
+        # AFC-capable path and logs "Direct use of automatic function calling
+        # (AFC) ... is not recommended" once per process. The loop then runs a
+        # single iteration and returns, so the warning describes nothing that
+        # happens - and a warning in every run's output is what teaches people
+        # to skim past the real ones.
+        automatic_function_calling=genai_types.AutomaticFunctionCallingConfig(
+            disable=True,
+        ),
+    )
     if system_context:
         config.system_instruction = system_context
 

@@ -621,6 +621,25 @@ class TestGenerationControls:
         assert cfg.system_instruction == "be terse"
         assert cfg.max_output_tokens == 1234
 
+    def test_automatic_function_calling_is_disabled(self):
+        """No plugin passes tools, so AFC has nothing to call.
+
+        Left unset, the SDK still routes generate_content through its
+        AFC-capable path and logs "Direct use of automatic function calling
+        (AFC) ... is not recommended" once per process - describing a loop that
+        then runs a single iteration and returns. Disabling it skips that path
+        and keeps the warning out of every run's output, which is what stops
+        operators learning to skim past warnings that do matter.
+        """
+        from google.genai import _extra_utils
+
+        for hints in (None, QueryHints(), QueryHints(thinking_level="low")):
+            cfg = _build_config("sys", 4096, hints)
+            assert cfg.automatic_function_calling.disable is True
+            assert _extra_utils.should_disable_afc(cfg) is True, (
+                "the SDK must agree, or the AFC path still runs"
+            )
+
     def test_hints_reach_the_client_not_just_routing(self, dispatcher, clients):
         """Regression: the dispatcher routed on hints but dropped them."""
         hints = QueryHints(tier="light", thinking_level="low")

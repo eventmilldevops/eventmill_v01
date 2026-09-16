@@ -2826,6 +2826,22 @@ class EventMillShell(cmd.Cmd):
 
         schema = self._plugin_input_schema(plugin)
         payload: dict[str, Any] = {}
+        # An unrecognised flag is still passed through for the plugin's own
+        # validate_inputs() to judge - but it is named first. `--ignore_cap`
+        # for `--ignore_caps` was accepted in silence and the run did the
+        # opposite of what the operator asked, with nothing in the output
+        # saying so. The valid arguments are listed rather than a correction
+        # guessed: naming the right path is the job, inferring intent is not.
+        if schema:
+            unknown = [k for k, _ in pairs if k not in schema]
+            if unknown:
+                known = ", ".join(f"--{k}" for k in sorted(schema))
+                for key in dict.fromkeys(unknown):
+                    print(
+                        f"  Warning: --{key} is not an argument of "
+                        f"{plugin.tool_name} and will be ignored."
+                    )
+                print(f"  Arguments {plugin.tool_name} accepts: {known}")
         for key, value in pairs:
             coerced, error = self._coerce_flag_value(key, value, schema.get(key) or {})
             if error:

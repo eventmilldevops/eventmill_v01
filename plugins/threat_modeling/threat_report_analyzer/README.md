@@ -298,7 +298,17 @@ text as a labelled substitution — never presented as a summary.
 
 ## Chains
 
-- **To**: `risk_assessment_analyzer`, `attack_path_visualizer`
+- **To**: `risk_assessment_analyzer`
+
+`attack_path_visualizer` was listed here until 2026-09-16 and removed: it
+accepts only `json_events`, rejects anything else outright, and expects the
+ingester's `attack_graph` shape. This tool produces `text` and deliberately
+builds no attack paths, so the chain was never executable. Feed the visualizer
+from `threat_intel_ingester` instead.
+
+`threat_model_analyzer` and `adversary_path_projector` also consume `text` and
+can take this tool's summary, but they are not declared here — the projector
+already lists this tool in its own `chains_from`.
 - **From**: — (entry point for the threat intel workflow)
 
 ## Safety Notes
