@@ -208,14 +208,15 @@ def run_report(tmp_path, monkeypatch):
     vault.mkdir(parents=True, exist_ok=True)
 
     def go(body, report_text="A short threat report about an intrusion.",
-           tool=None, chunk_tokens=None):
+           tool=None, chunk_tokens=None, **payload):
         report = vault / "report.txt"
         report.write_text(report_text, encoding="utf-8")
         tool = tool or _tool_mod.ThreatReportAnalyzer()
         if chunk_tokens:
             tool.MAX_TOKENS_PER_CHUNK = chunk_tokens
         result = tool._summarize_report(
-            {"report_path": str(report)}, _Context(llm_query=_LLM(body=body)),
+            {"report_path": str(report), **payload},
+            _Context(llm_query=_LLM(body=body)),
         )
         assert result.ok, result.message
         return tool, result
@@ -273,6 +274,100 @@ class TestTheRunReportsItsOwnCap:
         _, result = run_report("Summary with no techniques at all.", tool=tool)
         assert tool._dropped == {}
         assert result.result["summaries"][0]["analysis_status"] == "complete"
+
+
+class TestIgnoreCaps:
+    """Added 2026-09-15 after a live run cut seven key findings.
+
+    A reported cap is still a cap. "Key findings" is read as the findings that
+    matter, and being told seven were left out says neither which seven nor how
+    to get them back. Both lists are extracted from a summary the model already
+    produced - no extra call, no extra tokens - so an operator who wants all of
+    them can have all of them.
+    """
+
+    def test_nothing_is_dropped_when_the_bounds_are_waived(
+        self, run_report, monkeypatch,
+    ):
+        monkeypatch.setattr(_tool_mod, "_MAX_RELEVANT_TECHNIQUES", 20)
+        tool, result = run_report(_technique_summary(25), ignore_caps=True)
+        summary = result.result["summaries"][0]
+        assert len(summary["relevant_techniques"]) == 25
+        assert tool._dropped == {}
+
+    def test_key_findings_survive_in_full(self, run_report, monkeypatch):
+        """The case the operator hit: 57 findings, 7 cut."""
+        monkeypatch.setattr(_tool_mod, "_MAX_KEY_FINDINGS", 50)
+        body = "\n".join(
+            f"- Finding number {i} of some length" for i in range(57)
+        )
+        _, capped = run_report(body)
+        assert len(capped.result["summaries"][0]["key_findings"]) == 50
+        _, whole = run_report(body, ignore_caps=True)
+        assert len(whole.result["summaries"][0]["key_findings"]) == 57
+
+    def test_a_waived_run_is_complete_not_partial(self, run_report, monkeypatch):
+        """Nothing was left out, so there is nothing to caveat. The LIST
+        TRUNCATED note must not fire."""
+        monkeypatch.setattr(_tool_mod, "_MAX_RELEVANT_TECHNIQUES", 20)
+        _, result = run_report(_technique_summary(25), ignore_caps=True)
+        summary = result.result["summaries"][0]
+        assert summary["analysis_status"] == "complete"
+        assert not any(
+            n.startswith("LIST TRUNCATED") for n in summary["analysis_notes"]
+        )
+
+    def test_the_result_says_which_run_it_was(self, run_report, monkeypatch):
+        """Two runs of one report returning lists of different lengths is
+        correct here, so the result has to carry which one produced it."""
+        monkeypatch.setattr(_tool_mod, "_MAX_RELEVANT_TECHNIQUES", 20)
+        _, waived = run_report(_technique_summary(25), ignore_caps=True)
+        _, bounded = run_report(_technique_summary(25))
+        assert waived.result["summaries"][0]["caps_waived"] is True
+        assert bounded.result["summaries"][0]["caps_waived"] is False
+
+    def test_the_export_header_states_it(self, run_report, monkeypatch):
+        """The file outlives the session, and a list's length means nothing
+        without knowing whether anything was allowed to bound it."""
+        monkeypatch.setattr(_tool_mod, "_MAX_RELEVANT_TECHNIQUES", 20)
+        tool, _ = run_report(_technique_summary(25), ignore_caps=True)
+        assert "ignore_caps" in tool._provenance_block("v/r.pdf", "stamp")
+
+    def test_a_bounded_run_says_nothing_about_bounds(
+        self, run_report, monkeypatch,
+    ):
+        monkeypatch.setattr(_tool_mod, "_MAX_RELEVANT_TECHNIQUES", 20)
+        tool, _ = run_report(_technique_summary(25))
+        assert "ignore_caps" not in tool._provenance_block("v/r.pdf", "stamp")
+
+    def test_the_setting_does_not_leak_into_the_next_run(
+        self, run_report, monkeypatch,
+    ):
+        """Run state, like _dropped. One tool object summarises many reports."""
+        monkeypatch.setattr(_tool_mod, "_MAX_RELEVANT_TECHNIQUES", 20)
+        tool, _ = run_report(_technique_summary(25), ignore_caps=True)
+        _, result = run_report(_technique_summary(25), tool=tool)
+        summary = result.result["summaries"][0]
+        assert summary["caps_waived"] is False
+        assert len(summary["relevant_techniques"]) == 20
+
+    def test_it_is_off_by_default(self, run_report, monkeypatch):
+        monkeypatch.setattr(_tool_mod, "_MAX_RELEVANT_TECHNIQUES", 20)
+        _, result = run_report(_technique_summary(25))
+        assert len(result.result["summaries"][0]["relevant_techniques"]) == 20
+
+    def test_the_flag_is_declared_in_the_input_schema(self):
+        """The CLI types --flags from this schema, and a bare --ignore_caps
+        only arrives as a boolean because the schema says it is one."""
+        import json
+        schema = json.loads(
+            (PLUGIN_DIR / "schemas" / "input.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        spec = schema["properties"]["ignore_caps"]
+        assert spec["type"] == "boolean"
+        assert spec["default"] is False
 
 
 class TestTheCrossChunkUnionIsCappedToo:

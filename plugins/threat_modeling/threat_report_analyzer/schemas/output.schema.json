@@ -63,14 +63,14 @@
             "items": {
               "type": "string"
             },
-            "description": "Bulleted or numbered findings lifted from the summary, in document order and bounded at 50. Anything the bound cut is stated in analysis_notes."
+            "description": "Bulleted or numbered findings lifted from the summary, in document order. Bounded at 50 unless the run set ignore_caps (see caps_waived); anything the bound cut is stated in analysis_notes."
           },
           "relevant_techniques": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "MITRE ATT&CK technique ids named in the summary, deduplicated in first-appearance order and bounded at 200. Read as \u201cthe techniques this report covers\u201d, so the ordering is stable across identical runs and anything the bound cut is stated in analysis_notes rather than dropped in silence."
+            "description": "MITRE ATT&CK technique ids named in the summary, deduplicated in first-appearance order. Bounded at 200 unless the run set ignore_caps (see caps_waived). Read as \u201cthe techniques this report covers\u201d, so the ordering is stable across identical runs and anything the bound cut is stated in analysis_notes rather than dropped in silence."
           },
           "truncated": {
             "type": "boolean",
@@ -117,6 +117,10 @@
           "pages_extract_failed": {
             "type": "integer",
             "description": "Pages pypdf could not read at all \u2014 scanned or damaged. Their content reaches nothing downstream, so a non-zero value makes analysis_status partial. Distinct from pages_dropped, which is pages never attempted."
+          },
+          "caps_waived": {
+            "type": "boolean",
+            "description": "True when the run was given ignore_caps, so key_findings and relevant_techniques are complete and unbounded. Two runs of one report can legitimately return lists of different lengths; this says which run it was."
           }
         },
         "required": [

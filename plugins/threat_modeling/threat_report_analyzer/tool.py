@@ -313,6 +313,10 @@ class ThreatReportAnalyzer:
     # How many entries each capped list left out, by label. Reset per run.
     _dropped: dict[str, int] | None = None
 
+    # Set by the run's ignore_caps input. When true the two extraction bounds
+    # do not apply at all, so nothing is dropped and nothing needs reporting.
+    _caps_waived: bool = False
+
     # Local intake and chunking limits. These are NOT provider limits and
     # must not be read as any: what a vendor accepts lives in
     # framework/llm/providers/<id>.json and is enforced by the dispatcher's
@@ -499,6 +503,16 @@ class ThreatReportAnalyzer:
         # this report covers", and a list quietly holding twenty of twenty-five
         # makes that claim false with nothing to show it.
         self._dropped: dict[str, int] = {}
+        # Bounds off for this run, at the operator's request. Recorded on the
+        # result and stamped on the export, because two runs of the same report
+        # with different answers here produce lists of different lengths and
+        # the file has to say which one it is.
+        self._caps_waived = bool(payload.get("ignore_caps", False))
+        if self._caps_waived:
+            _log.info(
+                "[CAP] ignore_caps set - key findings and techniques are "
+                "reported in full, with no upper bound"
+            )
         # One stamp for every file this run writes, so a run's summary and its
         # chunk summaries sort together in the bucket.
         stamp = self._run_stamp()
@@ -839,6 +853,9 @@ class ThreatReportAnalyzer:
                         "summary": final_summary,
                         "key_findings": key_findings,
                         "relevant_techniques": relevant_techniques,
+                        # Two runs of one report can legitimately return lists
+                        # of different lengths. This is which run it was.
+                        "caps_waived": self._caps_waived,
                     }
                 ],
                 "artifacts_created": [
@@ -1024,6 +1041,13 @@ class ThreatReportAnalyzer:
             f"> **Answered by:** {', '.join(self._provenance or ['(no LLM)'])}  ",
             f"> **Analysis status:** {fields['analysis_status']}  ",
         ]
+        if self._caps_waived:
+            # The file outlives the session, and a list's length is only
+            # meaningful next to whether anything was allowed to bound it.
+            lines.append(
+                "> **List bounds:** waived (`ignore_caps`) - key findings and "
+                "techniques are complete  "
+            )
         for note in fields["analysis_notes"]:
             lines.append(f"> - {note}  ")
         coverage = self._coverage_fields()
@@ -1914,8 +1938,15 @@ class ThreatReportAnalyzer:
         Both caps used to drop in silence, with nothing counting the remainder
         and no note reaching analysis_status - so a reader had no way to tell a
         list that is the whole answer from one that is a fraction of it.
+
+        ``ignore_caps`` turns the bound off entirely. A reported cap is still a
+        cap: "key findings" is read as the findings that matter, and being told
+        seven were left out does not tell anyone which seven or let them get
+        them back. The lists cost almost nothing to carry - they are extracted
+        from a summary the model already produced, not asked for separately -
+        so an operator who wants all of them should have them.
         """
-        if len(items) <= limit:
+        if self._caps_waived or len(items) <= limit:
             return items
         if self._dropped is None:
             self._dropped = {}
