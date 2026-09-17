@@ -3455,3 +3455,103 @@ class TestExportFailureIsNotFatal:
         assert result.ok
         assert result.result["path_count"] == 1
         assert result.result["export_errors"]
+
+
+def _exports_in(workspace) -> tuple[dict, dict]:
+    art_dir = Path(workspace) / "artifacts"
+    graph = sorted(art_dir.glob("adversary_path_graph_*.json"))[0]
+    seed = sorted(art_dir.glob("adversary_scenario_seed_*.json"))[0]
+    return (
+        json.loads(graph.read_text(encoding="utf-8")),
+        json.loads(seed.read_text(encoding="utf-8")),
+    )
+
+
+class TestExportProvenance:
+    """The graph and the seed must be joinable to each other and to the map.
+
+    Without this block the only thing distinguishing two exports is the
+    filename stamp, and a flow map can only be matched to an export by
+    application name.  See docs/specs/attack_path_detection_normalization.md.
+    """
+
+    def test_both_exports_share_one_run_id(self, plugin_instance,
+                                           sample_flow_map, tmp_path,
+                                           monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch,
+        )
+        graph, seed = _exports_in(tmp_path)
+        assert graph["provenance"]["run_id"]
+        assert graph["provenance"]["run_id"] == seed["provenance"]["run_id"]
+
+    def test_run_id_matches_the_run_record(self, plugin_instance,
+                                           sample_flow_map, tmp_path,
+                                           monkeypatch):
+        """The exports are written before the record and even when export is
+        off, so the id has to be minted once for both."""
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        graph, _ = _exports_in(tmp_path)
+        records = _records_in(tmp_path)
+        assert len(records) == 1
+        assert graph["provenance"]["run_id"] == records[0]["run"]["run_id"]
+        assert graph["provenance"]["created_at"] == records[0]["run"]["created_at"]
+
+    def test_exports_carry_the_flow_map_hash(self, plugin_instance,
+                                             sample_flow_map, tmp_path,
+                                             monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch,
+        )
+        graph, seed = _exports_in(tmp_path)
+        expected = _tool_mod._canonical_flow_map_hash(sample_flow_map)
+        assert graph["provenance"]["flow_map_sha256"] == expected
+        assert seed["provenance"]["flow_map_sha256"] == expected
+
+    def test_exports_pin_the_attack_release_and_actor_id(self, plugin_instance,
+                                                         sample_flow_map,
+                                                         tmp_path, monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch,
+        )
+        graph, _ = _exports_in(tmp_path)
+        provenance = graph["provenance"]
+        assert provenance["attack_version"]
+        assert provenance["actor_attack_id"] == "G0016"
+        assert provenance["prompt_sha256"]
+        assert "manifest_version" in provenance["tool_version"]
+        assert "provider" in provenance["model"]
+
+    def test_two_projections_do_not_share_an_id(self, plugin_instance,
+                                                sample_flow_map, tmp_path,
+                                                monkeypatch):
+        """A graph from one run must not pair with a seed from another."""
+        first = tmp_path / "a"
+        second = tmp_path / "b"
+        for workspace in (first, second):
+            _project_exporting(
+                plugin_instance, sample_flow_map, _good_projection(), workspace,
+                monkeypatch,
+            )
+        graph_a, _ = _exports_in(first)
+        graph_b, _ = _exports_in(second)
+        assert graph_a["provenance"]["run_id"] != graph_b["provenance"]["run_id"]
+
+    def test_provenance_is_additive(self, plugin_instance, sample_flow_map,
+                                    tmp_path, monkeypatch):
+        """attack_path_visualizer reads named keys; nothing it reads moved."""
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch,
+        )
+        graph, seed = _exports_in(tmp_path)
+        for key in ("source_tool", "status", "interpretation", "actor",
+                    "application", "mitre_mappings", "attack_graph"):
+            assert key in graph
+        assert "scenarios" in seed

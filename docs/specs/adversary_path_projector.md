@@ -388,6 +388,17 @@ sourced *and* recurs. Change log:
 **Phase 4 — ergonomics and docs.** `normalize_flow_map`, README,
 `docs/change_log/` entry.
 
+**Export provenance — DONE (2026-09-16).** Both export payloads carry a
+`provenance` block (`run_id`, `run_group`, `created_at`, flow map path and
+hash, prompt hash, ATT&CK release, actor ATT&CK id, tool version, provider
+attribution). `run_id` is minted in the projection loop so the graph, the seed
+and the run record share one, which is what lets a consumer verify a pair
+instead of inferring it from filename stamps. Driven by the detection
+designer's normalization needs:
+`docs/specs/attack_path_detection_normalization.md` §4.1, change log
+`docs/change_log/2026-09-16-projector-export-provenance.md`. Not part of
+Phase 4, and it does not advance `normalize_flow_map`.
+
 ### Deferred: rendering the component binding
 
 `_build_dag_from_attack_graph`

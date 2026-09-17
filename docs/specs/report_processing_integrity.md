@@ -1067,6 +1067,52 @@ Stage 1 ──► reassess ──► Stage 2 ──► reassess ──► [Appen
 - Stage 2 is independently valuable and does not depend on Stage 3.
 - Stage 3 without Appendix A is unmeasurable. Treat the gate as hard.
 
+## Outside the staged plan, landed 2026-09-16 — ATT&CK taxonomy
+
+Found by running the tools, not by the plan. Recorded here because the plan is
+what a reader consults to know what is true of these two tools.
+
+**The analyzer had no MITRE mapping at all.** `relevant_techniques` was a raw
+`T\d{4}` regex scrape of model prose, published unvalidated, and no LLM call
+carried grounding or reference data. The 154-page run produced a table headed
+`Defense Evasion | T1027` — a tactic ATT&CK removed in v19 — and cited
+"MITRE ATT&CK Framework (v14+)", a string that appears nowhere in this
+repository. The ingester reconciled the identical retired tactic correctly on
+the same document the same day.
+
+**Both tools now answer to one taxonomy**, v19.2, via shared helpers in
+`framework/reference_data/mitre_attack.py` (`attack_version`,
+`attack_grounding`, `reconcile_technique_ids`). It takes two mechanisms and
+neither suffices alone:
+
+- **Grounding** fixes the prose. Narrative text cannot be safely rewritten
+  afterwards, so the only way a summary stops saying "Defense Evasion" is for
+  the model to be told the release. Both tools' prompts now carry it.
+- **Reconciliation** fixes the structured field and gives the export one
+  technique table that was checked. A model writes the taxonomy it was trained
+  on however well the prompt is grounded.
+
+**Live-confirmed for the analyzer**, run `20260916T025734Z`: sixteen techniques
+all matching the lookup, the curated-map remap `T1562.001 → T1685` firing on
+real traffic, and prose reading "Stealth" with no "Defense Evasion" and no
+"v14". **The ingester's grounding is unrun.** Full record in
+`docs/change_log/2026-09-16-one-attack-taxonomy.md`.
+
+**Two consequences worth carrying forward.** The prose may still name a retired
+id where the table names its successor — by design, and the table says so.
+And the reconciled `attack_techniques[]` lives on the ToolResult, **not in the
+persisted artifact**, so a programmatic consumer must parse the markdown table;
+the same argument Stage 1.6 made about coverage applies and has not been acted
+on.
+
+**A dead reference-data key, found the same day.** The ingester read
+`context.reference_data.get("mitre_attack_enterprise")`, which the shell has
+never written (it writes `mitre_techniques` and `mitre_relationships`), so
+every ingester prompt had gone out ungrounded and its correctness came entirely
+from post-hoc reconciliation. Second such mechanism found in two days, after
+`PluginExecutor`. Suspect the class: grep for the writer before trusting a
+reader.
+
 ## Explicitly not in scope
 
 - **Unifying the two PDF implementations.** The reasons recorded on 2026-09-15
@@ -1082,6 +1128,13 @@ Stage 1 ──► reassess ──► Stage 2 ──► reassess ──► [Appen
   operator instruction, never an automatic action.
 - **The `stability` enum and capability-namespace manifest validation errors.**
   Pre-existing, unrelated, and behaviour decisions rather than typos.
+- **Attack paths in the analyzer.** *(Decided 2026-09-16.)* The ingester
+  produces the reconciled `attack_graph` that `attack_path_visualizer` and
+  `adversary_path_projector` consume. A second, prose-derived path
+  representation in the analyzer would be unreconciled by construction — the
+  divergence the taxonomy work exists to remove. The analyzer's dead
+  `chains_to: attack_path_visualizer` edge was dropped for the same reason: it
+  produces `text` and the visualizer accepts only `json_events`.
 
 ## Open decisions for the operator
 

@@ -3579,6 +3579,14 @@ class AdversaryPathProjector:
                 context, prompt, thinking_level, core_ids, software_ids,
                 flow_map, entry_ids, profile["label"], procedures=procedures,
             )
+            # Minted here rather than in _build_run_record so the exports and
+            # the record carry the same run_id. The exports are written first,
+            # and they are written even when --export is off, so a run_id
+            # created inside the record would leave them with nothing to join
+            # on — which is exactly the gap the provenance block closes.
+            attempt["run_id"] = str(uuid.uuid4())
+            attempt["run_index"] = index
+            attempt["created_at"] = datetime.now(timezone.utc).isoformat()
 
             # The graph and the seed are the product of a projection and chain
             # onwards; in a loop only the first success needs to, or a 20-run
@@ -3589,6 +3597,7 @@ class AdversaryPathProjector:
                     profile, flow_map, attempt["attack_graph"],
                     attempt["validated"]["mitre_mappings"], attempt["seeds"],
                     context,
+                    self._export_provenance(run_context, attempt),
                 )
                 artifacts.extend(attempt["artifacts"])
                 graph_written = True
@@ -3734,7 +3743,12 @@ class AdversaryPathProjector:
         and must not vary between runs, so a reader comparing two records knows
         any difference below it came from the model.
         """
-        run_id = str(uuid.uuid4())
+        # Minted in the projection loop so the exports written before this
+        # record share it; the fallback keeps a record buildable in isolation.
+        run_id = attempt.get("run_id") or str(uuid.uuid4())
+        created_at = (
+            attempt.get("created_at") or datetime.now(timezone.utc).isoformat()
+        )
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         profile = run_context["profile"]
         response = attempt.get("response")
@@ -3746,7 +3760,7 @@ class AdversaryPathProjector:
                 "run_group": run_context["run_group"],
                 "run_index": index,
                 "run_count": run_context["runs"],
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": created_at,
                 "tool_version": {
                     "manifest_version": _manifest_version(),
                     "git_sha": _git_short_sha(),
@@ -4248,6 +4262,45 @@ class AdversaryPathProjector:
         )
 
     @staticmethod
+    def _export_provenance(
+        run_context: dict[str, Any], attempt: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Identity a consumer can verify these exports against.
+
+        Every value here is already computed for the run record; the exports
+        simply had no copy. Without it a graph and a seed can only be paired by
+        filename stamp, and a flow map can only be matched to an export by
+        application name — which proves nothing, since two projections of
+        different actors against different estates produce files of identical
+        shape. The provider block is read from the response for the same reason
+        the record reads it: with several providers bound, a derived value
+        reads as evidence while being a guess.
+        """
+        profile = run_context["profile"]
+        response = attempt.get("response")
+        return {
+            "run_id": attempt.get("run_id", ""),
+            "run_group": run_context["run_group"],
+            "run_index": attempt.get("run_index", 1),
+            "created_at": attempt.get("created_at", ""),
+            "flow_map_path": run_context["flow_map_path"],
+            "flow_map_sha256": run_context["flow_map_sha256"],
+            "prompt_sha256": run_context["prompt_sha256"],
+            "attack_version": get_mitre_relationships().get("attack_version", ""),
+            "actor_attack_id": (profile.get("actor") or {}).get("attck_id", ""),
+            "tool_version": {
+                "manifest_version": _manifest_version(),
+                "git_sha": _git_short_sha(),
+            },
+            "model": {
+                "provider": getattr(response, "provider_id", None),
+                "vendor": getattr(response, "vendor", None),
+                "model_configured": getattr(response, "model_used", None),
+                "model_served": getattr(response, "model_version", None),
+            },
+        }
+
+    @staticmethod
     def _write_projection_artifacts(
         profile: dict[str, Any],
         flow_map: dict[str, Any],
@@ -4255,12 +4308,13 @@ class AdversaryPathProjector:
         mitre_mappings: list[dict[str, Any]],
         seeds: list[dict[str, Any]],
         context: Any,
+        provenance: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Write the visualizer graph and the scenario seed as separate files.
 
         The graph file carries exactly the keys attack_path_visualizer reads,
         so it chains with no translation; the extra per-step keys it does not
-        read are harmless.
+        read are harmless — which is why `provenance` can be added additively.
         """
         workspace = Path(os.environ.get("EVENTMILL_WORKSPACE", "./workspace"))
         art_dir = workspace / "artifacts"
@@ -4282,6 +4336,7 @@ class AdversaryPathProjector:
                     "interpretation": PROJECTION_INTERPRETATION,
                     "actor": profile["label"],
                     "application": flow_map["application"],
+                    "provenance": provenance or {},
                     "mitre_mappings": mitre_mappings,
                     "attack_graph": attack_graph,
                 },
@@ -4294,6 +4349,7 @@ class AdversaryPathProjector:
                     "interpretation": PROJECTION_INTERPRETATION,
                     "actor": profile["label"],
                     "application": flow_map["application"],
+                    "provenance": provenance or {},
                     "scenarios": seeds,
                 },
             ),

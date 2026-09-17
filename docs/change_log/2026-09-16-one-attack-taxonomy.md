@@ -4,9 +4,9 @@
 **Branch:** `llm_5`
 **Scope:** `framework/reference_data/mitre_attack.py`, both report plugins,
 the analyzer's output schema and README
-**Status:** built and mutation-checked (21 mutations, all caught).
-Suite **1475 → 1503**. **Needs a live run** — this changes prompts in *both*
-tools.
+**Status:** built, mutation-checked (21 mutations, all caught), and
+**live-confirmed for the analyzer** on the 154-page report, run
+`20260916T025734Z`. Suite **1475 → 1503**. The ingester half is still unrun.
 
 The 154-page live run produced an analyzer summary whose ATT&CK table read
 `Defense Evasion | T1027`, and cited "MITRE ATT&CK Framework (v14+)" as a
@@ -152,16 +152,55 @@ the grounding text is self-describing. The real defect is the *slot*
 disappearing, which `str.format()` ignores in silence, and that is what is
 tested now.
 
+## Confirmed live — analyzer, run `20260916T025734Z`
+
+The 154-page Anthropic report, `gcp_gemini/gemini-3.1-pro-preview`, native
+whole-document, `analysis_status: complete`. **Every claim below was checked
+against the lookup rather than read off the output.**
+
+**The reconciled block rendered, and it is correct.** Sixteen techniques. Every
+name and tactic pair matches `mitre_techniques.json` exactly, including the two
+v19 renames that would betray a stale release — `T1027 → Stealth` and
+`T1036.005 Match Legitimate Resource Name or Location`.
+
+**The retired-id remap fired on real traffic for the first time:**
+
+```
+| T1685 (reported as T1562.001) | Disable or Modify Tools | Defense Impairment |
+> 1 id(s) arrived under a retired number and were remapped to their current one.
+```
+
+`T1562.001` is genuinely absent from v19.2, and the resolution came from the
+**curated map**, not name matching — the high-confidence path. Before this
+change that id would have been published unvalidated, and before the retired-id
+work it would have been demoted to "non-ATT&CK" and dropped from every
+ATT&CK-keyed view.
+
+**Grounding reached the prose.** The narrative writes "regain **Stealth**",
+headers a section "Persistence, Stealth, and Defense Impairment", and titles
+its technique list "Relevant MITRE ATT&CK Techniques (v19.2)". No occurrence of
+"Defense Evasion" anywhere in the document, and the "(v14+)" citation that
+prompted this work is gone.
+
+**The designed discrepancy behaved as designed.** The prose body still says
+`T1562.001` where the table says `T1685`. Narrative is not rewritten; the table
+is checked and names the difference. A consumer reading the prose rather than
+the table still gets the retired id — which is the argument for the table
+existing, not against it.
+
 ## Not verified
 
-- **No live run.** This changes prompts in both tools, which is the class of
-  change every live-only finding in this project has come from. The run that
-  validates it must cover both, and the analyzer's must be long enough to
-  exercise the section and synthesis prompts — the 154-page report went native
-  as a whole document and made neither call.
-- **Whether grounding reduces the correction load.** The expectation is that
-  the ingester needs fewer than its four auto-corrections and two analyst flags
-  now that the model is told the release. That is a hypothesis until measured.
+- **The ingester half is unrun.** Its grounding fix has never been near a
+  model. Baseline to beat, from the pre-grounding run on the same document:
+  **4 tactic auto-corrections and 2 analyst flags.** Whether grounding reduces
+  that is a hypothesis until measured.
+- **The analyzer's section and synthesis prompts.** A PDF that succeeds
+  natively sets `chunk_count = 1` and skips both branches, so all three
+  154-page runs left them unexercised while looking complete. Reaching them
+  needs a **non-PDF** report (`capec/capec-stix.xml`,
+  `mitre/enterprise-attack.json`).
+- **The unknown-id path.** All sixteen ids were valid, so
+  `*not in ATT&CK - treat as an unverified reference*` has unit coverage only.
 - `relevant_techniques` can now differ from the ids in the prose above it, when
   a retired id was remapped. That is intended and documented, but no consumer
   has been checked against it beyond the tests.

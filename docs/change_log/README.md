@@ -33,19 +33,31 @@ Whether a long threat report survives chunking with its evidence intact. Plan:
 | 09-15 | `2026-09-15-stage-2-live-runs.md` | **Stage 2 live runs.** Five runs on Gemini light. Supersession fired on real traffic by both routes, including the cannot-split fall-through — but changed no value, because the model agreed with itself. Found two defects in the 2.1/2.2 code: a dropped false positive took its dissent out of the output, and a MITRE naming variant set whole runs to `partial` |
 | 09-15 | `2026-09-15-stage-2-second-half.md` | **Stage 2.3–2.6.** Three more places a *name* cost evidence: a second batch's attack path was dropped because it reused a slug, a second actor was dropped because metadata was taken object-at-a-time, and the analyzer's technique list kept an arbitrary twenty of twenty-five — differently on each identical run. **2.5 is the behavioural one**: candidates and text were split independently and paired by index, so an appendix indicator went out beside the introduction. Built and mutation-checked; **no live run, so Stage 2 is still not signed off** |
 | 09-15 | `2026-09-15-report-integrity-results.md` | **Results to date, no new work.** Stage 1 and Stage 2-so-far measured against the plan's three goals: suite 1,177 → 1,380, and **5 of 16 defects were found by running the tools rather than by review or tests** — twice on code that had just passed both. Says plainly what is still unverified |
+| 09-16 | `2026-09-16-stage-2-live-run-154-page.md` | **The Stage 2 live run.** Both tools against the 154-page report. Confirmed 2.2 conflicts on genuine material (8, where every previous one came from a fixture built to contradict itself) and 2.4 collecting ~30 actors that were previously dropped. **Found a regression**: 2.4's unbounded attribution narration reached 3,712 characters against a 2,000 contract, putting the IOC counts and the analyst-action line past the cut wherever it is enforced. Carries an inline correction — the first version claimed data was lost, and it was not |
+| 09-16 | `2026-09-16-manifest-summary-budget.md` | **`summary_budget` moves to the manifest**, default doubled to 4000 and set to 8000 for both report tools. A tool that reads a 154-page report has more to say than one that lists files. Records that **`PluginExecutor` is instantiated nowhere** — the cap, its timeout and its input validation are a contract nothing reaches at runtime |
+| 09-16 | `2026-09-16-one-attack-taxonomy.md` | **Both report tools answer to ATT&CK v19.2.** The analyzer had no MITRE mapping at all — a raw regex scrape of model prose, ungrounded and unvalidated, which published `Defense Evasion \| T1027` and cited "v14+". Now grounded *and* reconciled, with a checked technique table in the export. **Live-confirmed for the analyzer**, including the curated-map remap `T1562.001 → T1685` firing on real traffic. Found a second dead mechanism: the ingester's grounding read a reference_data key nothing writes |
+| 09-16 | `2026-09-16-unknown-flags-and-afc.md` | **A mistyped flag is named.** `--ignore_cap` for `--ignore_caps` was accepted in silence and the run did the opposite of what was asked. Warns and lists the tool's real arguments — deliberately no correction and no guess, with a mutation that fails if anyone adds one. Also silences the per-run AFC notice, which described a code path that ran once and did nothing |
 
 **Stage 1 is complete.** Goal A — *incomplete work is never reported as
 complete* — holds for both plugins. Suite went 1177 → 1319.
 
-**Stage 2 is code-complete and not signed off.** 2.0 and 2.1+2.2 landed and
-are live-verified on Gemini light; 2.3, 2.4, 2.5 and 2.6 are built and
-mutation-checked but have **never been run against a model**. Suite 1319 →
-1445. The acceptance requires one live run against the 154-page report covering
-the whole stage, and 2.5 changed what the prompts contain — the class of
-change that every one of the live findings so far has come from. **Results
-through 2.2 are consolidated in `2026-09-15-report-integrity-results.md`**;
-start there for outcomes against the plan's three goals and for what is still
-unmeasured.
+**Stage 2 is code-complete and partly live-verified.** 2.0-2.2 were verified
+on Gemini light; 2.3, 2.4 and 2.6 were confirmed by the 154-page run on 09-16.
+Suite 1319 → 1513. **Results through 2.2 are consolidated in
+`2026-09-15-report-integrity-results.md`.**
+
+**Three things remain unrun, and each is named rather than assumed:**
+
+1. **Whether 2.5 executed at all.** It rewrote only the chunked text path. The
+   154-page run was batched, but `native_batched` and `chunked_text` are both
+   batched and only the second calls `_build_chunk_units`. A `[CHUNK] n/m done`
+   log line settles it; `ingestion_plan` is on the ToolResult and not in the
+   persisted artifact, so the log is the only place to look.
+2. **The ingester's ATT&CK grounding.** Baseline to beat, same document:
+   4 tactic auto-corrections and 2 analyst flags.
+3. **The analyzer's section and synthesis prompts.** A PDF that succeeds
+   natively sets `chunk_count = 1` and skips both, so all three 154-page runs
+   left them unexercised while looking complete. A non-PDF report reaches them.
 
 **The live runs found two more defects, both in the code that had just passed a
 green suite and a mutation check** (last row above). That is twice in two
@@ -96,6 +108,19 @@ The thread that took Event Mill from one vendor to three. Plans:
 
 **Next:** the live three-vendor run — Stage E of
 `docs/specs/projector_three_vendor_run.md`. Nothing in the code blocks it.
+
+## Attack path detection guidance — 2026-09-16
+
+Turning projected attack paths into per-node detection drafts. Plans:
+`docs/specs/attack_path_detection_designer.md` (the workbook and draft format),
+`docs/specs/attack_path_detection_normalization.md` (the node context the
+workbook is generated from).
+
+| Date | Entry | What landed |
+|---|---|---|
+| 09-16 | `2026-09-16-component-bound-fixture.md` | A live projection against the example flow map produced the first `component_bound` fixture — 2 paths, 10 nodes, every node binding to a component with technologies, authentication and zone — and live-confirmed the provenance block, including real provider attribution |
+| 09-16 | `2026-09-16-projector-export-provenance.md` | Both projector exports now carry a `provenance` block — `run_id`, flow map and prompt hashes, ATT&CK release, actor ID, tool version, provider — minted once so the graph, the seed and the run record share it. Previously a graph and a seed could only be paired by filename stamp. Additive; the visualizer is unaffected. Suite 1513 → 1519 |
+| 09-16 | `2026-09-16-attack-path-normalization-plan.md` | **Planning only.** The designer plan's normalization was reviewed against the real exports: the second fixture repeats a technique three times inside one path, the exports carry no `run_id` or flow-map hash to join on, the scenario seed is not a subset of the graph, and `technologies`/`authentication`/`zone` exist in no export. Normalization becomes a deterministic provider-free `normalize_paths` action, and the projector's Phase 4 `normalize_flow_map` becomes part of the same seam |
 
 ## Earlier threads
 
