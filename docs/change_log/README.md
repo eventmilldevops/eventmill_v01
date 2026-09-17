@@ -129,15 +129,15 @@ revision, three applications (`2026-09-17-projector-corpus-refresh.md`). Counts
 in entries below that date are historical; the three pairs they measure are
 retired.
 
-Next: stage N1 of that spec — the adapters, the three identities of §4.2a and
-the union merge. It needs no provider and no cost. Its contract was closed on
-2026-09-17 (`2026-09-17-n1-contract-fixes.md`), and **both decisions that
-blocked code are now settled**: committing the fixtures, by the corpus refresh,
-and the plugin shape, by decision 7 — one plugin at
-`safe_for_auto_invoke: false`. N1 is unblocked.
+**N1 is built** (`2026-09-17-n1-adapters-and-identity.md`). Next: N2's
+designer-side legacy handling and N3's enrichment and grading — the flow-map
+join, control catalogue, mitigation focus and the five completeness grades.
+Neither needs a provider. N5, the projector's own `normalize_flow_map`, can run
+in parallel.
 
 | Date | Entry | What landed |
 |---|---|---|
+| 09-17 | `2026-09-17-n1-adapters-and-identity.md` | **Code. Stage N1.** New `attack_path_detection_designer` plugin: graph/seed/single-scenario adapters, the three identities of §4.2a, `(projection_identity, path_id, node_index)` keys, deterministic `draft_id`, the union merge with `provenance_by_field`, and the `state_check` / `transition` canonicalizations. The gate passes — graph-only, seed-only and joined input give identical ordered keys and draft ids on all four pairs (9, 11, 10, 13 = 43), 0 conflicts. Ships one working deterministic action, `validate_input`; `normalize_paths` and `generate_detections` are named as planned. The library is loaded as a sibling by file location, because the loader gives a plugin a flat module name and no package. Suite 1523 → 1589 |
 | 09-17 | `2026-09-17-normalize-paths-plugin-shape.md` | **Planning only, and the last thing blocking N1.** `normalize_paths` and `generate_detections` become two actions of one plugin at `safe_for_auto_invoke: false`; §2's per-action `true` was unimplementable, since the field is whole-plugin and the schema has no `actions` property. Two plugins would have forced the normalization library into `framework/`, duplicated it, or reversed decision 2 — no plugin in the repo imports another. The cost is currently unobservable: nothing in the framework reads the flag. Widening the schema for a per-action form was rejected for now, on the same grounds as the `stability` enum |
 | 09-17 | `2026-09-17-projector-corpus-refresh.md` | **Documentation only.** Three fresh runs (Scattered Spider/telemetry, APT29/Application B, Volt Typhoon/Claims Portal) join Fox Kitten to give four pairs on one code revision — 43 nodes, 3 applications, and run records for the first time. Every pair binds to a flow map already in the repo, which resolves the commit blocker. `component_bound_partial` gains 5 real instances. The `state_check` join reconfirms 43/43 and the mitigation split 163/169 uncovered on data sharing no run with the original measurement. New: `transition` needs the same canonicalization as `state_check` — the seed's prose drops `crosses_boundary`, so every non-null transition would otherwise join as a conflict. The producer's shape moves into its own document, `docs/specs/projector_export_shapes.md` |
 | 09-17 | `2026-09-17-n1-contract-fixes.md` | **Planning only.** Six issues found by re-reading the four fixtures against the normalization spec, fixed before N1 encodes them. Two were self-contradictions: `source_identity` (document hash + filename) could never satisfy the N1 gate requiring graph-only and seed-only to yield the same node keys — split into artifact / projection / occurrence identity; and `state_check` equality would have rejected all 58 nodes, since the graph splits it across two fields where the seed combines them on an em dash (58/58 match under the canonical rule, 6 gap nodes exercise the note branch). Also: §4.1 named `actor_attck_id` and `provider` where the export has `actor_attack_id` and `model`, and no `provider` key exists to read; a `flow_map_sha256` alone no longer confers `component_bound`, and `component_bound_partial` is added for a bound component with no technologies; and §1.1's within-path repeat claim was wrong — no `(technique, component)` pair repeats within any path, so a synthetic case now covers the rule |

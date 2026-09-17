@@ -1,0 +1,611 @@
+{
+  "source_tool": "adversary_path_projector",
+  "status": "projected",
+  "interpretation": "Projected attack paths: not confirmed attacks, and not a likelihood assessment. An LLM placed techniques that MITRE ATT&CK documents this actor using onto the organization's own flow map, reasoning the way an adversary would. Technique ids, technique names and controls are sourced; the route, the step rationales and the access states are the model's projection. Each step's access is checked only for continuity \u2014 that an earlier step produced what the step needs \u2014 never for truth. A step that states no access falls back to a typical value for its tactic.",
+  "actor": "Fox Kitten (G0117)",
+  "application": "Fleet Telemetry Platform",
+  "provenance": {
+    "run_id": "4f0b54a0-05c5-47ef-9530-4c0697181352",
+    "run_group": "ungrouped",
+    "run_index": 1,
+    "created_at": "2026-09-17T02:26:46.479434+00:00",
+    "flow_map_path": "plugins/threat_modeling/adversary_path_projector/examples/telemetry_saas_flow_map.json",
+    "flow_map_sha256": "5de20d4bc3033980e5f532435333f892ba5d92b96b3c33a2c7c27d423815eaf9",
+    "prompt_sha256": "131d1f9d8012c02ec4ab397a6fe2aba43885a58c6c67c6fc114e523a8a028c07",
+    "attack_version": "19.2",
+    "actor_attack_id": "G0117",
+    "tool_version": {
+      "manifest_version": "0.2.0",
+      "git_sha": "1c2ba74",
+      "code_id_source": "build_env"
+    },
+    "model": {
+      "provider": "gcp_gemini",
+      "vendor": "google",
+      "model_configured": "gemini-3.1-pro-preview",
+      "model_served": "gemini-3.1-pro-preview"
+    }
+  },
+  "mitre_mappings": [
+    {
+      "technique_id": "T1005",
+      "technique_name": "Data from Local System",
+      "tactic": "Collection",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1046",
+      "technique_name": "Network Service Discovery",
+      "tactic": "Discovery",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1059",
+      "technique_name": "Command and Scripting Interpreter",
+      "tactic": "Execution",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1078",
+      "technique_name": "Valid Accounts",
+      "tactic": "Initial Access",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1078",
+      "technique_name": "Valid Accounts",
+      "tactic": "Stealth",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1190",
+      "technique_name": "Exploit Public-Facing Application",
+      "tactic": "Initial Access",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1210",
+      "technique_name": "Exploitation of Remote Services",
+      "tactic": "Lateral Movement",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1505.003",
+      "technique_name": "Web Shell",
+      "tactic": "Persistence",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1552.001",
+      "technique_name": "Credentials In Files",
+      "tactic": "Credential Access",
+      "confidence": "high"
+    }
+  ],
+  "attack_graph": {
+    "paths": [
+      {
+        "path_id": "web-exploit-to-db",
+        "description": "Exploitation of the customer web console leading to database credential theft and data collection.",
+        "objective": "Access and collect regulated data from the telemetry database.",
+        "steps": [
+          {
+            "technique_id": "T1190",
+            "technique_name": "Exploit Public-Facing Application",
+            "tactic": "Initial Access",
+            "component_id": "web_console",
+            "asset": "Customer console",
+            "evidence": "documented",
+            "rationale": "The Node.js web console is exposed to the internet and can be targeted with remote code execution exploits, bypassing the WAF.",
+            "leads_to": [
+              "T1505.003"
+            ],
+            "mitigations": [
+              "M1016",
+              "M1026",
+              "M1030",
+              "M1035",
+              "M1037",
+              "M1048",
+              "M1050",
+              "M1051"
+            ],
+            "uncovered_mitigations": [
+              "M1016",
+              "M1026",
+              "M1030",
+              "M1035",
+              "M1037",
+              "M1048",
+              "M1051"
+            ],
+            "notes": [],
+            "precondition": "The web console runs a vulnerable version of a framework or library.",
+            "access_before": "network_reach",
+            "exploited_condition": "Internet-facing web application with an exploitable vulnerability.",
+            "result": "Execution context within the web console container.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "A zero-day or unpatched N-day vulnerability exists in the web console."
+            ],
+            "control_note": "Fox Kitten utilizes exploits that evade standard WAF signatures.",
+            "transition": {
+              "entry": true,
+              "exposure": "internet"
+            },
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Workforce MFA",
+                "control_type": "identity",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Fox Kitten has exploited known vulnerabilities in Fortinet, PulseSecure, and Palo Alto VPN appliances.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1505.003",
+            "technique_name": "Web Shell",
+            "tactic": "Persistence",
+            "component_id": "web_console",
+            "asset": "Customer console",
+            "evidence": "documented",
+            "rationale": "A web shell is dropped into the React/Node.js web directory to maintain reliable remote access to the compromised container.",
+            "leads_to": [
+              "T1552.001"
+            ],
+            "mitigations": [
+              "M1018",
+              "M1042"
+            ],
+            "uncovered_mitigations": [
+              "M1018",
+              "M1042"
+            ],
+            "notes": [],
+            "precondition": "The attacker has code execution and write permissions in a web-accessible directory.",
+            "access_before": "code_execution",
+            "exploited_condition": "Writable filesystem within the web application's root or static directories.",
+            "result": "Persistent remote code execution capability.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "The container filesystem is not completely read-only."
+            ],
+            "control_note": "The web shell traffic blends in with legitimate HTTPS telemetry and console traffic.",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Workforce MFA",
+                "control_type": "identity",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Fox Kitten has installed web shells on compromised hosts to maintain access.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1552.001",
+            "technique_name": "Credentials In Files",
+            "tactic": "Credential Access",
+            "component_id": "web_console",
+            "asset": "Customer console",
+            "evidence": "documented",
+            "rationale": "The attacker searches local configuration files and environment variables for the database credentials used by the web console.",
+            "leads_to": [
+              "T1078"
+            ],
+            "mitigations": [
+              "M1017",
+              "M1022",
+              "M1027",
+              "M1047"
+            ],
+            "uncovered_mitigations": [
+              "M1017",
+              "M1022",
+              "M1027",
+              "M1047"
+            ],
+            "notes": [],
+            "precondition": "The web console holds credentials to authenticate to the telemetry database.",
+            "access_before": "code_execution",
+            "exploited_condition": "Credentials stored in plaintext within container files or environment variables.",
+            "result": "Valid database credentials.",
+            "access_after": "service_credential",
+            "assumptions": [
+              "Database credentials are not securely vaulted in memory and are accessible via files/env."
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Workforce MFA",
+                "control_type": "identity",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Fox Kitten has accessed files to gain valid credentials.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1078",
+            "technique_name": "Valid Accounts",
+            "tactic": "Stealth",
+            "component_id": "telemetry_db",
+            "asset": "Telemetry warehouse",
+            "evidence": "documented",
+            "rationale": "Using the stolen Postgres credentials, the attacker authenticates directly to the telemetry database over the declared internal flow.",
+            "leads_to": [
+              "T1005"
+            ],
+            "mitigations": [
+              "M1013",
+              "M1015",
+              "M1017",
+              "M1018",
+              "M1026",
+              "M1027",
+              "M1032",
+              "M1036"
+            ],
+            "uncovered_mitigations": [
+              "M1013",
+              "M1015",
+              "M1017",
+              "M1018",
+              "M1026",
+              "M1027",
+              "M1032",
+              "M1036"
+            ],
+            "notes": [
+              "tactic 'Initial Access' after the first step corrected to 'Stealth', which ATT&CK also documents for this technique \u2014 the entry point is earlier in the path"
+            ],
+            "precondition": "The attacker possesses valid service credentials for the database.",
+            "access_before": "network_reach",
+            "exploited_condition": "Database accepts authentication using statically configured service accounts.",
+            "result": "Authenticated access to the database.",
+            "access_after": "data_access",
+            "assumptions": [
+              "The database firewall permits traffic originating from the web console IP."
+            ],
+            "control_note": "Bypasses the database firewall because the web console is an allowed source.",
+            "transition": {
+              "flow": "f3",
+              "from": "web_console",
+              "to": "telemetry_db",
+              "protocol": "postgres",
+              "authenticated": true,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [
+              {
+                "name": "Database firewall",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Column-level encryption",
+                "control_type": "data",
+                "status": "partial",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Fox Kitten has used valid credentials with various services during lateral movement.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1005",
+            "technique_name": "Data from Local System",
+            "tactic": "Collection",
+            "component_id": "telemetry_db",
+            "asset": "Telemetry warehouse",
+            "evidence": "documented",
+            "rationale": "The attacker queries the TimescaleDB tables directly to extract regulated customer telemetry data.",
+            "leads_to": [],
+            "mitigations": [
+              "M1057"
+            ],
+            "uncovered_mitigations": [
+              "M1057"
+            ],
+            "notes": [],
+            "precondition": "The attacker has authenticated access to query the database tables.",
+            "access_before": "data_access",
+            "exploited_condition": "Database contains regulated customer telemetry data.",
+            "result": "Collected dataset ready for exfiltration.",
+            "access_after": "data_access",
+            "assumptions": [
+              "The stolen service account has sufficient privileges to read the targeted tables."
+            ],
+            "control_note": "Column-level encryption is partial and can be bypassed or decrypted with the service account keys.",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "Database firewall",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Column-level encryption",
+                "control_type": "data",
+                "status": "partial",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Fox Kitten has searched local system resources to access sensitive documents.",
+            "state_check": "ok",
+            "state_note": ""
+          }
+        ]
+      },
+      {
+        "path_id": "scm-to-vault",
+        "description": "Compromise of the SCM leads to malicious pipeline execution on the CI runner, culminating in unauthenticated vault access.",
+        "objective": "Access secrets from the centralized vault.",
+        "steps": [
+          {
+            "technique_id": "T1078",
+            "technique_name": "Valid Accounts",
+            "tactic": "Initial Access",
+            "component_id": "scm",
+            "asset": "Source control and pipeline definitions",
+            "evidence": "documented",
+            "rationale": "The attacker uses compromised developer credentials and hijacked session tokens to log into the source control management system.",
+            "leads_to": [
+              "T1059"
+            ],
+            "mitigations": [
+              "M1013",
+              "M1015",
+              "M1017",
+              "M1018",
+              "M1026",
+              "M1027",
+              "M1032",
+              "M1036"
+            ],
+            "uncovered_mitigations": [
+              "M1013",
+              "M1015",
+              "M1017",
+              "M1018",
+              "M1026",
+              "M1027",
+              "M1032",
+              "M1036"
+            ],
+            "notes": [],
+            "precondition": "The attacker has acquired valid credentials and an active session token to bypass MFA.",
+            "access_before": "network_reach",
+            "exploited_condition": "Internet-facing SCM relies on user authentication and session cookies.",
+            "result": "Authenticated access to repository code and pipeline definitions.",
+            "access_after": "user_credential",
+            "assumptions": [
+              "Attacker has successfully phished or purchased valid SCM session tokens."
+            ],
+            "control_note": "",
+            "transition": {
+              "entry": true,
+              "exposure": "internet"
+            },
+            "controls_in_play": [
+              {
+                "name": "Branch protection and required review",
+                "control_type": "application",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Commit signing enforcement",
+                "control_type": "application",
+                "status": "planned",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Fox Kitten has used valid credentials with various services during lateral movement.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1059",
+            "technique_name": "Command and Scripting Interpreter",
+            "tactic": "Execution",
+            "component_id": "ci_runner",
+            "asset": "Self-hosted build runner",
+            "evidence": "documented",
+            "rationale": "By modifying a GitHub Actions workflow in the SCM, the attacker forces the self-hosted CI runner to execute arbitrary shell scripts.",
+            "leads_to": [
+              "T1046"
+            ],
+            "mitigations": [
+              "M1021",
+              "M1026",
+              "M1033",
+              "M1038",
+              "M1040",
+              "M1042",
+              "M1045",
+              "M1047",
+              "M1049"
+            ],
+            "uncovered_mitigations": [
+              "M1021",
+              "M1026",
+              "M1033",
+              "M1038",
+              "M1040",
+              "M1042",
+              "M1045",
+              "M1047",
+              "M1049"
+            ],
+            "notes": [
+              "state gap: needs network_reach on ci_runner; the declared flow to it comes from scm, which no earlier step takes control of, so the path depends on scm acting for the attacker. Path holds user_credential, network_reach on scm"
+            ],
+            "precondition": "The attacker has permissions to commit code or modify pipeline definitions in the SCM.",
+            "access_before": "network_reach",
+            "exploited_condition": "CI runner automatically executes scripts defined in the SCM pipeline.",
+            "result": "Arbitrary code execution on the CI runner.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "Branch protection and required reviews can be bypassed using an unprotected branch or compromised admin account."
+            ],
+            "control_note": "",
+            "transition": {
+              "flow": "f8",
+              "from": "scm",
+              "to": "ci_runner",
+              "protocol": "https",
+              "authenticated": true,
+              "crosses_boundary": false
+            },
+            "controls_in_play": [],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Fox Kitten has used a Perl reverse shell to communicate with C2.",
+            "state_check": "gap",
+            "state_note": "needs network_reach on ci_runner; the declared flow to it comes from scm, which no earlier step takes control of, so the path depends on scm acting for the attacker. Path holds user_credential, network_reach on scm"
+          },
+          {
+            "technique_id": "T1046",
+            "technique_name": "Network Service Discovery",
+            "tactic": "Discovery",
+            "component_id": "ci_runner",
+            "asset": "Self-hosted build runner",
+            "evidence": "documented",
+            "rationale": "From the CI runner, the attacker scans the internal network to identify the IP address and port of the Vault service.",
+            "leads_to": [
+              "T1210"
+            ],
+            "mitigations": [
+              "M1030",
+              "M1031",
+              "M1042"
+            ],
+            "uncovered_mitigations": [
+              "M1030",
+              "M1031",
+              "M1042"
+            ],
+            "notes": [],
+            "precondition": "The attacker has code execution on the CI runner.",
+            "access_before": "code_execution",
+            "exploited_condition": "The CI runner resides in a zone with network line-of-sight to internal services.",
+            "result": "Knowledge of the Vault service network location.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "Network scanning tools are available or can be downloaded onto the CI runner."
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Fox Kitten has used tools including NMAP to conduct broad scanning to identify open ports.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1210",
+            "technique_name": "Exploitation of Remote Services",
+            "tactic": "Lateral Movement",
+            "component_id": "vault",
+            "asset": "Secrets manager",
+            "evidence": "documented",
+            "rationale": "The attacker exploits the overly permissive, unauthenticated HTTP flow from the CI runner to Vault to extract secrets.",
+            "leads_to": [],
+            "mitigations": [
+              "M1016",
+              "M1019",
+              "M1026",
+              "M1030",
+              "M1042",
+              "M1048",
+              "M1050",
+              "M1051"
+            ],
+            "uncovered_mitigations": [
+              "M1016",
+              "M1019",
+              "M1030",
+              "M1042",
+              "M1048",
+              "M1050",
+              "M1051"
+            ],
+            "notes": [],
+            "precondition": "An unauthenticated flow exists between the CI runner and Vault.",
+            "access_before": "network_reach",
+            "exploited_condition": "Vault accepts unauthenticated requests from the CI runner's IP address.",
+            "result": "Access to highly sensitive secrets and tokens stored in Vault.",
+            "access_after": "data_access",
+            "assumptions": [
+              "The unauthenticated flow allows reading secrets, not just initiating authentication."
+            ],
+            "control_note": "",
+            "transition": {
+              "flow": "f11",
+              "from": "ci_runner",
+              "to": "vault",
+              "protocol": "http",
+              "authenticated": false,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [
+              {
+                "name": "Short-lived secret leases",
+                "control_type": "identity",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Secret access audit logging",
+                "control_type": "monitoring",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Fox Kitten has exploited known vulnerabilities in remote services including RDP.",
+            "state_check": "ok",
+            "state_note": ""
+          }
+        ]
+      }
+    ],
+    "convergence_points": [],
+    "branch_points": []
+  }
+}

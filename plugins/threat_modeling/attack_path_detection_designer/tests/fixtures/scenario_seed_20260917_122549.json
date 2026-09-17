@@ -1,0 +1,751 @@
+{
+  "source_tool": "adversary_path_projector",
+  "status": "projected",
+  "interpretation": "Projected attack paths: not confirmed attacks, and not a likelihood assessment. An LLM placed techniques that MITRE ATT&CK documents this actor using onto the organization's own flow map, reasoning the way an adversary would. Technique ids, technique names and controls are sourced; the route, the step rationales and the access states are the model's projection. Each step's access is checked only for continuity \u2014 that an earlier step produced what the step needs \u2014 never for truth. A step that states no access falls back to a typical value for its tactic.",
+  "actor": "Scattered Spider (G1015)",
+  "application": "Fleet Telemetry Platform",
+  "provenance": {
+    "run_id": "8d730228-4b6e-460f-bb27-313b0dd7fd71",
+    "run_group": "ungrouped",
+    "run_index": 1,
+    "created_at": "2026-09-17T12:25:49.428332+00:00",
+    "flow_map_path": "plugins/threat_modeling/adversary_path_projector/examples/telemetry_saas_flow_map.json",
+    "flow_map_sha256": "5de20d4bc3033980e5f532435333f892ba5d92b96b3c33a2c7c27d423815eaf9",
+    "prompt_sha256": "7daba4a77a9a664125867ade49b3456b306d2dcfdc75465e5dd3000f1fb9e89e",
+    "attack_version": "19.2",
+    "actor_attack_id": "G1015",
+    "tool_version": {
+      "manifest_version": "0.2.0",
+      "git_sha": "1c2ba74",
+      "code_id_source": "build_env"
+    },
+    "model": {
+      "provider": "gcp_gemini",
+      "vendor": "google",
+      "model_configured": "gemini-3.1-pro-preview",
+      "model_served": "gemini-3.1-pro-preview"
+    }
+  },
+  "scenarios": [
+    {
+      "path_id": "scm-runner-vault",
+      "name": "Scattered Spider (G1015) vs Fleet Telemetry Platform: scm-runner-vault",
+      "description": "Adversary compromises source control via cloud accounts, modifies pipelines to execute code on the self-hosted runner, and leverages an unauthenticated flow to extract secrets from the vault.",
+      "source_type": "actor_projection",
+      "threat_actor_profile": "Scattered Spider (G1015)",
+      "attack_objective": "Extract sensitive credentials and private keys from the secrets manager.",
+      "target_assets": [
+        "Secrets manager",
+        "Self-hosted build runner",
+        "Source control and pipeline definitions"
+      ],
+      "entry_vectors": [
+        "scm"
+      ],
+      "security_controls": [
+        {
+          "control_id": "SC-0001",
+          "name": "DDoS protection",
+          "control_type": "perimeter",
+          "description": "Protects Application load balancer (alb).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0002",
+          "name": "WAF",
+          "control_type": "perimeter",
+          "description": "Protects Customer console (web_console).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0003",
+          "name": "Workforce MFA",
+          "control_type": "identity",
+          "description": "Protects Customer console (web_console).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0004",
+          "name": "API rate limiting",
+          "control_type": "application",
+          "description": "Protects Partner ingest API (partner_api).",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0005",
+          "name": "Partner credential rotation",
+          "control_type": "identity",
+          "description": "Protects Partner ingest API (partner_api).",
+          "implementation_status": "missing",
+          "bypass_difficulty": "trivial",
+          "bypass_requirements": [],
+          "detection_capability": "none"
+        },
+        {
+          "control_id": "SC-0006",
+          "name": "Broker topic ACLs",
+          "control_type": "network",
+          "description": "Protects Telemetry event bus (event_bus).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0007",
+          "name": "Pod security admission",
+          "control_type": "application",
+          "description": "Protects Workload cluster (k8s).",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0008",
+          "name": "Namespace network policies",
+          "control_type": "network",
+          "description": "Protects Workload cluster (k8s).",
+          "implementation_status": "missing",
+          "bypass_difficulty": "trivial",
+          "bypass_requirements": [],
+          "detection_capability": "none"
+        },
+        {
+          "control_id": "SC-0009",
+          "name": "Branch protection and required review",
+          "control_type": "application",
+          "description": "Protects Source control and pipeline definitions (scm).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0010",
+          "name": "Commit signing enforcement",
+          "control_type": "application",
+          "description": "Protects Source control and pipeline definitions (scm).",
+          "implementation_status": "planned",
+          "bypass_difficulty": "low",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0011",
+          "name": "Image signature enforcement",
+          "control_type": "application",
+          "description": "Protects Container registry (artifact_reg).",
+          "implementation_status": "planned",
+          "bypass_difficulty": "low",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0012",
+          "name": "Short-lived secret leases",
+          "control_type": "identity",
+          "description": "Protects Secrets manager (vault).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "very_high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0013",
+          "name": "Secret access audit logging",
+          "control_type": "monitoring",
+          "description": "Protects Secrets manager (vault).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0014",
+          "name": "Database firewall",
+          "control_type": "network",
+          "description": "Protects Telemetry warehouse (telemetry_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0015",
+          "name": "Column-level encryption",
+          "control_type": "data",
+          "description": "Protects Telemetry warehouse (telemetry_db).",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0016",
+          "name": "Centralised SIEM alerting",
+          "control_type": "monitoring",
+          "description": "Estate-wide control, not tied to one component.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0017",
+          "name": "Quarterly access review",
+          "control_type": "identity",
+          "description": "Estate-wide control, not tied to one component.",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        }
+      ],
+      "attack_sequence": [
+        {
+          "event_id": "AE-0001",
+          "name": "Cloud Accounts on Source control and pipeline definitions",
+          "description": "Scattered Spider frequently uses compromised cloud credentials to access externally facing SaaS platforms like source control.",
+          "sequence_order": 1,
+          "target_asset": "Source control and pipeline definitions",
+          "attack_technique": "Cloud Accounts",
+          "technique_id": "T1078.004",
+          "tactic": "Initial Access",
+          "evidence": "documented",
+          "required_access": "network_reach",
+          "resulting_access": "user_credential",
+          "access_source": "model",
+          "blocking_controls": [
+            "Branch protection and required review"
+          ],
+          "detecting_controls": [
+            "Branch protection and required review"
+          ],
+          "success_indicators": [
+            "Authenticated access to the source control platform."
+          ],
+          "precondition": "The attacker has obtained valid SSO credentials for a developer or build engineer.",
+          "exploited_condition": "The SCM platform is internet-exposed and relies on centralized identity for access.",
+          "assumptions": [
+            "Attacker previously acquired credentials via an infostealer or external phishing campaign."
+          ],
+          "control_note": "Requires valid SSO credentials, moving the enforcement burden to the MFA implementation.",
+          "transition": "entry point (internet-exposed)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "Scattered Spider has used compromised Microsoft Entra ID accounts to pivot in victim environments.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0002",
+          "name": "Multi-Factor Authentication on Source control and pipeline definitions",
+          "description": "The actor uses classic MFA fatigue (prompt bombing) to bypass the workforce authentication controls protecting the SCM.",
+          "sequence_order": 2,
+          "target_asset": "Source control and pipeline definitions",
+          "attack_technique": "Multi-Factor Authentication",
+          "technique_id": "T1556.006",
+          "tactic": "Defense Impairment",
+          "evidence": "documented",
+          "required_access": "user_credential",
+          "resulting_access": "service_credential",
+          "access_source": "model",
+          "blocking_controls": [
+            "Branch protection and required review"
+          ],
+          "detecting_controls": [
+            "Branch protection and required review"
+          ],
+          "success_indicators": [
+            "Fully verified session on the SCM platform."
+          ],
+          "precondition": "The attacker has valid primary credentials but must satisfy the secondary authentication challenge.",
+          "exploited_condition": "The SSO MFA implementation is susceptible to prompt bombing or social engineering of the helpdesk.",
+          "assumptions": [
+            "The MFA implementation does not enforce strict number matching or hardware security keys."
+          ],
+          "control_note": "Directly bypasses the 'sso_mfa' requirement to establish a persistent and trusted session.",
+          "transition": "",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "After compromising user accounts, Scattered Spider registers their own MFA tokens.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0003",
+          "name": "Unix Shell on Self-hosted build runner",
+          "description": "By manipulating pipeline definitions in SCM, the attacker forces the self-hosted CI runner to execute a malicious Unix shell script.",
+          "sequence_order": 3,
+          "target_asset": "Self-hosted build runner",
+          "attack_technique": "Unix Shell",
+          "technique_id": "T1059.004",
+          "tactic": "Execution",
+          "evidence": "documented",
+          "required_access": "service_credential",
+          "resulting_access": "code_execution",
+          "access_source": "model",
+          "blocking_controls": [],
+          "detecting_controls": [],
+          "success_indicators": [
+            "Arbitrary shell execution on the build runner."
+          ],
+          "precondition": "The attacker can commit code or trigger automated Github Actions pipelines.",
+          "exploited_condition": "The self-hosted CI runner blindly executes pipeline instructions defined in the compromised SCM environment.",
+          "assumptions": [
+            "The attacker can push a commit that triggers a workflow.",
+            "Commit signing is only planned, meaning unsigned commits are still processed."
+          ],
+          "control_note": "Evades branch protection by committing to non-protected branches or personal forks that still trigger the internal runner.",
+          "transition": "flow f8: scm -> ci_runner (https, authenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "Scattered Spider has used the command shell to upload and install the Teleport remote access tool to a compromised vCenter Server Appliance.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0004",
+          "name": "System Information Discovery on Self-hosted build runner",
+          "description": "The attacker executes shell commands to discover environment variables and the internal network topology from the perspective of the runner.",
+          "sequence_order": 4,
+          "target_asset": "Self-hosted build runner",
+          "attack_technique": "System Information Discovery",
+          "technique_id": "T1082",
+          "tactic": "Discovery",
+          "evidence": "documented",
+          "required_access": "code_execution",
+          "resulting_access": "code_execution",
+          "access_source": "model",
+          "blocking_controls": [],
+          "detecting_controls": [],
+          "success_indicators": [
+            "Knowledge of internal IP addressing and the explicit route to the Vault."
+          ],
+          "precondition": "The attacker has code execution on the CI runner.",
+          "exploited_condition": "The CI runner exposes internal network configurations and environment details to executing jobs by default.",
+          "assumptions": [
+            "Standard Unix discovery commands (e.g., env, ip route) are available on the Ubuntu runner."
+          ],
+          "control_note": "",
+          "transition": "",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "Scattered Spider has executed scripts to identify the underlying operating system to ensure it uses the correct installation package for malicious payloads.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0005",
+          "name": "Private Keys on Secrets manager",
+          "description": "The attacker queries the Vault API directly over the unauthenticated HTTP flow to extract stored private keys and master secrets.",
+          "sequence_order": 5,
+          "target_asset": "Secrets manager",
+          "attack_technique": "Private Keys",
+          "technique_id": "T1552.004",
+          "tactic": "Credential Access",
+          "evidence": "documented",
+          "required_access": "code_execution",
+          "resulting_access": "data_access",
+          "access_source": "model",
+          "blocking_controls": [
+            "Short-lived secret leases"
+          ],
+          "detecting_controls": [
+            "Short-lived secret leases",
+            "Secret access audit logging"
+          ],
+          "success_indicators": [
+            "Stolen private keys and sensitive vault secrets."
+          ],
+          "precondition": "The attacker has code execution on the CI runner and knows the internal routing to the vault.",
+          "exploited_condition": "The architectural flow from the ci_runner to the vault is declared as unauthenticated HTTP, requiring no explicit token.",
+          "assumptions": [
+            "The unauthenticated flow natively exposes paths containing high-value private keys."
+          ],
+          "control_note": "The unauthenticated runner-to-vault flow inherently bypasses the short-lived lease requirement, though the access will still trigger audit logs.",
+          "transition": "flow f11: ci_runner -> vault (http, unauthenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "Scattered Spider enumerate and exfiltrate code-signing certificates from a compromised host.",
+          "state_check": "gap \u2014 needs code_execution on vault; the path reaches it but no earlier step takes code_execution there. Path holds service_credential, user_credential, code_execution on ci_runner"
+        }
+      ]
+    },
+    {
+      "path_id": "partner-api-k8s-db",
+      "name": "Scattered Spider (G1015) vs Fleet Telemetry Platform: partner-api-k8s-db",
+      "description": "Adversary leverages stale partner credentials to inject malicious telemetry, bypasses event bus ACLs, achieves execution in the Kubernetes cluster, and accesses the telemetry database.",
+      "source_type": "actor_projection",
+      "threat_actor_profile": "Scattered Spider (G1015)",
+      "attack_objective": "Exfiltrate regulated telemetry data from the restricted database zone.",
+      "target_assets": [
+        "Partner ingest API",
+        "Telemetry event bus",
+        "Telemetry warehouse",
+        "Workload cluster"
+      ],
+      "entry_vectors": [
+        "partner_api"
+      ],
+      "security_controls": [
+        {
+          "control_id": "SC-0001",
+          "name": "DDoS protection",
+          "control_type": "perimeter",
+          "description": "Protects Application load balancer (alb).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0002",
+          "name": "WAF",
+          "control_type": "perimeter",
+          "description": "Protects Customer console (web_console).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0003",
+          "name": "Workforce MFA",
+          "control_type": "identity",
+          "description": "Protects Customer console (web_console).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0004",
+          "name": "API rate limiting",
+          "control_type": "application",
+          "description": "Protects Partner ingest API (partner_api).",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0005",
+          "name": "Partner credential rotation",
+          "control_type": "identity",
+          "description": "Protects Partner ingest API (partner_api).",
+          "implementation_status": "missing",
+          "bypass_difficulty": "trivial",
+          "bypass_requirements": [],
+          "detection_capability": "none"
+        },
+        {
+          "control_id": "SC-0006",
+          "name": "Broker topic ACLs",
+          "control_type": "network",
+          "description": "Protects Telemetry event bus (event_bus).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0007",
+          "name": "Pod security admission",
+          "control_type": "application",
+          "description": "Protects Workload cluster (k8s).",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0008",
+          "name": "Namespace network policies",
+          "control_type": "network",
+          "description": "Protects Workload cluster (k8s).",
+          "implementation_status": "missing",
+          "bypass_difficulty": "trivial",
+          "bypass_requirements": [],
+          "detection_capability": "none"
+        },
+        {
+          "control_id": "SC-0009",
+          "name": "Branch protection and required review",
+          "control_type": "application",
+          "description": "Protects Source control and pipeline definitions (scm).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0010",
+          "name": "Commit signing enforcement",
+          "control_type": "application",
+          "description": "Protects Source control and pipeline definitions (scm).",
+          "implementation_status": "planned",
+          "bypass_difficulty": "low",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0011",
+          "name": "Image signature enforcement",
+          "control_type": "application",
+          "description": "Protects Container registry (artifact_reg).",
+          "implementation_status": "planned",
+          "bypass_difficulty": "low",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0012",
+          "name": "Short-lived secret leases",
+          "control_type": "identity",
+          "description": "Protects Secrets manager (vault).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "very_high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0013",
+          "name": "Secret access audit logging",
+          "control_type": "monitoring",
+          "description": "Protects Secrets manager (vault).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0014",
+          "name": "Database firewall",
+          "control_type": "network",
+          "description": "Protects Telemetry warehouse (telemetry_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0015",
+          "name": "Column-level encryption",
+          "control_type": "data",
+          "description": "Protects Telemetry warehouse (telemetry_db).",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0016",
+          "name": "Centralised SIEM alerting",
+          "control_type": "monitoring",
+          "description": "Estate-wide control, not tied to one component.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0017",
+          "name": "Quarterly access review",
+          "control_type": "identity",
+          "description": "Estate-wide control, not tied to one component.",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        }
+      ],
+      "attack_sequence": [
+        {
+          "event_id": "AE-0001",
+          "name": "Valid Accounts on Partner ingest API",
+          "description": "The attacker utilizes a previously compromised partner API key that remains valid due to the lack of enforced rotation policies.",
+          "sequence_order": 1,
+          "target_asset": "Partner ingest API",
+          "attack_technique": "Valid Accounts",
+          "technique_id": "T1078",
+          "tactic": "Initial Access",
+          "evidence": "documented",
+          "required_access": "network_reach",
+          "resulting_access": "service_credential",
+          "access_source": "model",
+          "blocking_controls": [],
+          "detecting_controls": [],
+          "success_indicators": [
+            "Authenticated access to the partner ingest API."
+          ],
+          "precondition": "The attacker possesses a compromised partner API key.",
+          "exploited_condition": "The partner API accepts static API keys without enforced rotation, allowing long-term credential reuse.",
+          "assumptions": [
+            "The attacker obtained the key via external leaks or previous supply chain compromise."
+          ],
+          "control_note": "The missing partner credential rotation bypasses standard access revocation and temporal access controls.",
+          "transition": "entry point (partner-exposed)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "Scattered Spider has used compromised credentials for initial access.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0002",
+          "name": "Trust Modification on Telemetry event bus",
+          "description": "The attacker manipulates or bypasses the broker topic ACLs on the event bus to write maliciously crafted payloads into restricted telemetry queues.",
+          "sequence_order": 2,
+          "target_asset": "Telemetry event bus",
+          "attack_technique": "Trust Modification",
+          "technique_id": "T1484.002",
+          "tactic": "Defense Impairment",
+          "evidence": "documented",
+          "required_access": "service_credential",
+          "resulting_access": "service_credential",
+          "access_source": "model",
+          "blocking_controls": [
+            "Broker topic ACLs"
+          ],
+          "detecting_controls": [],
+          "success_indicators": [
+            "Ability to write arbitrary formatted messages into the Kubernetes processing queue."
+          ],
+          "precondition": "The attacker is authenticated to the partner API and can pass traffic to the event bus.",
+          "exploited_condition": "The event bus authenticates via SASL/SCRAM but the underlying topic ACLs have a medium bypass complexity.",
+          "assumptions": [
+            "The partner API acts as a direct proxy to the Kafka topics without stripping malformed payload structures."
+          ],
+          "control_note": "Exploits the medium-bypass implementation of Broker topic ACLs to route messages beyond standard ingest topics.",
+          "transition": "flow f4: partner_api -> event_bus (kafka, authenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "Scattered Spider adds a federated identity provider to the victim\u2019s SSO tenant and activates automatic account linking.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0003",
+          "name": "Unix Shell on Workload cluster",
+          "description": "The malicious telemetry message injected into the event bus exploits a deserialization or injection vulnerability in the Kubernetes container processing the queue, yielding a shell.",
+          "sequence_order": 3,
+          "target_asset": "Workload cluster",
+          "attack_technique": "Unix Shell",
+          "technique_id": "T1059.004",
+          "tactic": "Execution",
+          "evidence": "documented",
+          "required_access": "service_credential",
+          "resulting_access": "code_execution",
+          "access_source": "model",
+          "blocking_controls": [],
+          "detecting_controls": [],
+          "success_indicators": [
+            "Code execution within a container inside the Kubernetes cluster."
+          ],
+          "precondition": "The attacker has successfully queued a malicious payload targeting the processing workers.",
+          "exploited_condition": "The Kubernetes workload processing Kafka events executes shell commands or system calls based on untrusted input.",
+          "assumptions": [
+            "The internal telemetry processing application lacks strict input validation on consumed Kafka messages."
+          ],
+          "control_note": "Exploitation bypasses Pod Security Admission as execution occurs dynamically within an already admitted and running pod.",
+          "transition": "flow f5: event_bus -> k8s (kafka, authenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "Scattered Spider has used the command shell to upload and install the Teleport remote access tool to a compromised vCenter Server Appliance.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0004",
+          "name": "System Network Configuration Discovery on Workload cluster",
+          "description": "The attacker discovers internal network routes and services within the Kubernetes cluster to locate the restricted telemetry database.",
+          "sequence_order": 4,
+          "target_asset": "Workload cluster",
+          "attack_technique": "System Network Configuration Discovery",
+          "technique_id": "T1016",
+          "tactic": "Discovery",
+          "evidence": "documented",
+          "required_access": "code_execution",
+          "resulting_access": "code_execution",
+          "access_source": "model",
+          "blocking_controls": [],
+          "detecting_controls": [],
+          "success_indicators": [
+            "Network coordinates and routing paths for the telemetry warehouse."
+          ],
+          "precondition": "The attacker has an interactive or automated shell inside a Kubernetes container.",
+          "exploited_condition": "The containerized environment allows querying local network configurations, coreDNS, and environment variables.",
+          "assumptions": [
+            "Standard Kubernetes service discovery (DNS resolution or injected environment variables) exposes the database address."
+          ],
+          "control_note": "",
+          "transition": "",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "Scattered Spider has used network reconnaissance commands for discovery including `ping` and `nltest`.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0005",
+          "name": "Data Staged on Telemetry warehouse",
+          "description": "The attacker connects directly to the database from the compromised pod to query and stage regulated data for subsequent exfiltration.",
+          "sequence_order": 5,
+          "target_asset": "Telemetry warehouse",
+          "attack_technique": "Data Staged",
+          "technique_id": "T1074",
+          "tactic": "Collection",
+          "evidence": "documented",
+          "required_access": "code_execution",
+          "resulting_access": "data_access",
+          "access_source": "model",
+          "blocking_controls": [
+            "Database firewall"
+          ],
+          "detecting_controls": [
+            "Database firewall"
+          ],
+          "success_indicators": [
+            "Access to regulated database records and staged telemetry data."
+          ],
+          "precondition": "The attacker has internal network reachability to the database from the k8s cluster.",
+          "exploited_condition": "The lack of Kubernetes namespace network policies permits unrestricted outbound access from the compromised worker pod to the database.",
+          "assumptions": [
+            "The compromised pod already possesses valid Postgres credentials required for its normal operation."
+          ],
+          "control_note": "Missing namespace network policies allow trivial bypass of internal network segmentation; database firewall allows k8s IP ranges.",
+          "transition": "flow f6: k8s -> telemetry_db (postgres, authenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "Scattered Spider stages data in a centralized database prior to exfiltration.",
+          "state_check": "gap \u2014 needs code_execution on telemetry_db; the path reaches it but no earlier step takes code_execution there. Path holds service_credential, code_execution on k8s, network_reach on web_console"
+        },
+        {
+          "event_id": "AE-0006",
+          "name": "Exfiltration to Cloud Storage on Workload cluster",
+          "description": "The attacker streams the staged database contents directly out from the Kubernetes cluster to an attacker-controlled cloud storage provider.",
+          "sequence_order": 6,
+          "target_asset": "Workload cluster",
+          "attack_technique": "Exfiltration to Cloud Storage",
+          "technique_id": "T1567.002",
+          "tactic": "Exfiltration",
+          "evidence": "documented",
+          "required_access": "data_access",
+          "resulting_access": "data_access",
+          "access_source": "model",
+          "blocking_controls": [],
+          "detecting_controls": [],
+          "success_indicators": [
+            "Regulated telemetry data is successfully exfiltrated from the environment."
+          ],
+          "precondition": "The attacker has accessed the data and the compromised pod maintains outbound internet access.",
+          "exploited_condition": "The Kubernetes cluster lacks strict egress filtering, allowing outbound connections to arbitrary cloud storage services.",
+          "assumptions": [
+            "Outbound traffic to major cloud storage providers is not blocked by egress firewalls."
+          ],
+          "control_note": "",
+          "transition": "back over flow f6: telemetry_db -> k8s (postgres, authenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "Scattered Spider has exfiltrated victim data to the MEGA file sharing site, SnowFlake, and AWS S3 buckets.",
+          "state_check": "gap \u2014 needs data_access on k8s; the path reaches it but no earlier step takes data_access there. Path holds service_credential, code_execution on k8s"
+        }
+      ]
+    }
+  ]
+}

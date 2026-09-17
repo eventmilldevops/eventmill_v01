@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "node_count": { "type": "integer", "description": "Normalized node occurrences." },
+    "pair_status": { "type": "string", "description": "verified | derived | conflict | single_source." },
+    "conflict_count": { "type": "integer", "description": "Fields both documents carry that disagree after canonicalization." },
+    "identities": {
+      "type": "object",
+      "description": "The three identities of spec section 4.2a.",
+      "properties": {
+        "projection_identity": {
+          "type": "object",
+          "properties": {
+            "value": { "type": "string" },
+            "status": { "type": "string", "enum": ["verified", "derived"] }
+          }
+        },
+        "artifact_identity": { "type": "array", "items": { "type": "object" } },
+        "node_key_form": { "type": "string" }
+      }
+    },
+    "pair": {
+      "type": "object",
+      "properties": {
+        "join": { "type": "boolean" },
+        "provenance_status": { "type": "string" },
+        "pair_join": { "type": "string" },
+        "verified": { "type": "boolean" },
+        "content_conflicts": { "type": "integer" },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "engagement": { "type": "object", "description": "Actor, application, ATT&CK version and model attribution read from provenance.model." },
+    "inventory": { "type": "object", "description": "Paths, node count and the ordered node keys." },
+    "nodes": {
+      "type": "array",
+      "description": "One entry per attack step, keyed by (projection_identity, path_id, node_index).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "draft_id": { "type": "string" },
+          "path_id": { "type": "string" },
+          "node_index": { "type": "integer" },
+          "provenance_by_field": { "type": "object" },
+          "input_conflicts": { "type": "array", "items": { "type": "object" } },
+          "review_flags": { "type": "array", "items": { "type": "object" } }
+        },
+        "required": ["draft_id", "path_id", "node_index", "provenance_by_field"]
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "object" } },
+    "input_conflicts": { "type": "array", "items": { "type": "object" } }
+  },
+  "required": ["node_count", "nodes", "identities", "pair"]
+}
