@@ -109,16 +109,40 @@ The thread that took Event Mill from one vendor to three. Plans:
 **Next:** the live three-vendor run — Stage E of
 `docs/specs/projector_three_vendor_run.md`. Nothing in the code blocks it.
 
-## Attack path detection guidance — 2026-09-16
+## Attack path detection guidance — 2026-09-16/17
 
 Turning projected attack paths into per-node detection drafts. Plans:
 `docs/specs/attack_path_detection_designer.md` (the workbook and draft format),
 `docs/specs/attack_path_detection_normalization.md` (the node context the
-workbook is generated from).
+workbook is generated from, and the active one — it replaces the designer
+plan's section 3).
+
+Two entries below are code; four are planning or fixtures. The projector
+export pairs these fixtures refer to live **outside the repository**, in
+`C:/projects/eventmill_v02/test_data/path_projector/`, so git records neither
+them nor their history; the inventory of what each one exercises is §1.1b of
+the normalization spec, and the shape of the documents themselves is
+`docs/specs/projector_export_shapes.md`.
+
+**The corpus was replaced on 2026-09-17** — four pairs, 43 nodes, one code
+revision, three applications (`2026-09-17-projector-corpus-refresh.md`). Counts
+in entries below that date are historical; the three pairs they measure are
+retired.
+
+Next: stage N1 of that spec — the adapters, the three identities of §4.2a and
+the union merge. It needs no provider and no cost. Its contract was closed on
+2026-09-17 (`2026-09-17-n1-contract-fixes.md`). Of the two decisions that
+blocked code, committing the fixtures is now resolved by the refresh; **where
+`normalize_paths` lives is still open**, since `safe_for_auto_invoke` is a
+whole-plugin manifest field.
 
 | Date | Entry | What landed |
 |---|---|---|
-| 09-17 | `2026-09-17-code-identity-on-cloud-run.md` | A container has no `.git`, so every Cloud Run export carried an empty `git_sha` — and the manifest version deliberately does not move, leaving those exports with no code identity at all. The deploy now forwards the image tag it already computes, and `code_id_source` distinguishes unavailable from unpopulated. Suite 1519 → 1523 |
+| 09-17 | `2026-09-17-projector-corpus-refresh.md` | **Documentation only.** Three fresh runs (Scattered Spider/telemetry, APT29/Application B, Volt Typhoon/Claims Portal) join Fox Kitten to give four pairs on one code revision — 43 nodes, 3 applications, and run records for the first time. Every pair binds to a flow map already in the repo, which resolves the commit blocker. `component_bound_partial` gains 5 real instances. The `state_check` join reconfirms 43/43 and the mitigation split 163/169 uncovered on data sharing no run with the original measurement. New: `transition` needs the same canonicalization as `state_check` — the seed's prose drops `crosses_boundary`, so every non-null transition would otherwise join as a conflict. The producer's shape moves into its own document, `docs/specs/projector_export_shapes.md` |
+| 09-17 | `2026-09-17-n1-contract-fixes.md` | **Planning only.** Six issues found by re-reading the four fixtures against the normalization spec, fixed before N1 encodes them. Two were self-contradictions: `source_identity` (document hash + filename) could never satisfy the N1 gate requiring graph-only and seed-only to yield the same node keys — split into artifact / projection / occurrence identity; and `state_check` equality would have rejected all 58 nodes, since the graph splits it across two fields where the seed combines them on an em dash (58/58 match under the canonical rule, 6 gap nodes exercise the note branch). Also: §4.1 named `actor_attck_id` and `provider` where the export has `actor_attack_id` and `model`, and no `provider` key exists to read; a `flow_map_sha256` alone no longer confers `component_bound`, and `component_bound_partial` is added for a bound component with no technologies; and §1.1's within-path repeat claim was wrong — no `(technique, component)` pair repeats within any path, so a synthetic case now covers the rule |
+| 09-17 | `2026-09-17-mitigation-focus.md` | **Planning only.** `uncovered_mitigations` measured across the fixtures: ~95% identical to `mitigations` (7 of 154 covered), its most frequent members are ATT&CK's broadest (M1018 at 119 techniques), and it repeats verbatim wherever a technique repeats. Neither a telemetry filter nor an actor filter exists locally — mitigations carry no data-source link, and the actor constraint is already applied when the path is built. The pack keeps the full lists; generation reads only `mitigation_focus[]` (1–2 narrowest by technique breadth), `mitigations_covered[]` and the ratio |
+| 09-17 | `2026-09-17-fox-kitten-fixture.md` | Fourth fixture (Fox Kitten G0117, 2 paths, 9 nodes, from Cloud Run). The first that is `component_bound` **and** carries a `state_check: gap`, so the inherited-gap route to `multistep_access: true` can be tested at full context grade. Also the only one with a live tactic reconciliation to `Stealth` and `code_id_source: build_env` |
+| 09-17 | `2026-09-17-code-identity-on-cloud-run.md` | A container has no `.git`, so every Cloud Run export carried an empty `git_sha` — and the manifest version deliberately does not move, leaving those exports with no code identity at all. The deploy now forwards the image tag it already computes, and `code_id_source` distinguishes unavailable from unpopulated. **Live-confirmed** on the redeployed container. Suite 1519 → 1523 |
 | 09-16 | `2026-09-16-component-bound-fixture.md` | A live projection against the example flow map produced the first `component_bound` fixture — 2 paths, 10 nodes, every node binding to a component with technologies, authentication and zone — and live-confirmed the provenance block, including real provider attribution |
 | 09-16 | `2026-09-16-projector-export-provenance.md` | Both projector exports now carry a `provenance` block — `run_id`, flow map and prompt hashes, ATT&CK release, actor ID, tool version, provider — minted once so the graph, the seed and the run record share it. Previously a graph and a seed could only be paired by filename stamp. Additive; the visualizer is unaffected. Suite 1513 → 1519 |
 | 09-16 | `2026-09-16-attack-path-normalization-plan.md` | **Planning only.** The designer plan's normalization was reviewed against the real exports: the second fixture repeats a technique three times inside one path, the exports carry no `run_id` or flow-map hash to join on, the scenario seed is not a subset of the graph, and `technologies`/`authentication`/`zone` exist in no export. Normalization becomes a deterministic provider-free `normalize_paths` action, and the projector's Phase 4 `normalize_flow_map` becomes part of the same seam |

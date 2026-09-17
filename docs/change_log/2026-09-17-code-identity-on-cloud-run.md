@@ -5,8 +5,8 @@
 **Scope:** `plugins/threat_modeling/adversary_path_projector/tool.py`,
 its `schemas/projection_run.schema.json` and `tests/test_contract.py`,
 `cloud_install/deploy-cloudrun-secrets.sh`
-**Status:** built and unit-tested. Suite **1519 → 1523**. Not yet exercised by
-a deploy.
+**Status:** built, unit-tested and **live-confirmed on Cloud Run**
+(2026-09-17T02:26Z). Suite **1519 → 1523**.
 
 A projection run from the Cloud Run container wrote:
 
@@ -69,9 +69,25 @@ keeps its point — the manifest version alone cannot separate two builds.
 Full suite 1523 passed; `bash -n` clean on the deploy script;
 `validate_schemas.py` clean at 34.
 
-**Not done:** no deploy has run, so `EVENTMILL_BUILD_SHA` has never been set by
-the real script — only by tests. The next Cloud Run deploy is what confirms it,
-and the check is one line: a projection export from the container should read
-`code_id_source: build_env` with the image tag in `git_sha`. Exports written by
-the container *before* that deploy keep their empty SHA and no
-`code_id_source`, and cannot be retrofitted.
+## Live confirmation
+
+A projection run from the redeployed container at 2026-09-17T02:26:46Z
+(Fox Kitten G0117, run `4f0b54a0`, same flow map, Gemini 3.1 Pro) wrote:
+
+```json
+"tool_version": {
+  "manifest_version": "0.2.0",
+  "git_sha": "1c2ba74",
+  "code_id_source": "build_env"
+}
+```
+
+`1c2ba74` is the commit that added the deploy change, so the full loop is
+closed: commit → `git rev-parse --short HEAD` → image tag → `--set-env-vars` →
+`EVENTMILL_BUILD_SHA` → export. The container now names the code it is running,
+which it could not do at all two runs earlier.
+
+**Still outstanding:** the `SKIP_BUILD=1` branch has not been exercised, so the
+deliberate `unavailable` on a `:latest` redeploy is unit-tested but not
+observed. Exports written by the container *before* this deploy keep their
+empty SHA and no `code_id_source`, and cannot be retrofitted.
