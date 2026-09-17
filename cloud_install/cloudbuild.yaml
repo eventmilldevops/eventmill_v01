@@ -113,8 +113,15 @@ steps:
           echo "OK: Service account $${SA_EMAIL}"
         fi
 
-        # Every injected secret must exist, else Cloud Run rejects the revision
+        # Every injected secret must exist, else Cloud Run rejects the revision.
+        # All five LLM secrets are mounted for every deployment, the unadopted
+        # ones holding the literal "placeholder", so the revision shape is
+        # identical everywhere and adopting a vendor is a secret version plus a
+        # restart rather than a different deploy path. Five secrets, six
+        # providers: both Daybreak colours read one credential.
         for SECRET in "${_SECRET_GEMINI_FLASH}" "${_SECRET_GEMINI_PRO}" \
+                      "${_SECRET_ANTHROPIC}" "${_SECRET_OPENAI}" \
+                      "${_SECRET_OPENAI_DAYBREAK}" \
                       "${_SECRET_TTYD_USER}" "${_SECRET_TTYD_CRED}"; do
           if ! gcloud secrets describe "$${SECRET}" --project="${PROJECT_ID}" > /dev/null 2>&1; then
             echo "ERROR: Secret '$${SECRET}' not found."
@@ -226,8 +233,8 @@ steps:
           --min-instances=0 \
           --max-instances=3 \
           --service-account="$${SA_EMAIL}" \
-          --set-secrets="GEMINI_FLASH_API_KEY=${_SECRET_GEMINI_FLASH}:latest,GEMINI_PRO_API_KEY=${_SECRET_GEMINI_PRO}:latest,TTYD_USERNAME=${_SECRET_TTYD_USER}:latest,TTYD_PASSWORD=${_SECRET_TTYD_CRED}:latest" \
-          --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},EVENTMILL_BUCKET_PREFIX=$${BUCKET_PREFIX},EVENTMILL_LOG_LEVEL=${_LOG_LEVEL}" \
+          --set-secrets="GEMINI_FLASH_API_KEY=${_SECRET_GEMINI_FLASH}:latest,GEMINI_PRO_API_KEY=${_SECRET_GEMINI_PRO}:latest,ANTHROPIC_API_KEY=${_SECRET_ANTHROPIC}:latest,OPENAI_API_KEY=${_SECRET_OPENAI}:latest,OPENAI_DAYBREAK_API_KEY=${_SECRET_OPENAI_DAYBREAK}:latest,TTYD_USERNAME=${_SECRET_TTYD_USER}:latest,TTYD_PASSWORD=${_SECRET_TTYD_CRED}:latest" \
+          --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},EVENTMILL_BUCKET_PREFIX=$${BUCKET_PREFIX},EVENTMILL_LOG_LEVEL=${_LOG_LEVEL},EVENTMILL_LLM_PROVIDERS=${_LLM_PROVIDERS},EVENTMILL_NATIVE_BASE_S=${_NATIVE_BASE_S},EVENTMILL_NATIVE_S_PER_PAGE=${_NATIVE_S_PER_PAGE},EVENTMILL_NATIVE_S_PER_CANDIDATE=${_NATIVE_S_PER_CANDIDATE}" \
           "$${AUTH_FLAG}"
 
         SERVICE_URL=$$(gcloud run services describe "$${SERVICE_NAME}" \
@@ -256,10 +263,32 @@ substitutions:
   # Secret names as created by provision-gcp-project.sh Section 6
   _SECRET_GEMINI_FLASH: 'eventmill-gemini-flash-api'
   _SECRET_GEMINI_PRO: 'eventmill-gemini-pro-api'
+  _SECRET_ANTHROPIC: 'eventmill-anthropic-api'
+  _SECRET_OPENAI: 'eventmill-openai-api'
+  # Read by both Daybreak providers — one credential, two models. Its
+  # "anthropic" substring is a storage label from how the secret was created;
+  # it holds an OpenAI key and mounts to OPENAI_DAYBREAK_API_KEY.
+  _SECRET_OPENAI_DAYBREAK: 'eventmill-anthropic-daybreak'
   _SECRET_TTYD_USER: 'eventmill-ttyd-user'
   _SECRET_TTYD_CRED: 'eventmill-ttyd-cred'
 
+  # Providers the session may bind, space-separated. All of them by default: a
+  # provider whose key is absent or still "placeholder" is skipped at runtime,
+  # so naming one costs nothing, while leaving one out means a vendor with a
+  # working key in Secret Manager is silently absent from the deployment.
+  # Keep in step with deploy-cloudrun-secrets.sh, which defaults to the same.
+  _LLM_PROVIDERS: 'gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue'
+
   _LOG_LEVEL: 'INFO'
+
+  # Native-document latency model, read per execution by
+  # threat_intel_ingester's _latency_model(). Empty keeps the value compiled
+  # into the plugin. Override to retune page-range batching without touching
+  # the image - the model as shipped overestimates a large PDF by ~6x, which
+  # over-splits the document rather than timing out.
+  _NATIVE_BASE_S: ''
+  _NATIVE_S_PER_PAGE: ''
+  _NATIVE_S_PER_CANDIDATE: ''
 
   # Set to 'false' to require IAM auth (roles/run.invoker) instead of relying
   # on ttyd basic auth alone.

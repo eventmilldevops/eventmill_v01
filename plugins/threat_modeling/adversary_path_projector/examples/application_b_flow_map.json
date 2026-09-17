@@ -1,0 +1,546 @@
+{
+  "application": "Application B",
+  "description": "Flow map for a containerized React SPA authenticating with Okta (OAuth2/OIDC authorization code + PKCE) against a Spring Boot entry-point API exposing REST and GraphQL. Azure Front Door fronts both the UI container and the entry API, reaching them over Private Link; the UI container only serves the SPA assets, and the SPA running in the user's browser calls the entry API directly through Front Door with its Okta bearer token. The entry API uses Azure Database for PostgreSQL, Azure Blob Storage and Azure Cache for Redis, and calls three Spring Boot integration APIs (Oracle_Int, Mongo_Int, Cosmos_Int) running as containers on Azure Kubernetes Service inside the network, over Private Link with a custom x-auth-token system-to-system header. Oracle_Int reaches an on-premises Oracle database; Mongo_Int uses Azure Cosmos DB for MongoDB; Cosmos_Int uses Azure Cosmos DB. Data store access uses connection strings with username and password.",
+  "zones": [
+    { "id": "edge", "name": "Internet edge", "trust_level": "untrusted" },
+    {
+      "id": "identity",
+      "name": "Identity (Okta)",
+      "trust_level": "semi_trusted"
+    },
+    {
+      "id": "app",
+      "name": "Application tier (Azure Container Apps)",
+      "trust_level": "semi_trusted"
+    },
+    {
+      "id": "services",
+      "name": "Integration tier (Azure Kubernetes Service, internal network)",
+      "trust_level": "trusted"
+    },
+    { "id": "data", "name": "Data tier", "trust_level": "restricted" },
+    {
+      "id": "onprem",
+      "name": "On-premises data centre",
+      "trust_level": "trusted"
+    }
+  ],
+  "components": [
+    {
+      "id": "users",
+      "name": "End users (internet, outside the network)",
+      "type": "actor",
+      "zone": "edge",
+      "exposure": "internet",
+      "authentication": "okta_user",
+      "controls": []
+    },
+    {
+      "id": "front_door",
+      "name": "Azure Front Door",
+      "type": "cdn",
+      "zone": "edge",
+      "exposure": "internet",
+      "technologies": ["azure_front_door", "azure_waf"],
+      "authentication": "none",
+      "controls": [
+        {
+          "name": "WAF",
+          "control_type": "perimeter",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium",
+          "mitre_mitigation_id": "M1050"
+        },
+        {
+          "name": "DDoS protection",
+          "control_type": "perimeter",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "high"
+        },
+        {
+          "name": "Private Link origin (Container Apps not publicly reachable)",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "react_ui",
+      "name": "Application B React UI (SPA assets container)",
+      "type": "spa",
+      "zone": "app",
+      "exposure": "private_link",
+      "hosting": "azure_container_apps",
+      "deployment": "container",
+      "technologies": [
+        "react",
+        "typescript",
+        "@okta/okta-react",
+        "@okta/okta-auth-js",
+        "docker",
+        "azure_container_apps"
+      ],
+      "authentication": "oauth2_oidc_pkce",
+      "data_classification": "pii",
+      "controls": [
+        {
+          "name": "Okta OIDC authorization code flow with PKCE",
+          "control_type": "identity",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        },
+        {
+          "name": "Container Apps HTTPS ingress, Private Link from Front Door only",
+          "control_type": "perimeter",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "okta",
+      "name": "Okta",
+      "type": "identity_provider",
+      "zone": "identity",
+      "exposure": "internet",
+      "technologies": ["okta", "oauth2", "oidc"],
+      "authentication": "mfa",
+      "controls": [
+        {
+          "name": "Okta sign-on and access policies",
+          "control_type": "identity",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "high"
+        },
+        {
+          "name": "Token lifetime and audience validation",
+          "control_type": "identity",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "entry_api",
+      "name": "Entry-point API (REST + GraphQL)",
+      "type": "api",
+      "zone": "app",
+      "exposure": "private_link",
+      "hosting": "azure_container_apps",
+      "deployment": "container",
+      "technologies": [
+        "java",
+        "spring_boot",
+        "spring_security_resource_server",
+        "spring_graphql",
+        "docker",
+        "azure_container_apps"
+      ],
+      "authentication": "oauth2_bearer_jwt",
+      "data_classification": "pii",
+      "controls": [
+        {
+          "name": "JWT bearer validation (issuer, audience, signature)",
+          "control_type": "identity",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        },
+        {
+          "name": "Scope and role based authorization",
+          "control_type": "application",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        },
+        {
+          "name": "GraphQL query depth and complexity limits",
+          "control_type": "application",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium"
+        },
+        {
+          "name": "Reachable only via Front Door Private Link origin",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "entry_db",
+      "name": "Azure Database for PostgreSQL (entry API)",
+      "type": "database",
+      "zone": "data",
+      "exposure": "internal",
+      "technologies": ["postgresql", "azure_flexible_server"],
+      "authentication": "connection_string_username_password",
+      "data_classification": "regulated",
+      "controls": [
+        {
+          "name": "Private endpoint and firewall rules",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        },
+        {
+          "name": "TLS in transit and encryption at rest",
+          "control_type": "data",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "blob_storage",
+      "name": "Azure Blob Storage",
+      "type": "file_store",
+      "zone": "data",
+      "exposure": "internal",
+      "technologies": ["azure_storage"],
+      "authentication": "connection_string_account_key",
+      "data_classification": "pii",
+      "controls": [
+        {
+          "name": "Private endpoint, public network access disabled",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "redis",
+      "name": "Azure Cache for Redis",
+      "type": "cache",
+      "zone": "data",
+      "exposure": "internal",
+      "technologies": ["redis"],
+      "authentication": "connection_string_access_key",
+      "data_classification": "pii",
+      "controls": [
+        {
+          "name": "TLS-only access",
+          "control_type": "data",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "low"
+        },
+        {
+          "name": "Private endpoint",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "oracle_int",
+      "name": "Oracle_Int",
+      "type": "api",
+      "zone": "services",
+      "exposure": "internal",
+      "hosting": "azure_kubernetes_service",
+      "deployment": "container",
+      "technologies": ["java", "spring_boot", "docker", "kubernetes"],
+      "authentication": "custom_x_auth_token",
+      "data_classification": "pii",
+      "controls": [
+        {
+          "name": "Shared x-auth-token header validation",
+          "control_type": "application",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low"
+        },
+        {
+          "name": "Internal-only AKS ingress reachable over Private Link",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "oracle_db",
+      "name": "Oracle database (on-premises)",
+      "type": "database",
+      "zone": "onprem",
+      "exposure": "internal",
+      "technologies": ["oracle"],
+      "authentication": "connection_string_username_password",
+      "data_classification": "regulated",
+      "controls": [
+        {
+          "name": "Private connectivity from Azure (ExpressRoute/VPN) and network allow-list",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "mongo_int",
+      "name": "Mongo_Int",
+      "type": "api",
+      "zone": "services",
+      "exposure": "internal",
+      "hosting": "azure_kubernetes_service",
+      "deployment": "container",
+      "technologies": ["java", "spring_boot", "docker", "kubernetes"],
+      "authentication": "custom_x_auth_token",
+      "data_classification": "pii",
+      "controls": [
+        {
+          "name": "Shared x-auth-token header validation",
+          "control_type": "application",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low"
+        },
+        {
+          "name": "Internal-only AKS ingress reachable over Private Link",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "mongo_db",
+      "name": "Azure Cosmos DB for MongoDB (documents)",
+      "type": "database",
+      "zone": "data",
+      "exposure": "internal",
+      "technologies": ["cosmos_db", "mongodb_api"],
+      "authentication": "connection_string_username_password",
+      "data_classification": "pii",
+      "controls": [
+        {
+          "name": "Private endpoint",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "cosmos_int",
+      "name": "Cosmos_Int",
+      "type": "api",
+      "zone": "services",
+      "exposure": "internal",
+      "hosting": "azure_kubernetes_service",
+      "deployment": "container",
+      "technologies": ["java", "spring_boot", "docker", "kubernetes"],
+      "authentication": "custom_x_auth_token",
+      "data_classification": "internal",
+      "controls": [
+        {
+          "name": "Shared x-auth-token header validation",
+          "control_type": "application",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low"
+        },
+        {
+          "name": "Internal-only AKS ingress reachable over Private Link",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "cosmos_db",
+      "name": "Azure Cosmos DB (events)",
+      "type": "database",
+      "zone": "data",
+      "exposure": "internal",
+      "technologies": ["cosmos_db"],
+      "authentication": "connection_string_account_key",
+      "data_classification": "internal",
+      "controls": [
+        {
+          "name": "Private endpoint",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "id": "f0",
+      "from": "users",
+      "to": "front_door",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": false,
+      "description": "Internet users reach Azure Front Door (WAF) for both the UI and the entry API"
+    },
+    {
+      "id": "f0a",
+      "from": "front_door",
+      "to": "react_ui",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": false,
+      "description": "Front Door to Container Apps origin over Private Link; serves the SPA assets to the browser"
+    },
+    {
+      "id": "f1",
+      "from": "users",
+      "to": "okta",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "description": "User's browser running the SPA performs the Okta OIDC authorization code + PKCE login, token and refresh"
+    },
+    {
+      "id": "f2",
+      "from": "users",
+      "to": "front_door",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "description": "User's browser running the SPA makes REST calls with the Okta bearer token"
+    },
+    {
+      "id": "f3",
+      "from": "users",
+      "to": "front_door",
+      "protocol": "graphql_https",
+      "port": 443,
+      "authenticated": true,
+      "description": "User's browser running the SPA makes GraphQL queries and mutations with the Okta bearer token"
+    },
+    {
+      "id": "f3a",
+      "from": "front_door",
+      "to": "entry_api",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "description": "Front Door to entry API Container Apps origin over Private Link; bearer token passed through"
+    },
+    {
+      "id": "f4",
+      "from": "entry_api",
+      "to": "okta",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": false,
+      "description": "JWKS retrieval for bearer token signature validation"
+    },
+    {
+      "id": "f5",
+      "from": "entry_api",
+      "to": "entry_db",
+      "protocol": "postgres",
+      "port": 5432,
+      "authenticated": true,
+      "description": "Private endpoint; connection string with username and password"
+    },
+    {
+      "id": "f6",
+      "from": "entry_api",
+      "to": "blob_storage",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "description": "Private endpoint; storage account connection string"
+    },
+    {
+      "id": "f7",
+      "from": "entry_api",
+      "to": "redis",
+      "protocol": "redis_tls",
+      "port": 6380,
+      "authenticated": true,
+      "description": "Private endpoint; access key connection string"
+    },
+    {
+      "id": "f8",
+      "from": "entry_api",
+      "to": "oracle_int",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "description": "Container Apps to AKS internal ingress over Private Link; custom x-auth-token header"
+    },
+    {
+      "id": "f9",
+      "from": "entry_api",
+      "to": "mongo_int",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "description": "Container Apps to AKS internal ingress over Private Link; custom x-auth-token header"
+    },
+    {
+      "id": "f10",
+      "from": "entry_api",
+      "to": "cosmos_int",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "description": "Container Apps to AKS internal ingress over Private Link; custom x-auth-token header"
+    },
+    {
+      "id": "f11",
+      "from": "oracle_int",
+      "to": "oracle_db",
+      "protocol": "oracle_tns",
+      "port": 1521,
+      "authenticated": true,
+      "description": "AKS to on-premises Oracle over private connectivity; connection string with username and password"
+    },
+    {
+      "id": "f12",
+      "from": "mongo_int",
+      "to": "mongo_db",
+      "protocol": "mongodb_tls",
+      "port": 10255,
+      "authenticated": true,
+      "description": "Private endpoint; Cosmos DB for MongoDB connection string with username and password"
+    },
+    {
+      "id": "f13",
+      "from": "cosmos_int",
+      "to": "cosmos_db",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "description": "Private endpoint; Cosmos DB connection string with account key"
+    }
+  ],
+  "crown_jewels": [
+    "entry_db",
+    "oracle_db",
+    "mongo_db",
+    "cosmos_db",
+    "blob_storage"
+  ]
+}

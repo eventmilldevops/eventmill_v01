@@ -41,7 +41,19 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # 1.69+ required for GenerateContentConfig.media_resolution and
     # ThinkingConfig.thinking_level (Gemini 3.x controls).
-    "google-genai>=1.69.0",
+    #
+    # 2.x, which is what the deployed container had already been running while
+    # the requirement was unbounded — so this makes the declaration match the
+    # environment that has been working, rather than pinning the image back to
+    # a major it had left. Every surface this project uses survived the move
+    # unchanged (client construction, GenerateContentConfig, ThinkingConfig /
+    # ThinkingLevel, MediaResolution, Part.from_uri / from_bytes, the response
+    # readers, models.list), and the native document path was re-verified live
+    # at 82/82 non-technique recall on the probe corpus — the same number Stage
+    # 1 recorded on 1.69.
+    #
+    # Ceiling at the next major: unbounded is how the skew happened.
+    "google-genai>=2.23.0,<3.0.0",
     # Framework, not plugin: the dispatcher's PDF context guard and the
     # shell's artifact registration both need a page count.
     "pypdf>=4.0.0",
@@ -75,8 +87,27 @@ plugins-network-forensics = [
     "networkx>=3.2",
 ]
 plugins-threat-modeling = []
+# One extra per LLM provider. Each client imports its own SDK, so a provider
+# whose extra is not installed must not break a session on one whose extra is —
+# framework/llm/factory.py imports clients lazily for exactly that reason.
+llm-anthropic = [
+    # Current stable. 0.x is legacy with deprecated surface, and there is no
+    # reason for net-new code to start there — the 1.x move cost nothing here
+    # (no httpx objects cross the SDK boundary, no with_raw_response, no Text
+    # Completions, no sampling parameters), and both tiers were re-verified
+    # live against 1.5.0. Ceiling at the next major, per the rule below.
+    "anthropic>=1.5.0,<2.0.0",
+]
+llm-openai = [
+    # Current stable, and the reason OpenAIClient uses the Responses API rather
+    # than chat.completions: the surface the plan specifies is simply present
+    # here. Re-verified live against 3.13.0, including that store=False is
+    # honoured — the Responses API stores by default, so that flag is
+    # load-bearing for incident data in a way it was not on the old surface.
+    "openai>=3.13.0,<4.0.0",
+]
 all = [
-    "eventmill[dev,gcp,plugins-log-analysis,plugins-network-forensics,plugins-threat-modeling]",
+    "eventmill[dev,gcp,plugins-log-analysis,plugins-network-forensics,plugins-threat-modeling,llm-anthropic,llm-openai]",
 ]
 
 [project.urls]

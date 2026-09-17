@@ -18,6 +18,11 @@ from .protocol import EventMillToolProtocol
 logger = logging.getLogger("eventmill.framework.plugins")
 
 
+# Characters of summarize_for_llm() output kept when a manifest does not say.
+# Doubled from the spec's original 2000 on 2026-09-16.
+DEFAULT_SUMMARY_BUDGET: int = 4000
+
+
 class PluginManifest:
     """Parsed plugin manifest with validation."""
     
@@ -43,6 +48,18 @@ class PluginManifest:
         self.capabilities: list[str] = data.get("capabilities", [])
         self.timeout_class: str = data.get("timeout_class", "medium")
         self.cost_hint: str = data.get("cost_hint", "low")
+        # How many characters of summarize_for_llm() output survive into the
+        # LLM's context. Raised from a hardcoded 2000 on 2026-09-16: that
+        # number predates the current providers, where 2000 characters is
+        # about 500 tokens against context windows measured in hundreds of
+        # thousands. A tool that reads a 154-page report has more to say than
+        # one that lists files, so the ceiling belongs with the tool.
+        #
+        # It is still a ceiling, not a target. The summary is the handle the
+        # model reasons over; the full result is the artifact.
+        self.summary_budget: int = max(
+            0, int(data.get("summary_budget", DEFAULT_SUMMARY_BUDGET))
+        )
         # Default LLM tier for this plugin's queries: light | heavy | none.
         # The framework applies it as the default; plugins override per call
         # with QueryHints(tier=...).

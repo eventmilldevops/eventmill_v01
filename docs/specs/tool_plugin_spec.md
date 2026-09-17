@@ -538,7 +538,7 @@ Each plugin MUST include at least one contract test (`tests/test_contract.py`) t
 6. `validate_inputs()` correctly rejects a deliberately malformed request
 7. example request validates against input schema
 8. example response validates against output schema
-9. `summarize_for_llm()` returns a non-empty string under 2000 characters when given the example response
+9. `summarize_for_llm()` returns a non-empty string under the manifest's `summary_budget` when given the example response
 10. `metadata()` returns a dict containing at minimum `tool_name` and `version`
 
 ---
@@ -590,7 +590,7 @@ A plugin is ready for registration when:
 - [ ] Example request validates against input schema
 - [ ] Example response validates against output schema
 - [ ] Contract tests pass (`pytest tests/test_contract.py`)
-- [ ] `summarize_for_llm()` produces output under 2000 characters
+- [ ] `summarize_for_llm()` produces output under the manifest's `summary_budget` (default 4000)
 - [ ] README exists and covers all required sections
 - [ ] Capabilities are reasonable and reusable
 - [ ] `requires_llm` is set correctly

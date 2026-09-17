@@ -12,12 +12,23 @@
       "items": {
         "type": "object",
         "properties": {
-          "path": {"type": "string"},
-          "name": {"type": "string"},
-          "size_bytes": {"type": "integer"},
-          "last_modified": {"type": "string"}
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer"
+          },
+          "last_modified": {
+            "type": "string"
+          }
         },
-        "required": ["path", "name"]
+        "required": [
+          "path",
+          "name"
+        ]
       },
       "description": "Available reports (for list_reports action)"
     },
@@ -26,19 +37,140 @@
       "items": {
         "type": "object",
         "properties": {
-          "report_path": {"type": "string"},
-          "word_count": {"type": "integer"},
-          "summary": {"type": "string"},
+          "report_path": {
+            "type": "string"
+          },
+          "word_count": {
+            "type": "integer"
+          },
+          "pages_total": {
+            "type": "integer",
+            "description": "Pages the source PDF has. Absent when native ingestion read the whole document, where coverage is total by construction."
+          },
+          "pages_read": {
+            "type": "integer",
+            "description": "Pages actually examined on the text path. Equal to pages_total unless the local page ceiling truncated the read."
+          },
+          "pages_dropped": {
+            "type": "integer",
+            "description": "pages_total - pages_read. Non-zero means the summary was built from part of the report, so a topic's absence is not evidence it is absent from the document."
+          },
+          "summary": {
+            "type": "string"
+          },
           "key_findings": {
             "type": "array",
-            "items": {"type": "string"}
+            "items": {
+              "type": "string"
+            },
+            "description": "Bulleted or numbered findings lifted from the summary, in document order. Bounded at 50 unless the run set ignore_caps (see caps_waived); anything the bound cut is stated in analysis_notes."
           },
           "relevant_techniques": {
             "type": "array",
-            "items": {"type": "string"}
+            "items": {
+              "type": "string"
+            },
+            "description": "MITRE ATT&CK technique ids named in the summary, deduplicated in first-appearance order and reconciled against the local lookup (retired ids are remapped, so this can differ from the ids in the prose). Bounded at 200 unless the run set ignore_caps. See attack_techniques for names and tactics."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when at least one LLM call in this run stopped at the output cap. The text is still the best available answer, but it is partial: content absent from it was not necessarily absent from the report."
+          },
+          "truncation_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One line per truncated call, naming which part of the work was cut off (the whole-document pass, a page range, or the final synthesis)."
+          },
+          "degraded": {
+            "type": "boolean",
+            "description": "True when part of this run fell back to a materially worse input than analysis: a section that produced no summary and contributed raw extracted text instead, or a synthesis pass that did not run and left a concatenation as the final report."
+          },
+          "degradation_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One line per degradation, naming which section or pass fell back and to what."
+          },
+          "analysis_status": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "partial",
+              "degraded"
+            ],
+            "description": "Whether this run did the work it set out to do. complete: nothing truncated, no pages dropped, no fallback. partial: content is missing but every cause is known and named in analysis_notes. degraded: the tool fell back to a materially worse input path, so part of the output is not the kind of answer it normally produces."
+          },
+          "analysis_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One short line per cause behind analysis_status. Rendered ahead of the content in summarize_for_llm, which PluginExecutor caps at 2000 characters."
+          },
+          "pages_empty": {
+            "type": "integer",
+            "description": "Pages that yielded no text and are genuinely blank. A legitimate outcome, reported separately so it is not confused with a page that could not be read."
+          },
+          "pages_extract_failed": {
+            "type": "integer",
+            "description": "Pages pypdf could not read at all \u2014 scanned or damaged. Their content reaches nothing downstream, so a non-zero value makes analysis_status partial. Distinct from pages_dropped, which is pages never attempted."
+          },
+          "caps_waived": {
+            "type": "boolean",
+            "description": "True when the run was given ignore_caps, so key_findings and relevant_techniques are complete and unbounded. Two runs of one report can legitimately return lists of different lengths; this says which run it was."
+          },
+          "attack_techniques": {
+            "type": "array",
+            "description": "relevant_techniques reconciled against the local ATT&CK lookup: official name, the tactics ATT&CK allows, whether the id exists at all, and the retired id it arrived under when it was remapped. The ids are extracted from model prose, so without this the tool publishes whatever ATT&CK release its model was trained on \u2014 which for every current model predates v19.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "technique_id": {
+                  "type": "string",
+                  "description": "Current ATT&CK id."
+                },
+                "technique_name": {
+                  "type": "string",
+                  "description": "Official name, or empty when the id is unknown."
+                },
+                "tactics": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Tactics ATT&CK allows for this technique, in v19 vocabulary."
+                },
+                "mitre_validated": {
+                  "type": "boolean",
+                  "description": "False means the id is not in ATT&CK \u2014 treat it as the model's own."
+                },
+                "remapped_from": {
+                  "type": "string",
+                  "description": "The retired id it was reported under, when remapping applied."
+                },
+                "remap_basis": {
+                  "type": "string",
+                  "enum": [
+                    "curated",
+                    "name"
+                  ],
+                  "description": "How the remap was resolved. Never guessed."
+                }
+              }
+            }
+          },
+          "attack_version": {
+            "type": "string",
+            "description": "The ATT&CK release attack_techniques was reconciled against, e.g. \"19.2\". Both report tools answer to the same one."
           }
         },
-        "required": ["report_path", "summary"]
+        "required": [
+          "report_path",
+          "summary"
+        ]
       },
       "description": "Generated summaries (for summarize action)"
     },
@@ -47,10 +179,19 @@
       "items": {
         "type": "object",
         "properties": {
-          "report_path": {"type": "string"},
-          "matches": {"type": "array", "items": {"type": "string"}}
+          "report_path": {
+            "type": "string"
+          },
+          "matches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         },
-        "required": ["report_path"]
+        "required": [
+          "report_path"
+        ]
       },
       "description": "Search results (for search_reports action)"
     },
@@ -63,5 +204,8 @@
       "description": "Status or error message"
     }
   },
-  "required": ["action", "message"]
+  "required": [
+    "action",
+    "message"
+  ]
 }

@@ -20,7 +20,7 @@ from .protocol import (
     TimeoutClass,
     ToolResult,
 )
-from .loader import LoadedPlugin
+from .loader import DEFAULT_SUMMARY_BUDGET, LoadedPlugin
 from ..logging.structured import LogContext
 
 logger = logging.getLogger("eventmill.framework.plugins.executor")
@@ -161,14 +161,27 @@ class PluginExecutor:
             # Phase 4: Extract summary
             summary = ""
             if result.ok:
+                # Read outside the try: a manifest that cannot supply a budget
+                # is not the plugin's summarize_for_llm failing, and reporting
+                # it as one sends the reader to the wrong file.
+                budget = getattr(
+                    plugin.manifest, "summary_budget", DEFAULT_SUMMARY_BUDGET,
+                )
                 try:
                     summary = instance.summarize_for_llm(result)
-                    # Enforce 2000 char hard limit from spec
-                    if len(summary) > 2000:
-                        summary = summary[:1997] + "..."
+                    # The manifest's ceiling, not a constant: a tool that reads
+                    # a 154-page report has more to say than one that lists
+                    # files. Truncation here is a last resort and loses
+                    # whatever the plugin put last, so a plugin that can run
+                    # long is expected to budget its own summary rather than
+                    # arrive here over the line.
+                    if budget and len(summary) > budget:
+                        original = len(summary)
+                        summary = summary[: budget - 3] + "..."
                         logger.warning(
-                            "Summary truncated to 2000 chars (was %d)",
-                            len(summary),
+                            "Summary truncated to %d chars (was %d) - %s is "
+                            "over its manifest summary_budget",
+                            budget, original, tool_name,
                         )
                 except Exception as e:
                     logger.warning("summarize_for_llm failed: %s", e)

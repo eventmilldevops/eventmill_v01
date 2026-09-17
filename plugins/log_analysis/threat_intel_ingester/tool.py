@@ -43,6 +43,12 @@ from framework.reference_data.mitre_attack import is_legacy_tactic as _is_legacy
 from framework.reference_data.mitre_attack import (
     resolve_legacy_tactic as _resolve_legacy_tactic,
 )
+from framework.reference_data.mitre_attack import (
+    resolve_retired_technique as _resolve_retired_technique,
+)
+from framework.reference_data.mitre_attack import (
+    retirement_note as _retirement_note,
+)
 
 logger = logging.getLogger("eventmill.plugin.threat_intel_ingester")
 
@@ -127,12 +133,18 @@ ENTRY_ONLY_TACTICS: set[str] = {"Reconnaissance", "Resource Development", "Initi
 # ---------------------------------------------------------------------------
 
 
-def extract_pdf_page_texts(file_path: str, max_pages: int = 50) -> list[str]:
+def extract_pdf_page_texts(
+    file_path: str, max_pages: int | None = None
+) -> list[str]:
     """Extract text per page from a PDF using pdfplumber.
 
     One entry per page in document order (empty string for pages with no
     extractable text), so list index + 1 is the 1-based page number used by
     page-range batching.
+
+    ``max_pages`` of None reads the whole document, and is the default. The
+    page limit belongs to the provider manifest; a second limit here would
+    silently cap a document the selected provider could have taken whole.
     """
     try:
         import pdfplumber
@@ -142,13 +154,31 @@ def extract_pdf_page_texts(file_path: str, max_pages: int = 50) -> list[str]:
     pages: list[str] = []
     with pdfplumber.open(file_path) as pdf:
         for i, page in enumerate(pdf.pages):
-            if i >= max_pages:
+            if max_pages is not None and i >= max_pages:
                 break
             pages.append(page.extract_text() or "")
     return pages
 
 
-def extract_text_from_pdf(file_path: str, max_pages: int = 50) -> str:
+def pdf_page_total(file_path: str) -> int | None:
+    """How many pages the PDF has, or None when that cannot be read.
+
+    Needed only when extraction was capped: a capped read cannot report what
+    it left behind, and counting the pages read as though they were the whole
+    document is what made truncation invisible.
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        return None
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            return len(pdf.pages)
+    except Exception:
+        return None
+
+
+def extract_text_from_pdf(file_path: str, max_pages: int | None = None) -> str:
     """Extract text from a PDF file using pdfplumber."""
     return "\n\n".join(t for t in extract_pdf_page_texts(file_path, max_pages) if t)
 
@@ -274,6 +304,11 @@ def extract_iocs_regex(
 # Chunked LLM processing helpers
 # ---------------------------------------------------------------------------
 
+# One taxonomy across both report tools; see threat_report_analyzer.
+from framework.reference_data.mitre_attack import (  # noqa: E402
+    attack_grounding,
+)
+
 _MAX_IOC_PER_CHUNK: int = 50        # IOC candidates per LLM call
 _MAX_TEXT_CHARS_PER_CHUNK: int = 6_000  # Report text chars per LLM call
 
@@ -308,9 +343,14 @@ def _native_tier() -> str:
     except (OSError, json.JSONDecodeError, KeyError):
         return "light"
 
-# Request deadline the LLM client enforces (framework/llm/client.py sets
-# http_options timeout = 120 s, which the SDK also sends as a server deadline).
-_NATIVE_CALL_DEADLINE_S: float = 120.0
+# Request deadline the LLM client enforces. All three clients agree on 180 s
+# (clients/gemini.py http_options timeout, clients/anthropic.py and
+# clients/openai.py `timeout`), and Gemini also sends it as a server deadline.
+# This said 120 s and cited framework/llm/client.py, a module that no longer
+# exists — understating the deadline splits a document into more batches than
+# it needs, which costs per-call overhead and separates pages that should be
+# read together.
+_NATIVE_CALL_DEADLINE_S: float = 180.0
 
 # A truncated batch is halved and retried; this bounds the extra calls that
 # can generate, so a persistently bad estimate cannot loop.
@@ -356,6 +396,189 @@ def _latency_model() -> LatencyModel:
 def _page_iocs(page_texts: list[str], ioc_types: list[str]) -> list[list[RawIOC]]:
     """Regex candidates per page (deduplicated within a page)."""
     return [extract_iocs_regex(t, ioc_types) for t in page_texts]
+
+
+@dataclass
+class ChunkUnit:
+    """One chunked LLM call's input: some text, and the candidates in it.
+
+    The two used to be split independently - ``fallback_iocs`` sliced by index
+    and ``fallback_text`` split by paragraph - and chunk *i* paired slice *i*
+    with paragraph-chunk *i*, which have no relationship at all. On the
+    whole-document path that put the first fifty candidates, in practice all
+    of one type and drawn from anywhere in the report, beside the report's
+    first 6,000 characters. A unit is the fix: the text is chosen first and
+    the candidates are the ones that text contains.
+    """
+    text: str
+    iocs: list[RawIOC]
+    page_start: int | None = None
+    page_end: int | None = None
+    gap_before: bool = False
+    gap_pages: tuple[int, int] | None = None
+
+    @property
+    def page_label(self) -> str | None:
+        if self.page_start is None:
+            return None
+        if self.page_start == self.page_end:
+            return f"page {self.page_start}"
+        return f"pages {self.page_start}-{self.page_end}"
+
+
+def _pack_pages(
+    pages: list[int],
+    page_texts: list[str],
+    max_chars: int,
+) -> list[tuple[list[int], str]]:
+    """Group pages into runs of text under ``max_chars``, in page order.
+
+    A page whose own text exceeds the budget is returned alone and is split
+    further by the caller; nothing is dropped to make a page fit.
+    """
+    runs: list[tuple[list[int], str]] = []
+    current: list[int] = []
+    parts: list[str] = []
+    size = 0
+    for pg in pages:
+        text = page_texts[pg - 1]
+        if not text:
+            continue
+        cost = len(text) + 2
+        if current and size + cost > max_chars:
+            runs.append((current, "\n\n".join(parts)))
+            current, parts, size = [], [], 0
+        current.append(pg)
+        parts.append(text)
+        size += cost
+    if current:
+        runs.append((current, "\n\n".join(parts)))
+    return runs
+
+
+def _build_chunk_units(
+    page_texts: list[str],
+    page_iocs: list[list[RawIOC]],
+    ioc_types: list[str],
+    pages: list[int] | None = None,
+    paged: bool = True,
+    max_chars: int | None = None,
+    max_iocs: int | None = None,
+) -> list[ChunkUnit]:
+    """Build the chunked path's calls, text first and candidates from that text.
+
+    ``pages`` is the 1-based pages the chunked path has to cover: every page
+    on a pure chunked run, only the pages the native path could not finish
+    otherwise. Gaps between non-adjacent runs are marked so the prompt can say
+    that the missing pages were read elsewhere rather than leaving the model
+    to infer a jump in the narrative.
+
+    Candidates are deduplicated across units as they always were, so a value
+    seen on pages 3 and 40 is still asked about once - in the unit whose text
+    contains it, which is the part that was wrong. Submitting it in both would
+    pair it with each context at the cost of a longer prompt per repeat; that
+    is a cost decision, not a correctness one, and it is not made here.
+
+    A unit holding more than ``max_iocs`` candidates is split **within the
+    unit**, every piece keeping the same text, so a candidate is never paired
+    with text it did not come from just because its unit was crowded.
+    """
+    # Read at call time, not bound as a default: these are module-level
+    # knobs, and a default argument would freeze whatever they were at import.
+    if max_chars is None:
+        max_chars = _MAX_TEXT_CHARS_PER_CHUNK
+    if max_iocs is None:
+        max_iocs = _MAX_IOC_PER_CHUNK
+    if pages is None:
+        pages = list(range(1, len(page_texts) + 1))
+
+    units: list[ChunkUnit] = []
+    requested = set(pages)
+    prev_page: int | None = None
+    for run_pages, run_text in _pack_pages(pages, page_texts, max_chars):
+        start, end = run_pages[0], run_pages[-1]
+        pieces: list[tuple[str, list[RawIOC]]]
+        if len(run_text) > max_chars:
+            # One page bigger than the whole budget. Split its text and
+            # re-extract per piece: on a single-page artifact this is the only
+            # thing standing between a candidate and text it never appeared in.
+            pieces = [
+                (part, extract_iocs_regex(part, ioc_types))
+                for part in _chunk_text(run_text, max_chars)
+            ]
+        else:
+            pieces = [(run_text, _dedupe_iocs(
+                [ioc for pg in run_pages for ioc in page_iocs[pg - 1]]
+            ))]
+        for text, iocs in pieces:
+            unit = ChunkUnit(
+                text=text,
+                iocs=iocs,
+                page_start=start if paged else None,
+                page_end=end if paged else None,
+            )
+            # A gap is pages this run was never asked to cover, not pages
+            # that were skipped here for being blank - saying a blank page was
+            # "analysed separately" would be a claim nobody can check.
+            missing = sorted(set(range(prev_page + 1, start)) - requested) \
+                if (paged and prev_page is not None) else []
+            if missing:
+                unit.gap_before = True
+                unit.gap_pages = (missing[0], missing[-1])
+            units.append(unit)
+        prev_page = end
+
+    # Deduplicate across units, keeping the first unit that holds each value.
+    seen: set[tuple[str, str]] = set()
+    for unit in units:
+        kept = []
+        for ioc in unit.iocs:
+            key = (ioc.ioc_type, ioc.value.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(ioc)
+        unit.iocs = kept
+
+    # Then cap, within the unit, so every piece keeps the text its candidates
+    # were found in.
+    capped: list[ChunkUnit] = []
+    for unit in units:
+        if len(unit.iocs) <= max_iocs:
+            capped.append(unit)
+            continue
+        for i in range(0, len(unit.iocs), max_iocs):
+            capped.append(ChunkUnit(
+                text=unit.text,
+                iocs=unit.iocs[i:i + max_iocs],
+                page_start=unit.page_start,
+                page_end=unit.page_end,
+                gap_before=unit.gap_before if i == 0 else False,
+                gap_pages=unit.gap_pages if i == 0 else None,
+            ))
+    return capped
+
+
+def _unit_report_text(unit: ChunkUnit) -> str:
+    """The text as the prompt carries it, with its page label and any gap.
+
+    Without the label the model cannot cite a page, and without the gap note a
+    section starting at page 30 reads as continuous with one ending at 19.
+    """
+    header = []
+    label = unit.page_label
+    if label:
+        header.append(f"[Report {label}]")
+    if unit.gap_before and unit.gap_pages:
+        a, b = unit.gap_pages
+        span = f"page {a}" if a == b else f"pages {a}-{b}"
+        header.append(
+            f"[{span} are not shown here - they were analysed separately, so "
+            f"this section does not continue directly from the one before it]"
+        )
+    if not header:
+        return unit.text
+    return "\n".join(header) + "\n\n" + unit.text
 
 
 def _dedupe_iocs(iocs: list[RawIOC]) -> list[RawIOC]:
@@ -440,48 +663,366 @@ def _chunk_text(text: str, max_chars: int = _MAX_TEXT_CHARS_PER_CHUNK) -> list[s
     return chunks or [text[:max_chars]]
 
 
-def _merge_llm_chunk_results(chunk_results: list[dict]) -> dict:
+# Scalar fields a second report of the same entity can contradict. The key
+# fields are excluded by construction: (ioc_type, value) and (technique_id,
+# tactic) are the identities, so a disagreement there is a different entity.
+_IOC_CONFLICT_FIELDS = ("confidence", "priority", "is_false_positive")
+# Not technique_name: two batches naming T1566.001 "Spearphishing Attachment"
+# and "Phishing: Spearphishing Attachment" agree about the technique, and
+# _reconcile_mitre_mappings overwrites the name from the local ATT&CK lookup
+# regardless. Treating that as a conflict set whole runs partial on a spelling.
+_MITRE_CONFLICT_FIELDS = ("confidence",)
+
+
+def _mark_superseded(provenance: list[dict], chunked_pages: set[int]) -> int:
+    """Flag every truncated native partial that a later attempt replaced.
+
+    Containment, not label match: PageRange.label is derived from the page
+    numbers, so bisecting p1-10 yields p1-5 and p6-10 and no child ever shares
+    its parent's label. A partial is replaced once the attempts after it cover
+    every page it covered.
+
+    Two paths lead there and both are handled the same way. A bisected retry
+    covers the parent's pages between its halves. A truncated batch that could
+    not be split hands its pages to the chunked text path instead, which
+    re-submits every candidate on them - so `chunked_pages` counts as coverage
+    too, and without it the partial would keep beating the re-read that
+    replaced it.
+
+    Walked in reverse so a child that was itself replaced counts as covered
+    through its own successors.
+    """
+    marked = 0
+    for i in range(len(provenance) - 1, -1, -1):
+        rec = provenance[i]
+        if not rec.get("truncated") or rec.get("superseded_by"):
+            continue
+        if rec.get("source") == "chunked":
+            # Supersession answers "did a later attempt re-read these pages".
+            # Nothing re-reads a chunk: the chunked path is the last one, and
+            # 2.5 gave its results a page range that would otherwise make a
+            # truncated chunk look covered - by `chunked_pages`, which
+            # contains its own pages, or by a sibling unit that shares its
+            # page range because the candidate cap split it and that assessed
+            # a different set of candidates entirely.
+            continue
+        start, end = rec.get("page_start"), rec.get("page_end")
+        if start is None or end is None:
+            # A chunked result has no page range, so nothing can be shown to
+            # cover it. Left standing rather than guessed at.
+            continue
+        pages = set(range(start, end + 1))
+        covered: set[int] = set()
+        by: list[str] = []
+        for later in provenance[i + 1:]:
+            if later.get("truncated") and not later.get("superseded_by"):
+                # A partial nobody replaced covers nothing reliably.
+                continue
+            lp_start, lp_end = later.get("page_start"), later.get("page_end")
+            if lp_start is None or lp_end is None:
+                continue
+            lp = set(range(lp_start, lp_end + 1))
+            if lp & pages:
+                covered |= lp
+                by.append(str(later.get("label") or "?"))
+        overlap = chunked_pages & pages
+        if overlap:
+            covered |= overlap
+            by.append("chunked text path")
+        if pages <= covered and by:
+            rec["superseded_by"] = ", ".join(dict.fromkeys(by))
+            marked += 1
+    return marked
+
+
+def _occurrence(entry: dict, prov: dict, fields: tuple[str, ...]) -> dict:
+    """One sighting of an entity: where it was reported, and what was said."""
+    occ = {
+        "batch_label": prov.get("label"),
+        "attempt_id": prov.get("attempt_id"),
+        "page_start": prov.get("page_start"),
+        "page_end": prov.get("page_end"),
+    }
+    if prov.get("superseded_by"):
+        occ["superseded"] = True
+    context = entry.get("report_context", entry.get("context"))
+    if context:
+        occ["context"] = str(context)[:300]
+    for f in fields:
+        if f in entry:
+            occ[f] = entry[f]
+    return occ
+
+
+def _merge_entity(
+    entry: dict,
+    key,
+    canonical: dict,
+    order: list,
+    prov: dict,
+    fields: tuple[str, ...],
+    stats: dict,
+) -> None:
+    """Fold one reported entity into the canonical record for its identity.
+
+    First-wins still decides every canonical scalar, so no consumer sees a
+    different shape than before - but the report that lost is kept as an
+    occurrence rather than dropped, and a scalar it disagrees on is recorded
+    as a conflict instead of being silently overruled.
+
+    A superseded report contributes its occurrence for the audit trail and
+    nothing else: it neither sets canonical values nor raises a conflict,
+    because the attempt that replaced it is the answer.
+    """
+    superseded = bool(prov.get("superseded_by"))
+    occ = _occurrence(entry, prov, fields)
+    if key not in canonical:
+        record = dict(entry)
+        record["occurrences"] = [occ]
+        if superseded:
+            # Survives only because nothing else reported it. Named so a
+            # reader knows it comes from a reply that was cut off.
+            record["recovered_from_partial"] = True
+            stats["recovered_from_partial"] += 1
+        canonical[key] = record
+        order.append(key)
+        return
+
+    record = canonical[key]
+    record.setdefault("occurrences", []).append(occ)
+    if superseded:
+        return
+    for f in fields:
+        if f not in entry or f not in record:
+            continue
+        if entry[f] == record[f]:
+            continue
+        record.setdefault("conflicts", []).append({
+            "field": f,
+            "reported": entry[f],
+            "canonical": record[f],
+            "batch_label": prov.get("label"),
+            "attempt_id": prov.get("attempt_id"),
+        })
+        stats["conflicts"] += 1
+
+
+def _path_shape(path: dict) -> tuple:
+    """Structural identity of an attack path: its steps, not its slug.
+
+    Separate model calls coin slugs independently, so a shared slug says
+    nothing about whether two batches described the same path - and two
+    different slugs say nothing about whether they described different ones.
+    The step sequence is the only thing that does.
+    """
+    shape = []
+    for step in path.get("steps", []) or []:
+        leads = step.get("leads_to") or []
+        shape.append((
+            str(step.get("technique_id", "")),
+            str(step.get("tactic", "")),
+            tuple(sorted(str(t) for t in leads)),
+        ))
+    return tuple(shape)
+
+
+def _merge_path(
+    path: dict,
+    prov: dict,
+    by_shape: dict,
+    used_ids: set,
+    out: list,
+    stats: dict,
+) -> None:
+    """Fold one reported attack path into the unioned graph.
+
+    The union used to keep the first path to claim a slug and drop every later
+    one that reused it, however different its steps - so two batches that both
+    coined "initial-access-to-exfil" for unrelated paths yielded one path and
+    no record that a second existed.
+
+    Reconciliation is on the step sequence. An id is namespaced with its batch
+    label only when it collides with a structurally different path, so a run
+    whose slugs do not collide - which is every single-batch run - emits
+    exactly the ids it emitted before.
+
+    A superseded partial contributes on the same terms as any other record it
+    supplies: only a path nothing else reported. Its version of a path its own
+    retry restated is not a second path, it is the cut-off draft of one.
+    """
+    label = str(prov.get("label") or "")
+    superseded = bool(prov.get("superseded_by"))
+    shape = _path_shape(path)
+    # An empty shape is not an identity - every path with no steps would share
+    # it - so those fall through to the id rules below.
+    existing = by_shape.get(shape) if shape else None
+    if existing is not None:
+        labels = existing.setdefault("batch_labels", [])
+        if label and label not in labels:
+            labels.append(label)
+        return
+
+    pid = str(path.get("path_id") or "")
+    if superseded and pid in used_ids:
+        return
+
+    record = dict(path)
+    if not pid or pid in used_ids:
+        base = f"{label}:{pid}" if (label and pid) else (
+            pid or f"path-{len(out) + 1}"
+        )
+        candidate = base
+        n = 2
+        while candidate in used_ids:
+            candidate = f"{base}-{n}"
+            n += 1
+        if candidate != pid:
+            record["path_id"] = candidate
+            if pid:
+                record["original_path_id"] = pid
+            stats["paths_namespaced"] += 1
+    record["batch_labels"] = [label] if label else []
+    if superseded:
+        record["recovered_from_partial"] = True
+        stats["recovered_from_partial"] += 1
+    used_ids.add(str(record["path_id"]))
+    if shape:
+        by_shape[shape] = record
+    out.append(record)
+
+
+def _merge_metadata(
+    meta: dict,
+    prov: dict,
+    canonical: dict,
+    actors: list[dict],
+    campaigns: list[dict],
+) -> None:
+    """Fold one batch's report metadata into the canonical record, per field.
+
+    First-wins object-at-a-time discarded every field a later batch filled in
+    as soon as an earlier one had answered any field at all: a batch that
+    recognised only the title took the whole record, and the batch that
+    identified the actor was dropped with it.
+
+    Attribution is also not a scalar property of a report. One report can name
+    two groups, and a later section can qualify what an earlier one asserted.
+    The scalars keep their first value because consumers read them; every
+    actor and campaign named anywhere is collected beside them.
+    """
+    label = prov.get("label")
+    for key, value in meta.items():
+        # An empty value is the model emitting a key it did not answer, so it
+        # neither claims the field nor stops a later batch filling it.
+        if value and not canonical.get(key):
+            canonical[key] = value
+
+    actor = str(meta.get("attributed_actor") or "").strip()
+    if actor and not any(a["name"].lower() == actor.lower() for a in actors):
+        actors.append({
+            "name": actor,
+            "confidence": str(meta.get("attribution_confidence") or ""),
+            "batch_label": label,
+        })
+    campaign = str(meta.get("campaign_name") or "").strip()
+    if campaign and not any(
+        c["name"].lower() == campaign.lower() for c in campaigns
+    ):
+        campaigns.append({"name": campaign, "batch_label": label})
+
+
+def _merge_llm_chunk_results(
+    chunk_results: list[dict],
+    provenance: list[dict] | None = None,
+) -> dict:
     """Merge LLM JSON results from multiple document chunks.
 
     IOCs are deduplicated by (type, value); MITRE techniques by (technique_id, tactic).
     report_metadata comes from the first successful chunk.
     attack_graph paths are unioned and deduplicated by path_id.
+
+    ``provenance`` runs parallel to ``chunk_results`` and carries each
+    result's batch label, attempt id, page range and ``superseded_by`` flag.
+    Metadata is kept beside the payload rather than inside it so a key the
+    model happens to emit can never be read as bookkeeping. Omitted, every
+    result is treated as a first attempt with no page range, which is what
+    the merge did before Stage 2.2.
+
+    (ioc_type, value) and (technique_id, tactic) are entity identities, not
+    evidence identities: several procedures share one technique and one
+    indicator carries several roles. So the canonical scalars stay first-wins
+    for the consumers that depend on them, and every report is kept as an
+    occurrence underneath.
     """
-    merged_iocs: list[dict] = []
-    merged_mitre: list[dict] = []
-    seen_ioc_keys: set[str] = set()
-    seen_mitre_keys: set[tuple[str, str]] = set()
+    ioc_canonical: dict[str, dict] = {}
+    ioc_order: list[str] = []
+    mitre_canonical: dict[tuple[str, str], dict] = {}
+    mitre_order: list[tuple[str, str]] = []
     report_meta: dict = {}
+    actors: list[dict] = []
+    campaigns: list[dict] = []
     ag_paths: list[dict] = []
+    ag_shapes: dict[tuple, dict] = {}
+    ag_used_ids: set[str] = set()
     ag_convergence: set[str] = set()
     ag_branches: set[str] = set()
+    stats = {"conflicts": 0, "recovered_from_partial": 0, "paths_namespaced": 0}
 
-    for result in chunk_results:
+    provenance = provenance or []
+    pairs = [
+        (result, provenance[idx] if idx < len(provenance) else {})
+        for idx, result in enumerate(chunk_results)
+    ]
+    # Two passes, and the order is the whole point of 2.1. Results that still
+    # stand establish the canonical record; superseded partials are folded in
+    # afterwards, so a reply that was cut off can no longer set a value its
+    # own retry corrected. A single pass in arrival order puts the partial
+    # first - which is the defect.
+    live = [(r, p) for r, p in pairs if not p.get("superseded_by")]
+    replaced = [(r, p) for r, p in pairs if p.get("superseded_by")]
+
+    for result, prov in live + replaced:
         for ioc in result.get("refined_iocs", []):
             key = f"{ioc.get('ioc_type')}:{ioc.get('value', '').lower()}"
-            if key not in seen_ioc_keys:
-                seen_ioc_keys.add(key)
-                merged_iocs.append(ioc)
+            _merge_entity(
+                ioc, key, ioc_canonical, ioc_order, prov,
+                _IOC_CONFLICT_FIELDS, stats,
+            )
 
         for m in result.get("additional_mitre_techniques", []):
             tid = m.get("technique_id", "")
-            tactic = m.get("tactic", "")
-            mkey = (tid, tactic)
-            if tid and mkey not in seen_mitre_keys:
-                seen_mitre_keys.add(mkey)
-                merged_mitre.append(m)
+            if not tid:
+                continue
+            _merge_entity(
+                m, (tid, m.get("tactic", "")), mitre_canonical, mitre_order,
+                prov, _MITRE_CONFLICT_FIELDS, stats,
+            )
 
-        if not report_meta:
-            report_meta = result.get("report_metadata") or {}
+        # Field by field, not object at a time: a superseded partial still
+        # supplies only what nothing else did, but a later batch that names
+        # the actor is no longer discarded because an earlier one named the
+        # title. Actors and campaigns are collected rather than chosen.
+        _merge_metadata(
+            result.get("report_metadata") or {}, prov,
+            report_meta, actors, campaigns,
+        )
 
+        # The graph is unioned rather than chosen, so a superseded partial's
+        # paths are kept. Reconciliation is on the steps, not the slug.
         ag = result.get("attack_graph") or {}
         for path in ag.get("paths", []):
-            pid = path.get("path_id")
-            if not any(p.get("path_id") == pid for p in ag_paths):
-                ag_paths.append(path)
+            _merge_path(path, prov, ag_shapes, ag_used_ids, ag_paths, stats)
         ag_convergence.update(ag.get("convergence_points", []))
         ag_branches.update(ag.get("branch_points", []))
 
+    merged_iocs = [ioc_canonical[k] for k in ioc_order]
+    merged_mitre = [mitre_canonical[k] for k in mitre_order]
+    # Only when something was reported: an empty metadata block stays empty
+    # rather than growing two empty lists nobody wrote.
+    if report_meta or actors or campaigns:
+        report_meta = dict(report_meta)
+        report_meta["actors"] = actors
+        report_meta["campaigns"] = campaigns
     return {
         "refined_iocs": merged_iocs,
         "additional_mitre_techniques": merged_mitre,
@@ -491,7 +1032,260 @@ def _merge_llm_chunk_results(chunk_results: list[dict]) -> dict:
             "convergence_points": list(ag_convergence),
             "branch_points": list(ag_branches),
         } if ag_paths else {},
+        "merge_stats": {
+            "conflicts": stats["conflicts"],
+            "recovered_from_partial": stats["recovered_from_partial"],
+            "superseded_results": sum(
+                1 for p in provenance if p.get("superseded_by")
+            ),
+            "paths_namespaced": stats["paths_namespaced"],
+            "occurrences": sum(
+                len(e.get("occurrences", ())) for e in merged_iocs + merged_mitre
+            ),
+        },
     }
+
+
+# PluginExecutor truncates summarize_for_llm at this plugin's manifest
+# summary_budget, from the end. That is the whole reason Stage 1.4 put the
+# status first, and it means any unbounded list in the summary does not merely
+# get long - it deletes everything after itself. On the 154-page Anthropic
+# report the attribution narration alone reached 2,033 characters and took the
+# IOC counts, the analyst-action line and the output artifact id with it.
+#
+# So the plugin decides what to drop rather than letting the truncator decide.
+
+
+@lru_cache(maxsize=1)
+def _summary_cap() -> int:
+    """Characters this plugin's summary may use, from its own manifest.
+
+    Read here as well as by the executor so the plugin can budget itself
+    rather than be cut. Same reason _native_tier() reads model_tier: the
+    manifest stays the single place the number is set.
+    """
+    try:
+        with open(Path(__file__).parent / "manifest.json", encoding="utf-8") as f:
+            return int(json.load(f).get("summary_budget") or 4000)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return 4000
+# Headroom, because the cap is enforced elsewhere and an off-by-a-few there
+# should not cost a whole sentence here.
+_SUMMARY_SAFETY: int = 60
+# Never narrate an unbounded list even when there is room: a summary that is
+# 90% threat-actor names is not a summary.
+_SUMMARY_LIST_BUDGET: int = 180
+
+
+def _bounded_list(
+    names: list[str], budget: int = _SUMMARY_LIST_BUDGET,
+) -> str:
+    """Join names until `budget` characters, then say how many are left.
+
+    The first name always goes in, however long it is - an entry over budget
+    is narrated and counted, never silently reduced to nothing.
+
+    The full lists stay in report_metadata. This bounds only what is narrated.
+    """
+    shown: list[str] = []
+    used = 0
+    for name in names:
+        cost = len(name) + 2
+        if shown and used + cost > budget:
+            break
+        shown.append(name)
+        used += cost
+    remaining = len(names) - len(shown)
+    text = ", ".join(shown)
+    if remaining > 0:
+        text += f" (and {remaining} more)"
+    return text
+
+
+def _attribution_narration(
+    actors: list[str], campaigns: list[str], room: int,
+) -> str:
+    """The attribution lines, sized to whatever room the rest of the summary
+    left.
+
+    Attribution is the part of this summary a reader can most afford to read
+    in the artifact instead, and the part most able to run away - a model asked
+    for "threat actor if attributed" answers with whatever the section named,
+    and on a real report that was thirty-odd entries, several of them
+    themselves comma-separated lists.
+
+    Three tiers, by how much room is left: narrate what fits; or state the
+    counts and where to look; or, when not even that fits, say nothing.
+
+    The last tier looks like the silent dropping this project spends its time
+    removing, and is not. Every actor is in report_metadata and in the
+    artifact either way - what is being rationed is one sentence of narration
+    in a summary that is lossy by construction. Attribution sits *before* the
+    IOC counts in reading order, so a counts-line squeezed in against a cap
+    that is already full does not get added at the end, it pushes the findings
+    off it. Nothing is worth that.
+    """
+    if not actors and not campaigns:
+        return ""
+    counts = []
+    if actors:
+        counts.append(f"{len(actors)} further actor(s)")
+    if campaigns:
+        counts.append(f"{len(campaigns)} further campaign(s)")
+    minimal = (
+        f"{' and '.join(counts)} are named elsewhere in the report; see "
+        f"report_metadata."
+    )
+    if room < len(minimal):
+        return ""
+
+    budget = min(_SUMMARY_LIST_BUDGET, max(0, room - len(minimal)) // 2
+                 + _SUMMARY_LIST_BUDGET // 2)
+    out = []
+    if actors:
+        out.append(
+            "Also attributed, elsewhere in the report: "
+            f"{_bounded_list(actors, budget)}."
+        )
+    if campaigns:
+        out.append(f"Other campaigns named: {_bounded_list(campaigns, budget)}.")
+    text = " ".join(out)
+    return text if len(text) <= room else minimal
+
+
+def _analysis_fields(
+    *,
+    ingestion_mode: str,
+    pages_total: int,
+    pages_read: int,
+    truncated_chunks: list[int],
+    chunks_attempted: int = 0,
+    chunks_failed: int = 0,
+    candidates_rejected: int = 0,
+    candidates_unassessed: int = 0,
+    candidates_not_submitted: int = 0,
+    merge_conflicts: int = 0,
+    recovered_from_partial: int = 0,
+    rejected_with_dissent: int = 0,
+    accepted_none: bool = False,
+    unit: str = "pages",
+) -> dict:
+    """One status for the whole ingestion, with the reasons behind it.
+
+    Precedence is degraded > partial > complete. "regex_only" is degraded and
+    not merely partial: the indicators are unrefined and unclassified, which is
+    a different kind of answer rather than less of the same one.
+
+    The notes carry the markers that used to be separate sentences in
+    summarize_for_llm, so that the status can lead there. That matters because
+    PluginExecutor truncates the summary at the manifest's summary_budget,
+    and a warning placed after the content is the part that gets cut.
+    """
+    notes: list[str] = []
+    dropped = max(0, (pages_total or 0) - (pages_read or 0))
+    if dropped:
+        # `unit` because a text artifact is measured in lines, not pages, and
+        # a coverage figure that names the wrong unit invites a reader to think
+        # a 114-line summary was a 114-page report.
+        notes.append(
+            f"INCOMPLETE COVERAGE: only {pages_read} of {pages_total} {unit} "
+            f"were read, so absence of an indicator here is not evidence it is "
+            f"absent from the report"
+        )
+    if truncated_chunks:
+        listed = ", ".join(str(c) for c in truncated_chunks)
+        plural = "s" if len(truncated_chunks) != 1 else ""
+        notes.append(
+            f"TRUNCATED OUTPUT: chunk{plural} {listed} stopped at the output "
+            f"cap; their candidates were only partly assessed"
+        )
+    # A chunk that failed took its candidates with it. Counting these only in
+    # the logs is what let a run where four of ten chunks failed report exactly
+    # like a clean one.
+    if chunks_failed:
+        notes.append(
+            f"INCOMPLETE ANALYSIS: {chunks_failed} of {chunks_attempted} "
+            f"chunk(s) produced no usable result, so their candidates were "
+            f"never assessed"
+        )
+    # A candidate the regex pass found and no prompt ever carried. Kept apart
+    # from the unassessed count because the two have different causes and
+    # different fixes: this one means no model was ever asked, and charging it
+    # to the model's silence points the reader at the wrong thing.
+    if candidates_not_submitted:
+        notes.append(
+            f"CANDIDATES NOT SUBMITTED: {candidates_not_submitted} indicator "
+            f"candidate(s) found by the regex pre-scan were never placed in a "
+            f"prompt, so no model was asked about them"
+        )
+    # Not a defect and not a degradation: the model looked at every candidate
+    # and rejected all of them. Said plainly so an empty IOC list is not read
+    # as a failure to produce one.
+    # Candidates the model was given but never answered about. Reported before
+    # the rejection note, because it changes what that note means: rejecting
+    # three of three is an assessment, rejecting three of forty is not.
+    if candidates_unassessed:
+        notes.append(
+            f"UNASSESSED CANDIDATES: {candidates_unassessed} indicator "
+            f"candidate(s) received no verdict from the model, so they are "
+            f"neither accepted nor ruled out"
+        )
+    if accepted_none:
+        # Deliberately says "the model assessed N" rather than "all N": this
+        # counts verdicts returned, and the line above carries what was missed.
+        notes.append(
+            f"NO INDICATORS ACCEPTED: the model assessed {candidates_rejected} "
+            f"candidate(s) and judged every one a false positive; that empty "
+            f"result is the assessment, not a failure to produce one"
+        )
+
+    # Two batches reported the same entity and disagreed on a scalar. Not
+    # auto-resolved: a later correction and a lower-confidence restatement are
+    # not distinguishable by value, so the first value is reported and the
+    # disagreement is handed to the reader.
+    if merge_conflicts:
+        notes.append(
+            f"UNRESOLVED CONFLICTS: {merge_conflicts} reported value(s) "
+            f"disagree between batches; the first is reported and every "
+            f"reading is kept under the record's conflicts"
+        )
+    # A rejection another batch argued against. Reported separately from the
+    # conflicts note because these records are *not* in the output: the
+    # rejection stands, so the only place the disagreement can be seen is
+    # here.
+    if rejected_with_dissent:
+        notes.append(
+            f"REJECTED OVER DISSENT: {rejected_with_dissent} indicator(s) were "
+            f"dropped as false positives although another batch assessed them "
+            f"as real; they are not in the indicator list, so this note is the "
+            f"only record of the disagreement"
+        )
+    # A record that exists only because a cut-off reply mentioned it, and that
+    # the retry replacing that reply did not confirm.
+    if recovered_from_partial:
+        notes.append(
+            f"RECOVERED FROM A PARTIAL REPLY: {recovered_from_partial} "
+            f"record(s) survive only from a batch whose reply was cut off and "
+            f"were not restated by the attempt that replaced it"
+        )
+    if ingestion_mode == "regex_only":
+        notes.append(
+            "DEGRADED INPUT: LLM refinement did not run, so these indicators "
+            "are a regex baseline — low confidence, no false-positive "
+            "assessment, no MITRE mapping, no attack graph"
+        )
+
+    # "No indicators accepted" is a complete answer and does not by itself make
+    # the run partial — the work was done and this is its result. Every other
+    # note means something was not looked at.
+    incomplete = [n for n in notes if not n.startswith("NO INDICATORS ACCEPTED")]
+    if ingestion_mode == "regex_only":
+        status = "degraded"
+    elif incomplete:
+        status = "partial"
+    else:
+        status = "complete"
+    return {"analysis_status": status, "analysis_notes": notes}
 
 
 def _parse_llm_json(response_text: str) -> dict | None:
@@ -794,6 +1588,118 @@ def _fix_tactic_progression(
     return attack_graph, reassign_count
 
 
+def _canonicalize_retired_techniques(
+    all_mitre: list[dict],
+    attack_graph: dict,
+    mitre_db: dict,
+) -> int:
+    """Rewrite retired technique ids to their current equivalent, in place.
+
+    Runs before everything else so the rest of reconciliation, the tactic
+    lookups and the attack graph all see one vocabulary. Rewriting only
+    ``mitre_mappings`` would leave the graph pointing at ids that no longer
+    exist, and the two views of the same report would disagree.
+
+    Version skew, not model error: a model emits the numbering in its
+    training data and in most published reporting, so a correct technique can
+    arrive under an id ATT&CK has retired. Left alone it is demoted to
+    "non-ATT&CK" — dropped from every ATT&CK-keyed view and shown to an
+    analyst as though it were not a real technique.
+
+    Returns how many ids were rewritten. Each rewrite keeps the id it came
+    from on the entry, because a silent renumber is its own kind of wrong.
+
+    Mutates *all_mitre* in place, which can shorten it: if a report names
+    both the retired id and its successor for the same tactic, remapping
+    makes them the same entry, and the identity index downstream is keyed on
+    ``(technique_id, tactic)`` — it would keep one and the output would carry
+    the technique twice.
+    """
+    if not mitre_db:
+        return 0
+
+    # One decision per distinct id, so the graph and the mappings cannot
+    # diverge and the log has one line per retirement rather than per use.
+    decided: dict[str, str | None] = {}
+
+    def _current(tid: str, name: str = "") -> str | None:
+        if tid in decided:
+            return decided[tid]
+        resolved = _resolve_retired_technique(tid, name)
+        if resolved:
+            new_id, basis = resolved
+            decided[tid] = new_id
+            logger.info(
+                "[RECONCILE] Retired technique %s -> %s (%s, matched by %s). "
+                "ATT&CK renumbered it; the finding stands.",
+                tid, new_id, mitre_db.get(new_id, {}).get("name", ""), basis,
+            )
+        else:
+            decided[tid] = None
+            if tid not in mitre_db:
+                note = _retirement_note(tid)
+                if note:
+                    logger.warning("[RECONCILE] %s.", note)
+        return decided[tid]
+
+    remapped = 0
+    kept: list[dict] = []
+    by_key: dict[tuple[str, str], dict] = {}
+
+    def _fold(into: dict, dropped: dict) -> None:
+        """Merge a remapped duplicate into the entry that already held the id."""
+        paths = into.setdefault("context_paths", [])
+        for pid in dropped.get("context_paths") or []:
+            if pid not in paths:
+                paths.append(pid)
+        into.setdefault(
+            "technique_id_retired_from", dropped.get("technique_id_retired_from", "")
+        )
+
+    for entry in all_mitre:
+        tid = entry.get("technique_id", "")
+        if tid and tid not in mitre_db:
+            new_id = _current(tid, entry.get("technique_name", ""))
+            if new_id:
+                entry["technique_id"] = new_id
+                entry["technique_id_retired_from"] = tid
+                # The old name described the old numbering; take the current one.
+                entry["technique_name"] = mitre_db.get(new_id, {}).get("name", "")
+                remapped += 1
+
+        key = (entry.get("technique_id", ""), entry.get("tactic", ""))
+        if key[0] and key in by_key:
+            _fold(by_key[key], entry)
+            logger.info(
+                "[RECONCILE] Merged duplicate %s (%s) — the report named both "
+                "the retired id and its successor for this tactic.",
+                key[0], key[1] or "no tactic",
+            )
+            continue
+        if key[0]:
+            by_key[key] = entry
+        kept.append(entry)
+
+    all_mitre[:] = kept
+
+    # The graph carries the same ids in steps and in leads_to.
+    for path in attack_graph.get("paths", []):
+        for step in path.get("steps", []):
+            tid = step.get("technique_id", "")
+            if tid and tid not in mitre_db:
+                new_id = _current(tid, step.get("technique_name", ""))
+                if new_id:
+                    step["technique_id"] = new_id
+                    step["technique_id_retired_from"] = tid
+            leads = step.get("leads_to")
+            if leads:
+                step["leads_to"] = [
+                    (_current(t) or t) if t and t not in mitre_db else t
+                    for t in leads
+                ]
+    return remapped
+
+
 def _reconcile_mitre_mappings(
     all_mitre: list[dict],
     attack_graph: dict,
@@ -804,6 +1710,9 @@ def _reconcile_mitre_mappings(
     multiple times with different tactics when it serves different roles
     across attack paths.
 
+    0a. Rewrites retired technique ids to their current equivalent across
+       both *all_mitre* and *attack_graph*, so a technique ATT&CK has
+       renumbered is not demoted to "non-ATT&CK" in step 3.
     0. Runs ``_normalize_tactics`` to apply deterministic tactic fixes
        (retired tactics such as "Defense Evasion", Stealth / Defense
        Impairment sibling swaps, single-tactic techniques), then
@@ -819,6 +1728,11 @@ def _reconcile_mitre_mappings(
     Returns the (mutated) *all_mitre* list.
     """
     mitre_db = _get_mitre_db()
+
+    # --- Step 0a: retired ids first, so every later step sees one vocabulary ---
+    retired_count = _canonicalize_retired_techniques(
+        all_mitre, attack_graph, mitre_db
+    )
 
     # --- Step 0: deterministic tactic fixes, then progression in attack_graph ---
     all_mitre, migrated_count, corrected_count = _normalize_tactics(
@@ -1044,14 +1958,16 @@ def _reconcile_mitre_mappings(
 
     if (
         migrated_count or corrected_count or backfill_count or enrich_count
-        or unvalidated_count or tactic_mismatch_count
+        or unvalidated_count or tactic_mismatch_count or retired_count
     ):
         logger.info(
-            "[RECONCILE] Summary: %d legacy tactics migrated, %d tactics "
+            "[RECONCILE] Summary: %d retired ids remapped, %d legacy tactics "
+            "migrated, %d tactics "
             "auto-corrected, %d backfilled, %d enriched, %d unvalidated, "
             "%d tactics needing analyst review, "
             "%d total mitre_mappings (local DB has %d techniques)",
-            migrated_count, corrected_count, backfill_count, enrich_count,
+            retired_count, migrated_count, corrected_count, backfill_count,
+            enrich_count,
             unvalidated_count, tactic_mismatch_count,
             len(all_mitre), len(mitre_db),
         )
@@ -1252,8 +2168,8 @@ class ThreatIntelIngester:
 
         if "max_pages" in payload:
             mp = payload["max_pages"]
-            if not isinstance(mp, int) or mp < 1 or mp > 200:
-                errors.append("max_pages must be an integer between 1 and 200")
+            if not isinstance(mp, int) or mp < 1 or mp > 1000:
+                errors.append("max_pages must be an integer between 1 and 1000")
 
         return ValidationResult(ok=len(errors) == 0, errors=errors if errors else None)
 
@@ -1280,7 +2196,12 @@ class ThreatIntelIngester:
             ["ip", "domain", "hash_sha256", "url", "cve", "mitre_technique"],
         )
         confidence_threshold = payload.get("confidence_threshold", "low")
-        max_pages = payload.get("max_pages", 50)
+        # None means "no limit here" — the provider manifest's max_pages is
+        # the one that matters, and it is enforced by the dispatcher's guard
+        # against the provider actually routed to. An explicit max_pages is a
+        # deliberate cost ceiling and is honoured, but it is then reported as
+        # a truncation rather than as the document's size.
+        max_pages = payload.get("max_pages")
 
         # --- Resolve artifact ---
         artifact = None
@@ -1334,8 +2255,25 @@ class ThreatIntelIngester:
                 message=f"Failed to extract text: {e}",
             )
 
+        pages_total: int | None = None
+        pages_dropped = 0
         if artifact.artifact_type == "pdf_report":
             page_count = len(page_texts)
+            # A capped read cannot see past its own cap, so ask the file.
+            pages_total = (
+                pdf_page_total(str(artifact.file_path))
+                if max_pages is not None
+                else page_count
+            )
+            if pages_total and pages_total > page_count:
+                pages_dropped = pages_total - page_count
+                logger.warning(
+                    "[TRUNCATED] Read %d of %d pages from %s — pages %d-%d were "
+                    "NOT examined and any indicator on them is missing from this "
+                    "result. Raise max_pages (up to 1000) or split the document.",
+                    page_count, pages_total, artifact_id,
+                    page_count + 1, pages_total,
+                )
         else:
             page_count = len(raw_text.splitlines())
 
@@ -1402,25 +2340,101 @@ class ThreatIntelIngester:
         report_meta = {}
         attack_graph = {}  # multi-path attack graph from LLM
         native_batch_results: list[dict] = []
+        # Parallel to native_batch_results: what each one was, so a partial
+        # can be told apart from the retry that replaced it. Kept beside the
+        # payload rather than inside it - a key the model emits must never be
+        # readable as bookkeeping.
+        native_provenance: list[dict] = []
+        # Pages the native path could not finish, so the chunked path took
+        # them. Method-level because supersession is resolved after both.
+        failed_pages: list[int] = []
         native_calls = 0
-        # Text and candidates for the chunked path: the whole document unless
-        # native batches covered some pages, in which case only the failed ones.
-        fallback_text = raw_text
-        fallback_iocs = raw_iocs
+        # 1-based indices of chunks whose reply stopped at the output cap.
+        # Their candidates were only partly assessed, which is invisible in the
+        # merged result unless it is recorded here. Method-level, because the
+        # result is built outside the LLM block.
+        chunk_truncations: list[int] = []
+        # Per-chunk outcomes. These were counted for the logs only, so a run
+        # where four of ten chunks failed and six succeeded produced a merged
+        # result indistinguishable from a clean one — the partial-coverage
+        # question the whole of Stage 1 exists to answer.
+        chunks_attempted = 0
+        chunk_json_failures = 0
+        chunk_llm_failures = 0
+        chunk_exceptions = 0
+        # True once at least one chunk or native batch produced parseable JSON.
+        # Distinct from "any IOC survived": a refinement that ran and rejected
+        # every candidate is a real answer, not a failure to answer.
+        refinement_ran = False
+        # Populated by the merge. Defaulted here because the regex-only and
+        # total-failure paths never reach it and still build a summary.
+        merge_stats: dict = {}
+        candidates_rejected = 0
+        # Candidates the model never returned a verdict on. The count of
+        # rejections says nothing about these: a model that answers about three
+        # of forty candidates and rejects all three is not the same as one that
+        # assessed forty and accepted none, and the two used to be reported
+        # identically. mitre_technique matches are excluded — they are asked
+        # for as techniques, not as indicators, so their absence from
+        # refined_iocs is correct rather than a gap.
+        candidates_unassessed: list[str] = []
+        # Every candidate that actually reached a prompt, lowercased value ->
+        # the value as extracted. The reconciliation compares verdicts against
+        # this rather than against raw_iocs, so that "no verdict" can only ever
+        # mean the model was asked and stayed silent. The two agree on every
+        # run today - no path drops a candidate between the regex pass and a
+        # prompt - so this is an invariant to hold rather than a bug fixed, and
+        # the batching change in Stage 2.5 is what it guards.
+        candidates_submitted: dict[str, str] = {}
+        # Candidates raw_iocs holds that no prompt carried. Our coverage gap,
+        # reported apart from the model's silence, because the two have
+        # different causes and one counter cannot say which happened.
+        candidates_not_submitted: list[str] = []
+        # Indicators the canonical verdict rejected while another batch called
+        # them real. The rejection stands, but it is not silent.
+        rejected_with_dissent: list[str] = []
+        # Pages the chunked path must cover: the whole document unless native
+        # batches covered some, in which case only the ones that failed. Pages
+        # rather than a prebuilt text blob, because the text and the candidates
+        # have to be chosen together - see _build_chunk_units.
+        fallback_pages = list(range(1, len(page_texts) + 1))
+
+        def _record_submitted(iocs: list[RawIOC]) -> None:
+            """Remember the candidates going into a prompt, once each.
+
+            mitre_technique matches are skipped for the same reason the
+            reconciliation excludes them: they are asked for as techniques
+            rather than indicators, so their absence from refined_iocs is
+            correct rather than a gap.
+            """
+            for ioc in iocs:
+                if ioc.ioc_type == "mitre_technique":
+                    continue
+                key = ioc.value.strip().lower()
+                if key and key not in candidates_submitted:
+                    candidates_submitted[key] = ioc.value
 
         if context.llm_enabled and context.llm_query is not None:
             logger.info("[DIAG] LLM enabled, llm_query type=%s", type(context.llm_query).__name__)
             logger.info("Running LLM refinement on %d IOC candidates", len(raw_iocs))
 
             # Use framework reference data for MITRE grounding
+            # Grounded from the local lookup, not from a reference_data key.
+            # This read `context.reference_data.get("mitre_attack_enterprise")`
+            # until 2026-09-16, and nothing has ever written that key - the
+            # shell supplies "mitre_techniques" and "mitre_relationships" - so
+            # `grounding` was always empty and every prompt went out with no
+            # ATT&CK anchor at all. The reconciler downstream was doing the
+            # whole job, which is why a live run needed four tactic
+            # corrections and two analyst flags: the model was never told
+            # which release it was answering against.
+            #
+            # Shared with threat_report_analyzer so both tools state one
+            # taxonomy in the same words.
             grounding: list[str] = []
-            if hasattr(context, "reference_data"):
-                mitre_data = context.reference_data.get("mitre_attack_enterprise")
-                if mitre_data:
-                    grounding.append(
-                        "MITRE ATT&CK Enterprise techniques are available "
-                        "for validation. Use official technique IDs."
-                    )
+            anchor = attack_grounding()
+            if anchor:
+                grounding.append(anchor)
 
             # --- Native PDF path: whole document, or page-range batches ---
             native_pdf_succeeded = False
@@ -1437,9 +2451,21 @@ class ThreatIntelIngester:
                     A range covering every page is the artifact itself; any
                     narrower range becomes a sub-PDF, so the model still sees
                     page images and layout rather than extracted text.
+
+                    "Every page" is measured against the file, not against
+                    doc_profile.pages. Those differ exactly when extraction
+                    was capped, and attaching the whole artifact there would
+                    send the model pages the plan never counted — so the
+                    profile would describe a 50-page document while the model
+                    read 150.
                     """
                     nonlocal tmp_dir
-                    if rng.start == 1 and rng.end == doc_profile.pages:
+                    covers_whole_file = (
+                        rng.start == 1
+                        and rng.end == doc_profile.pages
+                        and not pages_dropped
+                    )
+                    if covers_whole_file:
                         return artifact
                     if rng.label not in sub_paths:
                         try:
@@ -1487,7 +2513,6 @@ class ThreatIntelIngester:
                 # accepted with indicators missing.
                 pending: list[PageRange] = list(plan.batches)
                 calls_left = len(pending) + _NATIVE_MAX_EXTRA_CALLS
-                failed_pages: list[int] = []
                 batch_no = 0
                 t_native = time.monotonic()
                 try:
@@ -1523,6 +2548,7 @@ class ThreatIntelIngester:
                             )
                             or "(none found by regex pre-scan)"
                         )
+                        _record_submitted(batch_iocs)
                         native_prompt = LLM_REFINEMENT_PROMPT.format(
                             source_context=(source_context or "Not provided") + page_note,
                             ioc_candidates=candidates_text,
@@ -1636,6 +2662,14 @@ class ThreatIntelIngester:
 
                         if parsed:
                             native_batch_results.append(parsed)
+                            native_provenance.append({
+                                "label": batch.label,
+                                "attempt_id": batch_no,
+                                "page_start": batch.start,
+                                "page_end": batch.end,
+                                "truncated": truncated,
+                                "superseded_by": None,
+                            })
                             logger.info(
                                 "[NATIVE] %s parsed %s — %d refined_iocs, %d techniques, "
                                 "%d attack paths",
@@ -1697,33 +2731,34 @@ class ThreatIntelIngester:
                         timings["native_s"], len(native_batch_results),
                     )
                 elif failed_pages:
-                    fallback_text = "\n\n".join(
-                        page_texts[pg - 1] for pg in failed_pages if page_texts[pg - 1]
-                    )
-                    fallback_iocs = _dedupe_iocs([
-                        ioc for pg in failed_pages for ioc in page_iocs[pg - 1]
-                    ])
+                    fallback_pages = list(failed_pages)
                     logger.warning(
                         "[NATIVE] %d call(s) returned usable JSON; %d page(s) (%s) with "
                         "%d candidates fall back to the chunked text path",
                         len(native_batch_results), len(failed_pages),
                         ", ".join(str(pg) for pg in failed_pages[:12])
                         + (" ..." if len(failed_pages) > 12 else ""),
-                        len(fallback_iocs),
+                        sum(len(page_iocs[pg - 1]) for pg in failed_pages),
                     )
 
             # Split large inputs into chunks to stay within LLM context limits.
             # Large PDFs previously caused repeated 503s even with backoff because
             # the monolithic prompt (100 IOCs + 8 kB text) exceeded the model's
             # comfortable input window.  Each chunk call is ~7-10 kB total.
-            ioc_batches = [
-                fallback_iocs[i:i + _MAX_IOC_PER_CHUNK]
-                for i in range(0, max(1, len(fallback_iocs)), _MAX_IOC_PER_CHUNK)
-            ]
-            text_chunks = _chunk_text(fallback_text, _MAX_TEXT_CHARS_PER_CHUNK)
-            n_chunks = max(len(ioc_batches), len(text_chunks))
+            # One split, not two. Candidates used to be sliced by index and
+            # the text split by paragraph, and chunk i paired slice i with
+            # paragraph-chunk i - two orderings with no relationship to each
+            # other, so an appendix indicator was routinely asked about beside
+            # an unrelated narrative section.
+            chunk_units = _build_chunk_units(
+                page_texts, page_iocs, ioc_types,
+                pages=fallback_pages,
+                paged=(artifact.artifact_type == "pdf_report"),
+            )
+            n_chunks = len(chunk_units)
 
             if native_pdf_succeeded:
+                chunk_units = []
                 n_chunks = 0
                 logger.info(
                     "Skipping chunked LLM path — native PDF "
@@ -1731,22 +2766,25 @@ class ThreatIntelIngester:
                 )
 
             logger.info(
-                "Splitting into %d LLM chunk(s) (%d IOC batches, %d text chunks)",
-                n_chunks, len(ioc_batches), len(text_chunks),
+                "Splitting into %d LLM chunk(s) over %d page(s), %d candidate(s)",
+                n_chunks, len(fallback_pages),
+                sum(len(u.iocs) for u in chunk_units),
             )
 
             # Native batch results are merged together with any chunk results
             chunk_results: list[dict] = list(native_batch_results)
-            chunk_json_failures = 0
-            chunk_llm_failures = 0
-            chunk_exceptions = 0
+            chunk_provenance: list[dict] = [dict(p) for p in native_provenance]
+            chunks_attempted = n_chunks
             t_chunks = time.monotonic()
-            for i in range(n_chunks):
+            for i, unit in enumerate(chunk_units):
                 t_chunk = time.monotonic()
-                ioc_batch = ioc_batches[i] if i < len(ioc_batches) else []
-                text_chunk = text_chunks[i] if i < len(text_chunks) else ""
+                ioc_batch = unit.iocs
+                # The page label and any gap travel with the text, so the model
+                # can cite a page and is told when a section does not continue
+                # from the one before it.
+                text_chunk = _unit_report_text(unit)
 
-                if not ioc_batch and not text_chunk:
+                if not ioc_batch and not unit.text:
                     continue
 
                 candidates_text = (
@@ -1756,6 +2794,7 @@ class ThreatIntelIngester:
                     )
                     or "(none in this section)"
                 )
+                _record_submitted(ioc_batch)
 
                 prompt = LLM_REFINEMENT_PROMPT.format(
                     source_context=source_context or "Not provided",
@@ -1817,7 +2856,21 @@ class ThreatIntelIngester:
                             i + 1, n_chunks, len(llm_response.text),
                             llm_response.text[:500],
                         )
-                        parsed = _parse_llm_json(llm_response.text)
+                        # Both signals are needed and neither subsumes the
+                        # other: truncated is the transport's finish reason,
+                        # repaired catches a reply that parsed only after
+                        # unmatched brackets were closed. Same pattern the
+                        # native path uses.
+                        parsed, repaired = _parse_llm_json_result(llm_response.text)
+                        if bool(llm_response.truncated) or repaired:
+                            chunk_truncations.append(i + 1)
+                            logger.warning(
+                                "[CHUNK] %d/%d was cut off at the output cap "
+                                "(finish_reason_truncated=%s, bracket_repair=%s) "
+                                "— its candidates are only partly assessed",
+                                i + 1, n_chunks,
+                                bool(llm_response.truncated), repaired,
+                            )
                         if parsed:
                             n_refined = len(parsed.get("refined_iocs", []))
                             n_fp = sum(
@@ -1834,6 +2887,25 @@ class ThreatIntelIngester:
                                 n_refined, n_fp, n_mitre, n_paths,
                             )
                             chunk_results.append(parsed)
+                            chunk_provenance.append({
+                                # The page label as well as the ordinal: a
+                                # chunk now covers a known page range, so an
+                                # occurrence recorded against it can say where
+                                # in the report it was seen.
+                                "label": (
+                                    f"chunk {i + 1}/{n_chunks}"
+                                    + (f" ({unit.page_label})"
+                                       if unit.page_label else "")
+                                ),
+                                "attempt_id": i + 1,
+                                "source": "chunked",
+                                "page_start": unit.page_start,
+                                "page_end": unit.page_end,
+                                "truncated": (
+                                    bool(llm_response.truncated) or repaired
+                                ),
+                                "superseded_by": None,
+                            })
                         else:
                             chunk_json_failures += 1
                             logger.warning(
@@ -1889,9 +2961,74 @@ class ThreatIntelIngester:
             )
 
             if chunk_results:
-                merged = _merge_llm_chunk_results(chunk_results)
+                refinement_ran = True
+                # Which pages the chunked path re-read. A native partial that
+                # could not be bisected sent its pages here, and the re-read
+                # replaces it exactly as a bisected retry would - so this is
+                # resolved before the merge, not inside it, because the page
+                # bookkeeping lives out here.
+                chunked_pages = (
+                    set(failed_pages)
+                    if len(chunk_results) > len(native_batch_results)
+                    else set()
+                )
+                superseded = _mark_superseded(chunk_provenance, chunked_pages)
+                if superseded:
+                    logger.info(
+                        "[MERGE] %d truncated native partial(s) were replaced "
+                        "by a later attempt and no longer win the merge: %s",
+                        superseded,
+                        ", ".join(
+                            f"{p['label']} <- {p['superseded_by']}"
+                            for p in chunk_provenance if p.get("superseded_by")
+                        ),
+                    )
+                merged = _merge_llm_chunk_results(chunk_results, chunk_provenance)
+                merge_stats = merged.get("merge_stats", {})
+                if merge_stats.get("conflicts"):
+                    logger.warning(
+                        "[MERGE] %d reported value(s) disagree between "
+                        "batches; the first is canonical and every reading is "
+                        "kept under the record's conflicts",
+                        merge_stats["conflicts"],
+                    )
                 all_refined = merged.get("refined_iocs", [])
                 non_fp = [r for r in all_refined if not r.get("is_false_positive", False)]
+                candidates_rejected = len(all_refined) - len(non_fp)
+                # Reconcile what was asked about against what came back.
+                # Compared on value alone: the model relabels ioc_type freely
+                # and a type disagreement is not a missing verdict.
+                assessed_values = {
+                    str(r.get("value", "")).strip().lower() for r in all_refined
+                }
+                # Against what was submitted, not against raw_iocs. A
+                # candidate in neither set was never asked about, which is a
+                # coverage gap of ours and not a silence of the model's, so it
+                # is counted and reported separately.
+                candidates_unassessed = sorted(
+                    display
+                    for key, display in candidates_submitted.items()
+                    if key not in assessed_values
+                )
+                candidates_not_submitted = sorted({
+                    ioc.value for ioc in raw_iocs
+                    if ioc.ioc_type != "mitre_technique"
+                    and ioc.value.strip().lower() not in candidates_submitted
+                })
+                if candidates_unassessed:
+                    logger.warning(
+                        "[DIAG] %d of %d submitted indicator candidate(s) "
+                        "received no verdict from the model — first few: %s",
+                        len(candidates_unassessed), len(candidates_submitted),
+                        candidates_unassessed[:5],
+                    )
+                if candidates_not_submitted:
+                    logger.warning(
+                        "[DIAG] %d indicator candidate(s) from the regex pass "
+                        "reached no prompt at all — first few: %s",
+                        len(candidates_not_submitted),
+                        candidates_not_submitted[:5],
+                    )
                 logger.info(
                     "[DIAG] Merged result — %d refined_iocs total, "
                     "%d after false-positive filter, "
@@ -1900,9 +3037,24 @@ class ThreatIntelIngester:
                     len(merged.get("additional_mitre_techniques", [])),
                     len(merged.get("attack_graph", {}).get("paths", [])),
                 )
+                # An entity whose canonical verdict is "false positive" is
+                # dropped here, per Stage 1.5 - a rejection is an answer and
+                # must not be reinstated. But dropping it silently took its
+                # conflict records out of the output too, so a run could
+                # report 25 disagreements and show the reader 17. The
+                # rejection stands; the dissent is named.
                 for refined in all_refined:
                     if not refined.get("is_false_positive", False):
                         refined_iocs.append(refined)
+                    elif refined.get("conflicts"):
+                        rejected_with_dissent.append(str(refined.get("value", "")))
+                if rejected_with_dissent:
+                    logger.warning(
+                        "[MERGE] %d indicator(s) were dropped as false "
+                        "positives while another batch disagreed: %s",
+                        len(rejected_with_dissent),
+                        ", ".join(rejected_with_dissent[:8]),
+                    )
                 mitre_mappings = merged.get("additional_mitre_techniques", [])
                 report_meta = merged.get("report_metadata", {})
                 attack_graph = merged.get("attack_graph", {})
@@ -1915,13 +3067,28 @@ class ThreatIntelIngester:
                     chunk_llm_failures, chunk_exceptions,
                 )
 
-        # If LLM refinement didn't produce results, use regex baseline
+        # Fall back to the regex baseline only when refinement was unavailable
+        # or wholly failed — never when it ran and rejected what it found.
+        #
+        # "refined_iocs is empty" answers two different questions at once. If
+        # the model assessed every candidate as a false positive, reinstating
+        # them here returns the exact indicators it rejected, at
+        # confidence "low", and labels the run regex_only — turning a correct
+        # filtering result into a wrong one. An empty set is the honest answer
+        # to "what survived assessment", and it is reported as complete.
         ingestion_mode = "llm"  # track which path produced results
-        if not refined_iocs:
+        if not refined_iocs and refinement_ran:
+            logger.info(
+                "[DIAG] Refinement ran and accepted no candidates — %d assessed "
+                "as false positives. Returning zero IOCs rather than "
+                "reinstating the regex baseline the model just rejected.",
+                candidates_rejected,
+            )
+        elif not refined_iocs:
             ingestion_mode = "regex_only"
             llm_was_enabled = context.llm_enabled and context.llm_query is not None
             logger.warning(
-                "[DIAG] FALLBACK to regex-only — refined_iocs empty. "
+                "[DIAG] FALLBACK to regex-only — refinement did not run. "
                 "LLM enabled=%s, mitre_mappings=%d, attack_graph_paths=%d",
                 llm_was_enabled, len(mitre_mappings),
                 len(attack_graph.get("paths", [])) if isinstance(attack_graph, dict) else 0,
@@ -1948,6 +3115,42 @@ class ThreatIntelIngester:
             for ioc in refined_iocs
             if confidence_order.get(ioc.get("confidence", "low"), 0) >= threshold_value
         ]
+
+        # Computed once, here, because it goes two places: the returned
+        # ToolResult and the persisted artifact. An export outlives the session
+        # that produced it, and a file read back from the bucket months later
+        # has only what was written into it.
+        # A PDF is counted in pages; every other artifact type is counted in
+        # lines. The keys stay "pages_*" so existing consumers keep working,
+        # and "unit" says what they actually mean.
+        coverage_unit = "pages" if artifact.artifact_type == "pdf_report" else "lines"
+        coverage_fields = {
+            "pages_total": pages_total if pages_total else page_count,
+            "pages_read": page_count,
+            "pages_dropped": pages_dropped,
+            "unit": coverage_unit,
+        }
+        analysis = _analysis_fields(
+            ingestion_mode=ingestion_mode,
+            pages_total=coverage_fields["pages_total"],
+            pages_read=page_count,
+            truncated_chunks=chunk_truncations,
+            chunks_attempted=chunks_attempted,
+            chunks_failed=(
+                chunk_json_failures + chunk_llm_failures + chunk_exceptions
+            ),
+            candidates_rejected=candidates_rejected,
+            candidates_unassessed=len(candidates_unassessed),
+            candidates_not_submitted=len(candidates_not_submitted),
+            merge_conflicts=merge_stats.get("conflicts", 0),
+            recovered_from_partial=merge_stats.get("recovered_from_partial", 0),
+            rejected_with_dissent=len(rejected_with_dissent),
+            # refined_iocs, not filtered_iocs: an empty result after the
+            # confidence threshold is the threshold's doing, not a
+            # false-positive assessment.
+            accepted_none=(refinement_ran and not refined_iocs),
+            unit=coverage_unit,
+        )
 
         # --- Build MITRE mappings from IOCs + additional techniques ---
         all_mitre = list(mitre_mappings)  # Start with additional techniques
@@ -1996,6 +3199,13 @@ class ThreatIntelIngester:
                 "iocs": filtered_iocs,
                 "mitre_mappings": all_mitre,
                 "attack_graph": attack_graph,
+                # Coverage and status travel with the data. Without these the
+                # artifact says what was found and nothing about what was
+                # looked at, and a reader months later cannot tell a full
+                # ingestion from one that read a third of the document.
+                "coverage": dict(coverage_fields),
+                "ingestion_mode": ingestion_mode,
+                **analysis,
             }
 
             # Write artifact file
@@ -2057,12 +3267,21 @@ class ThreatIntelIngester:
                     "source_organization": report_meta.get("source_organization", ""),
                     "publication_date": report_meta.get("publication_date", ""),
                     "page_count": page_count,
+                    "pages_total": pages_total if pages_total else page_count,
+                    "pages_dropped": pages_dropped,
                     "artifact_type": artifact.artifact_type,
                     "campaign_name": report_meta.get("campaign_name", ""),
                     "attributed_actor": report_meta.get("attributed_actor", ""),
                     "attribution_confidence": report_meta.get(
                         "attribution_confidence", ""
                     ),
+                    # Every actor and campaign named anywhere in the report,
+                    # in order of first mention. The scalars above are the
+                    # first of each and are kept for consumers that read
+                    # them; a report describing two groups is not a report
+                    # about whichever one a batch happened to name first.
+                    "actors": list(report_meta.get("actors", [])),
+                    "campaigns": list(report_meta.get("campaigns", [])),
                 },
                 "iocs": filtered_iocs,
                 "mitre_mappings": all_mitre,
@@ -2077,6 +3296,28 @@ class ThreatIntelIngester:
                          if m.get("technique_id")}
                     ),
                     "confidence_distribution": confidence_dist,
+                    "truncated": bool(chunk_truncations),
+                    "truncated_chunks": list(chunk_truncations),
+                    "chunks_attempted": chunks_attempted,
+                    "chunks_failed": (
+                        chunk_json_failures + chunk_llm_failures + chunk_exceptions
+                    ),
+                    "chunk_failure_breakdown": {
+                        "json_parse": chunk_json_failures,
+                        "llm_call": chunk_llm_failures,
+                        "exception": chunk_exceptions,
+                    },
+                    "candidates_rejected": candidates_rejected,
+                    "candidates_unassessed": len(candidates_unassessed),
+                    "candidates_not_submitted": len(candidates_not_submitted),
+                    "merge_stats": dict(merge_stats),
+                    # Bounded: the note carries the count, this carries enough
+                    # values to go and look.
+                    "rejected_with_dissent": rejected_with_dissent[:25],
+                    "native_attempts": len(native_provenance),
+                    # What pages_total/pages_read in report_metadata count.
+                    "coverage_unit": coverage_unit,
+                    **analysis,
                     "ingestion_mode": ingestion_mode,
                     "document_profile": profile,
                     "ingestion_plan": plan.to_dict(),
@@ -2111,7 +3352,22 @@ class ThreatIntelIngester:
         artifact_type = meta.get("artifact_type", "unknown")
         pages = meta.get("page_count", "?")
         size_label = "pages" if artifact_type == "pdf_report" else "lines"
+        # Status before anything else, including the report identity. The
+        # summary is capped at the manifest's summary_budget by
+        # PluginExecutor, so a warning placed after the content is the part
+        # that gets cut.
+        status = summary.get("analysis_status", "complete")
+        notes = "; ".join(summary.get("analysis_notes") or [])
+        if status != "complete":
+            parts.append(f"{status.upper()} — {notes}.")
+        elif notes:
+            # A complete run can still carry a note: "every candidate was
+            # assessed as a false positive" is a finished answer, but an empty
+            # IOC list reads as a failure unless the reason is stated.
+            parts.append(f"{notes}.")
+
         parts.append(f"Ingested {artifact_type} ({pages} {size_label}): {title}.")
+
 
         # Attribution
         actor = meta.get("attributed_actor")
@@ -2124,6 +3380,22 @@ class ThreatIntelIngester:
                 + (f", campaign: {campaign}" if campaign else "")
                 + "."
             )
+        # The scalars above carry one of each. Saying so is what stops a
+        # reader taking a single-actor line as the report's whole attribution.
+        #
+        # A slot, filled once everything else is measured: this is the part
+        # that gets whatever room is left, rather than the part that takes the
+        # room and leaves the findings to be truncated away.
+        others = [
+            a.get("name") for a in meta.get("actors", [])[1:] if a.get("name")
+        ]
+        other_campaigns = [
+            c.get("name") for c in meta.get("campaigns", [])[1:] if c.get("name")
+        ]
+        attribution_slot = None
+        if others or other_campaigns:
+            attribution_slot = len(parts)
+            parts.append("")
 
         # IOC counts
         total = summary.get("total_iocs", 0)
@@ -2211,14 +3483,10 @@ class ThreatIntelIngester:
                 "the visualizer marks them 'tactic unconfirmed'."
             )
 
-        # Ingestion mode warning
-        mode = summary.get("ingestion_mode", "")
-        if mode == "regex_only":
-            parts.append(
-                "WARNING: LLM analysis failed — results are regex-only "
-                "(low confidence, no MITRE mapping, no attack graph). "
-                "Check logs for LLM failure details."
-            )
+        # The regex-only warning used to live here, at the end. It is now the
+        # DEGRADED INPUT note that leads the summary — saying it twice wastes a
+        # budget PluginExecutor caps at summary_budget, and the copy that got
+        # cut was this one.
 
         # Output artifact + quick chart command
         artifacts = result.output_artifacts or []
@@ -2233,5 +3501,15 @@ class ThreatIntelIngester:
                 f"Quick chart: run attack_path_visualizer "
                 f"--artifact_id {aid} --format mermaid"
             )
+
+        if attribution_slot is not None:
+            fixed = len(" ".join(
+                p for i, p in enumerate(parts) if i != attribution_slot
+            ))
+            room = _summary_cap() - _SUMMARY_SAFETY - fixed
+            parts[attribution_slot] = _attribution_narration(
+                others, other_campaigns, room,
+            )
+            parts = [p for p in parts if p]
 
         return " ".join(parts)

@@ -302,7 +302,24 @@ class TestValidateInputs:
     def test_rejects_max_pages_out_of_range(self, tool_instance):
         result = tool_instance.validate_inputs({
             "artifact_id": "art_0001",
-            "max_pages": 500,
+            "max_pages": 1001,
+        })
+        assert result.ok is False
+
+    def test_accepts_max_pages_up_to_the_largest_provider_cap(self, tool_instance):
+        # 1000 is Gemini's page cap and the largest any provider declares, so
+        # anything the guard could accept must be expressible here.
+        for pages in (1, 150, 1000):
+            result = tool_instance.validate_inputs({
+                "artifact_id": "art_0001",
+                "max_pages": pages,
+            })
+            assert result.ok is True, f"max_pages={pages} should validate"
+
+    def test_rejects_max_pages_below_one(self, tool_instance):
+        result = tool_instance.validate_inputs({
+            "artifact_id": "art_0001",
+            "max_pages": 0,
         })
         assert result.ok is False
 
@@ -1542,3 +1559,240 @@ class TestBatchedNativeIngestion:
 
     def test_manifest_budget_covers_batched_runs(self, manifest):
         assert manifest["timeout_class"] == "long"
+
+class TestPageCoverageIsReported:
+    """A PDF read in part must never be reported as a PDF read whole.
+
+    The default was 50 pages, enforced by a break in extract_pdf_page_texts
+    and invisible afterwards: page_count was the length of the truncated list,
+    so a 150-page report ingested as 50 pages looked exactly like a 50-page
+    report ingested completely.
+    """
+
+    def test_whole_document_read_by_default(self, tool_instance, batched_run):
+        """No max_pages means no limit here — the provider guard decides."""
+        llm = _NativeLLM()
+        result = tool_instance.execute(
+            {"artifact_id": "art_dense"}, batched_run["make_context"](llm),
+        )
+        assert result.ok, result.message
+        meta = result.result["report_metadata"]
+        assert meta["page_count"] == 12
+        assert meta["pages_total"] == 12
+        assert meta["pages_dropped"] == 0
+
+    def test_explicit_max_pages_reports_what_it_dropped(
+        self, tool_instance, batched_run, monkeypatch,
+    ):
+        monkeypatch.setattr(_tool_mod, "pdf_page_total", lambda path: 12)
+        llm = _NativeLLM()
+        result = tool_instance.execute(
+            {"artifact_id": "art_dense", "max_pages": 5},
+            batched_run["make_context"](llm),
+        )
+        assert result.ok, result.message
+        meta = result.result["report_metadata"]
+        assert meta["page_count"] == 5, "only 5 pages were examined"
+        assert meta["pages_total"] == 12, "the document has 12"
+        assert meta["pages_dropped"] == 7
+
+    def test_truncation_is_stated_in_the_llm_summary(
+        self, tool_instance, batched_run, monkeypatch,
+    ):
+        """summarize_for_llm is what downstream reasoning sees, so partial
+        coverage has to be visible there or it is not visible at all."""
+        monkeypatch.setattr(_tool_mod, "pdf_page_total", lambda path: 12)
+        llm = _NativeLLM()
+        result = tool_instance.execute(
+            {"artifact_id": "art_dense", "max_pages": 5},
+            batched_run["make_context"](llm),
+        )
+        summary = tool_instance.summarize_for_llm(result)
+        assert "INCOMPLETE COVERAGE" in summary
+        assert "5 of 12" in summary
+        assert len(summary) <= 2000, "PluginExecutor truncates past 2000 chars"
+
+    def test_full_coverage_says_nothing_about_coverage(
+        self, tool_instance, batched_run,
+    ):
+        """The warning must not fire on a complete read."""
+        llm = _NativeLLM()
+        result = tool_instance.execute(
+            {"artifact_id": "art_dense"}, batched_run["make_context"](llm),
+        )
+        assert "INCOMPLETE COVERAGE" not in tool_instance.summarize_for_llm(result)
+
+    def test_truncated_run_never_attaches_the_whole_file(
+        self, tool_instance, batched_run, monkeypatch,
+    ):
+        """The sharp one. _batch_document short-circuited to the original
+        artifact when a range covered doc_profile.pages — which, after
+        truncation, meant the model received all 12 pages while the profile,
+        the plan and the output all said 5.
+
+        Needs a document sparse enough to plan as ONE native batch: a dense
+        one splits into several narrower ranges, none of which covers the
+        document, so the short-circuit never fires and the test would pass
+        whether or not the bug were fixed. The plan assertion below is what
+        keeps that from silently happening again.
+        """
+        sparse = _dense_pages(12, 3)
+        monkeypatch.setattr(
+            _tool_mod, "extract_pdf_page_texts",
+            lambda path, max_pages=None: sparse[:max_pages],
+        )
+        monkeypatch.setattr(_tool_mod, "pdf_page_total", lambda path: 12)
+        llm = _NativeLLM()
+        result = tool_instance.execute(
+            {"artifact_id": "art_dense", "max_pages": 5},
+            batched_run["make_context"](llm),
+        )
+        assert result.ok, result.message
+
+        plan = result.result["summary"]["ingestion_plan"]
+        assert plan["strategy"] == "native", (
+            "this test is only meaningful on a single-batch native plan; "
+            f"got {plan['strategy']} with {plan.get('batches')}"
+        )
+        assert [(b["start"], b["end"]) for b in plan["batches"]] == [(1, 5)], (
+            "the single batch must cover exactly the pages that were read"
+        )
+
+        assert len(llm.doc_calls) == 1
+        sent = llm.doc_calls[0]
+        assert sent["page_range"] == [1, 5]
+        assert sent["file_path"].endswith("_p1-5.pdf"), (
+            "a truncated read must send a cut sub-PDF, never the original "
+            f"file — got {sent['file_path']}"
+        )
+        assert batched_run["written"] == [[(1, 5)]], (
+            "the sub-PDF should have been cut from the original"
+        )
+
+    def test_full_read_still_attaches_the_original_file(
+        self, tool_instance, batched_run, monkeypatch,
+    ):
+        """The other side of it: with nothing dropped, a whole-document range
+        must still short-circuit to the artifact rather than pointlessly
+        re-cutting every page into a copy."""
+        sparse = _dense_pages(5, 3)
+        monkeypatch.setattr(
+            _tool_mod, "extract_pdf_page_texts",
+            lambda path, max_pages=None: sparse[:max_pages],
+        )
+        llm = _NativeLLM()
+        result = tool_instance.execute(
+            {"artifact_id": "art_dense"}, batched_run["make_context"](llm),
+        )
+        assert result.ok, result.message
+        assert result.result["summary"]["ingestion_plan"]["strategy"] == "native"
+        assert batched_run["written"] == [], "nothing should have been cut"
+        assert llm.doc_calls[0]["file_path"].endswith("dense.pdf")
+
+class TestRetiredTechniqueIdsAreCanonicalized:
+    """A technique ATT&CK renumbered must not be reported as non-ATT&CK.
+
+    Observed live on a 2026-09 report: the heavy tier emitted T1562.001 and
+    T1656 — correct techniques under pre-v19 numbering — and both were
+    demoted to "(non-ATT&CK ID)" against the bundled v19.2 database.
+    """
+
+    def test_retired_id_is_remapped_and_validated(self):
+        all_mitre = [
+            {"technique_id": "T1562.001", "tactic": "Defense Impairment",
+             "technique_name": "Impair Defenses: Disable or Modify Tools",
+             "confidence": "inferred", "report_context": "disabled AV"},
+        ]
+        result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
+        entry = result[0]
+        assert entry["technique_id"] == "T1685"
+        assert entry["technique_id_retired_from"] == "T1562.001"
+        assert entry["mitre_validated"] is True
+        assert "non-ATT&CK" not in entry["technique_name"]
+        assert entry["technique_name"] == "Disable or Modify Tools"
+
+    def test_split_technique_stays_flagged(self):
+        """T1562 has six successors, so it cannot be remapped — but it must
+        still be flagged rather than quietly attached to one of them."""
+        all_mitre = [
+            {"technique_id": "T1562", "tactic": "Defense Impairment",
+             "technique_name": "Impair Defenses", "confidence": "inferred",
+             "report_context": "impaired defenses"},
+        ]
+        result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
+        entry = result[0]
+        assert entry["technique_id"] == "T1562", "must not be guessed at"
+        assert entry["mitre_validated"] is False
+        assert "non-ATT&CK" in entry["technique_name"]
+
+    def test_current_ids_are_untouched(self):
+        all_mitre = [
+            {"technique_id": "T1595", "tactic": "Reconnaissance",
+             "technique_name": "Active Scanning", "confidence": "explicit",
+             "report_context": "scanned"},
+        ]
+        result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
+        entry = result[0]
+        assert entry["technique_id"] == "T1595"
+        assert "technique_id_retired_from" not in entry
+        assert entry["mitre_validated"] is True
+
+    def test_the_attack_graph_is_remapped_too(self):
+        """Remapping only mitre_mappings would leave the graph pointing at an
+        id that no longer exists, and the two views would disagree."""
+        all_mitre = [
+            {"technique_id": "T1656", "tactic": "Stealth",
+             "technique_name": "Impersonation", "confidence": "inferred",
+             "report_context": "posed as IT"},
+        ]
+        attack_graph = {
+            "paths": [
+                {
+                    "path_id": "path-A",
+                    "steps": [
+                        {"technique_id": "T1656", "tactic": "Stealth",
+                         "technique_name": "Impersonation",
+                         "leads_to": ["T1562.001"]},
+                    ],
+                },
+            ],
+        }
+        _tool_mod._reconcile_mitre_mappings(all_mitre, attack_graph)
+        step = attack_graph["paths"][0]["steps"][0]
+        assert step["technique_id"] == "T1684.001"
+        assert step["technique_id_retired_from"] == "T1656"
+        assert step["leads_to"] == ["T1685"], "leads_to must follow too"
+
+    def test_report_naming_both_old_and_new_id_yields_one_entry(self):
+        """Remapping can collide two entries onto one (technique_id, tactic).
+        The identity index downstream keeps one of them, so an unmerged
+        duplicate would show the technique twice."""
+        all_mitre = [
+            {"technique_id": "T1685", "tactic": "Defense Impairment",
+             "technique_name": "Disable or Modify Tools",
+             "confidence": "explicit", "report_context": "named directly",
+             "context_paths": ["path-A"]},
+            {"technique_id": "T1562.001", "tactic": "Defense Impairment",
+             "technique_name": "Impair Defenses: Disable or Modify Tools",
+             "confidence": "inferred", "report_context": "old numbering",
+             "context_paths": ["path-B"]},
+        ]
+        result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
+        t1685 = [e for e in result if e["technique_id"] == "T1685"]
+        assert len(t1685) == 1, f"expected one T1685 entry, got {len(t1685)}"
+        # the surviving entry carries both paths and records the retired id
+        assert set(t1685[0]["context_paths"]) == {"path-A", "path-B"}
+        assert t1685[0]["technique_id_retired_from"] == "T1562.001"
+
+    def test_unknown_ids_are_still_flagged(self):
+        """Resolution must not become a way to launder a hallucinated id."""
+        all_mitre = [
+            {"technique_id": "T9999", "tactic": "Execution",
+             "technique_name": "Totally Made Up", "confidence": "inferred",
+             "report_context": "invented"},
+        ]
+        result = _tool_mod._reconcile_mitre_mappings(all_mitre, {"paths": []})
+        entry = result[0]
+        assert entry["technique_id"] == "T9999"
+        assert entry["mitre_validated"] is False
+        assert "non-ATT&CK" in entry["technique_name"]

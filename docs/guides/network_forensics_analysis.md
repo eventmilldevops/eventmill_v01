@@ -663,9 +663,9 @@ def execute(self, payload, context):
     combined = static_output + "\n\n" + AI_SEPARATOR + "\n" + response
 ```
 
-The `context.llm_query` is an `MCPLLMClient` instance provided by the
-framework. It uses the LLM Dispatcher for tiered routing — light
-models (Flash) for small prompts, heavy models (Pro) for large ones.
+The `context.llm_query` is a `TierScopedLLMClient` provided by the
+framework, wrapping the LLM Dispatcher. Routing follows the plugin's
+manifest `model_tier` — light models (Flash) or heavy models (Pro).
 Connect with the `connect` command before running AI tools.
 
 ### 6.2 Three Prompt Tiers

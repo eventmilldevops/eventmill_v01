@@ -9,7 +9,9 @@
   "entry_point": "tool.py",
   "class_name": "ThreatReportAnalyzer",
   "artifacts_consumed": [],
-  "artifacts_produced": ["text"],
+  "artifacts_produced": [
+    "text"
+  ],
   "capabilities": [
     "threat_modeling:report_discovery",
     "threat_modeling:report_summarization",
@@ -19,12 +21,21 @@
   "output_schema": "schemas/output.schema.json",
   "timeout_class": "long",
   "cost_hint": "medium",
+  "summary_budget": 8000,
   "model_tier": "heavy",
   "safe_for_auto_invoke": false,
   "requires_llm": true,
   "dependencies": [],
   "stability": "stable",
-  "tags": ["threat_intelligence", "mitre", "capec", "summarization", "context"],
-  "chains_to": ["risk_assessment_analyzer", "attack_path_visualizer"],
+  "tags": [
+    "threat_intelligence",
+    "mitre",
+    "capec",
+    "summarization",
+    "context"
+  ],
+  "chains_to": [
+    "risk_assessment_analyzer"
+  ],
   "chains_from": []
 }

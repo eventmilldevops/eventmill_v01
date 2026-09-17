@@ -80,7 +80,21 @@ THINKING_LEVEL_ENV_OVERRIDE = "EVENTMILL_PROJECTION_THINKING"
 # 2: sampled steps carry the model's step state (Phase 3c).
 # 3: model.model_served — the id the provider reports, so a comparison across
 #    models rests on what ran rather than on what was asked for.
-RUN_RECORD_SCHEMA_VERSION = 3
+# 4: model.provider is read from the response instead of being assumed, and
+#    run.prompt_sha256 records what was asked. With several vendors bound at
+#    once a record that names no provider is not a weaker measurement but an
+#    unreadable one, and a cross-vendor comparison means nothing unless the
+#    prompt was the same — which was previously an argument rather than a fact
+#    on the record.
+# 5: model.vendor — which lab served the run, which stopped being the same
+#    question as model.provider once one vendor became reachable under more
+#    than one provider id. Recorded but not yet counted: _summarize_run_group
+#    still grades agreement across provider ids, which is right if a lab's two
+#    models genuinely disagree and overstates independence if they track each
+#    other. Which of those is true is an empirical question, so the field is
+#    captured first and the grading decided on the evidence. A v4 record
+#    carries no vendor and must not be given one by guesswork at read time.
+RUN_RECORD_SCHEMA_VERSION = 5
 
 # Output cap for the projection call: 48K (48 x 1024). Step state roughly
 # triples the size of a step, and the assessment sets out to show what deep
@@ -466,6 +480,20 @@ def _canonical_flow_map_hash(raw: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _prompt_hash(prompt: str, system_context: str) -> str:
+    """SHA-256 over exactly what the model was given, system context included.
+
+    A comparison across two vendors means nothing unless both were asked the
+    same question, and until this existed that was an argument rather than
+    something a reader could check. It covers the system context because that
+    is half of what was asked: a change there moves the answer as surely as a
+    change to the prompt body, and it would otherwise be invisible.
+    """
+    return hashlib.sha256(
+        f"{system_context}\n\n{prompt}".encode("utf-8")
+    ).hexdigest()
+
+
 _GIT_SHA: str | None = None
 
 
@@ -480,6 +508,17 @@ def _git_short_sha() -> str:
     """
     global _GIT_SHA
     if _GIT_SHA is not None:
+        return _GIT_SHA
+
+    # A deployed container has no .git at all, so the walk below finds nothing
+    # and every export from Cloud Run would carry an empty SHA — on the one
+    # platform where the operator cannot look at the working tree instead. The
+    # deploy script already computes the short SHA to tag the image with, so it
+    # forwards it here. Only set when the image was actually built from that
+    # tree: a redeploy of :latest must not claim a SHA it did not build.
+    build_sha = (os.environ.get("EVENTMILL_BUILD_SHA") or "").strip()
+    if build_sha:
+        _GIT_SHA = build_sha[:12]
         return _GIT_SHA
 
     _GIT_SHA = ""
@@ -513,6 +552,23 @@ def _git_short_sha() -> str:
             logger.debug("Could not read git SHA: %s", exc)
         break
     return _GIT_SHA
+
+
+def _code_id_source() -> str:
+    """Where the recorded SHA came from, so an empty one is not ambiguous.
+
+    An empty ``git_sha`` used to read the same whether the code identity was
+    unavailable or nobody had looked.  On Cloud Run it is routinely
+    unavailable, and that is exactly where ``manifest_version`` — which does
+    not move on its own — leaves an export with no code identity at all.  A
+    reader must be able to tell "this build is unidentified" from "this field
+    was never populated".
+    """
+    if (os.environ.get("EVENTMILL_BUILD_SHA") or "").strip():
+        return "build_env"
+    if _git_short_sha():
+        return "git_worktree"
+    return "unavailable"
 
 
 _MANIFEST_VERSION: str | None = None
@@ -2253,6 +2309,12 @@ def _build_scenario_seeds(
 # still listed with their counts, and nothing is called recurring.
 MIN_RUNS_FOR_RECURRENCE = 3
 
+# A record written before schema_version 4 names no provider, and one whose run
+# died before a response names none either. Both are grouped under this rather
+# than guessed at: a v3 record's provider really is unknown, because the field
+# it would have come from was a hardcoded constant.
+UNKNOWN_PROVIDER = "unknown"
+
 
 # Pre-intrusion tactics: work done before, or without, a foothold. A step like
 # Reconnaissance against a CDN compromises nothing and moves the attacker
@@ -2322,6 +2384,74 @@ def _representative_index(variants: list[dict[str, Any]]) -> int:
     return best_index
 
 
+def _group_confounds(records: list[dict[str, Any]]) -> list[str]:
+    """Differences within a group that would make a comparison misleading.
+
+    Warnings, never refusals. A group deliberately varying one knob — the same
+    map at two thinking levels, say — is a legitimate experiment, and refusing
+    it would remove the ability to record one. But the same variation arrived
+    at by accident silently turns "these vendors disagree" into "these vendors
+    were asked different questions", so it has to be said out loud.
+
+    prompt_sha256 is the strongest of these and subsumes most of the others: if
+    it differs, the models were not asked the same thing, whatever the
+    individual settings say.
+    """
+    warnings: list[str] = []
+
+    def _spread(label: str, values: list[Any]) -> None:
+        seen = sorted({str(v) for v in values if v not in (None, "")})
+        if len(seen) > 1:
+            warnings.append(
+                f"Runs in this group differ in {label}: {', '.join(seen)}. "
+                f"They were not all asked the same question, so differences "
+                f"between them are not attributable to the provider alone."
+            )
+
+    _spread("thinking_level",
+            [(r.get("model") or {}).get("thinking_level") for r in records])
+    _spread("max_paths",
+            [(r.get("model") or {}).get("max_paths") for r in records])
+    _spread("software_scope",
+            [(r.get("model") or {}).get("software_scope") for r in records])
+
+    prompts = {
+        str((r.get("run") or {}).get("prompt_sha256") or "") for r in records
+    }
+    prompts.discard("")
+    if len(prompts) > 1:
+        warnings.append(
+            f"Runs in this group were given {len(prompts)} different prompts "
+            f"({', '.join(sorted(p[:12] for p in prompts))}). A cross-provider "
+            f"comparison rests on the prompt being identical; this one is not."
+        )
+    return warnings
+
+
+def _agreement_grade(found_by: int, voting: int) -> str:
+    """How far a route's support extends across the vendors in the group.
+
+    Never averaged with recurrence, and never weighted by run count: three
+    samples from one vendor must not outvote two vendors, or the provider that
+    happens to be cheapest to run decides the finding.
+
+    With two providers there is no majority tier — a strict majority of two is
+    two — so a route either has both or is partial.
+    """
+    if voting <= 1:
+        return "single"
+    if found_by >= voting:
+        return "unanimous"
+    if found_by * 2 > voting:
+        return "majority"
+    return "partial"
+
+
+def _provider_of_record(record: dict[str, Any]) -> str:
+    """Which vendor served a run, or UNKNOWN_PROVIDER when the record cannot say."""
+    return str((record.get("model") or {}).get("provider") or "") or UNKNOWN_PROVIDER
+
+
 def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Count routes across a group's records and pick one variant of each.
 
@@ -2329,9 +2459,47 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
     that, because a group that mixes them is an operator error rather than a
     finding. Failed runs count toward the group's size but contribute no paths:
     they are part of what the group cost, not part of what it found.
+
+    A group MAY mix providers — running one flow map past three vendors is the
+    point of binding them concurrently — and that splits one number into two:
+
+      recurrence  does this model keep finding the route?   per provider
+      agreement   does it survive a change of reasoner?     across providers
+
+    Keeping them apart is the whole of it. Counted over the group as a whole,
+    three samples from one vendor would outvote two other vendors, and the
+    cheapest provider to run would decide the finding. A route is therefore
+    "recurring" when at least one provider kept finding it — which for a
+    single-provider group is exactly the old definition, arithmetic included —
+    and its agreement grade says how far that support extends.
     """
     successful = [r for r in records if r.get("sampled")]
     run_total = len(records)
+
+    # Every provider seen, in the order they first appear, so a group that has
+    # not been near a second vendor reads exactly as it always did.
+    providers: list[str] = []
+    for record in records:
+        provider = _provider_of_record(record)
+        if provider not in providers:
+            providers.append(provider)
+
+    # Agreement is measured only over providers that actually produced a
+    # projection: a vendor whose every run died cannot agree or disagree, and
+    # counting it would silently make unanimity unreachable.
+    voting = [p for p in providers if any(
+        _provider_of_record(r) == p for r in successful
+    )]
+    successful_by_provider = {
+        p: [r for r in successful if _provider_of_record(r) == p] for p in voting
+    }
+    thresholds = {
+        p: (len(rs) + 1) // 2 for p, rs in successful_by_provider.items()
+    }
+    countable_by_provider = {
+        p: len(rs) >= MIN_RUNS_FOR_RECURRENCE
+        for p, rs in successful_by_provider.items()
+    }
 
     # Runs are numbered within the group, never by the run_index a record
     # carries: that restarts at 1 in every invocation, so a group built from two
@@ -2348,6 +2516,7 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "run_index": ordinal,
                 "run_id": record["run"].get("run_id", ""),
                 "record_file": record["run"].get("record_file", ""),
+                "provider": _provider_of_record(record),
                 "path": path,
             })
 
@@ -2358,6 +2527,26 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
     summaries: list[dict[str, Any]] = []
     for signature, variants in routes.items():
         runs_with_route = sorted({v["run_index"] for v in variants})
+        # Recurrence, per provider. The denominator is that vendor's own
+        # successful runs, because this measures one model's sampling variance
+        # and always did — the group-wide denominator was only ever right
+        # because a group was always one vendor.
+        by_provider: dict[str, dict[str, Any]] = {}
+        for provider in voting:
+            found_in = sorted({
+                v["run_index"] for v in variants if v["provider"] == provider
+            })
+            by_provider[provider] = {
+                "runs": found_in,
+                "run_count": len(found_in),
+                "recurring": bool(
+                    countable_by_provider[provider]
+                    and len(found_in) >= thresholds[provider]
+                ),
+            }
+        providers_finding_it = sum(
+            1 for entry in by_provider.values() if entry["run_count"]
+        )
         index = _representative_index(variants)
         chosen = variants[index]
         pairs_per_variant = [_pair_set(v["path"]) for v in variants]
@@ -2377,7 +2566,12 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
             "runs": runs_with_route,
             "run_count": len(runs_with_route),
             "variant_count": len(variants),
-            "recurring": countable and len(runs_with_route) >= threshold,
+            # At least one provider kept finding it. With one provider bound
+            # this is the old expression exactly, denominator included.
+            "recurring": any(e["recurring"] for e in by_provider.values()),
+            "by_provider": by_provider,
+            "providers_finding_it": providers_finding_it,
+            "agreement": _agreement_grade(providers_finding_it, len(voting)),
             "representative": {
                 "run_index": chosen["run_index"],
                 "record_file": chosen.get("record_file", ""),
@@ -2396,10 +2590,16 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
             "state_gaps": sum(1 for s in steps if s.get("state_check") == "gap"),
         })
 
-    # Recurring first, then by how many runs found it, then by route, so the
-    # reader meets the findings before the one-offs and the order is stable.
+    # Recurring first, then by how many VENDORS found it, then by how many runs
+    # did, then by route. The vendor term sits above the run term deliberately:
+    # a route two vendors found twice each is a stronger finding than one a
+    # single vendor found five times. With one provider bound every route
+    # scores 1 there, so the order is unchanged from before.
     summaries.sort(
-        key=lambda s: (not s["recurring"], -s["run_count"], s["route"])
+        key=lambda s: (
+            not s["recurring"], -s["providers_finding_it"],
+            -s["run_count"], s["route"],
+        )
     )
     return {
         "run_count": run_total,
@@ -2407,8 +2607,26 @@ def _summarize_run_group(records: list[dict[str, Any]]) -> dict[str, Any]:
         "failed": run_total - len(successful),
         "recurrence_threshold": threshold if countable else None,
         "recurrence_countable": countable,
+        "providers": providers,
+        "provider_count": len(providers),
+        "runs_by_provider": {
+            provider: {
+                "runs": sum(
+                    1 for r in records if _provider_of_record(r) == provider
+                ),
+                "succeeded": len(successful_by_provider.get(provider, [])),
+                "recurrence_threshold": (
+                    thresholds[provider]
+                    if countable_by_provider.get(provider) else None
+                ),
+            }
+            for provider in providers
+        },
         "route_count": len(summaries),
         "recurring_route_count": sum(1 for s in summaries if s["recurring"]),
+        "unanimous_route_count": sum(
+            1 for s in summaries if s["agreement"] == "unanimous"
+        ),
         "routes": summaries,
     }
 
@@ -2484,6 +2702,39 @@ def _hinge_assumption(route: dict[str, Any]) -> str:
     return assumptions[-1].get("assumption", "")
 
 
+def _repetition_sentence(
+    data: dict[str, Any], succeeded: int, mixed: bool,
+) -> str:
+    """What repetition means here — which differs once vendors are mixed.
+
+    With one provider, "found in N of M runs" is the whole test. With several,
+    the group-wide figure is not what decides recurrence and quoting it would
+    tell the reader to apply a threshold the summary did not use.
+    """
+    if not mixed:
+        return (
+            f"Repetition is the evidence. A route found once is a suggestion; a "
+            f"route found in {data.get('recurrence_threshold') or 'most'} or "
+            f"more of {succeeded} runs is a pattern worth testing. This is not "
+            f"an observation, not a likelihood assessment, and not a complete "
+            f"list of the ways in."
+        )
+    thresholds = ", ".join(
+        f"{provider} {entry['recurrence_threshold']} of {entry['succeeded']}"
+        for provider, entry in (data.get("runs_by_provider") or {}).items()
+        if entry.get("recurrence_threshold")
+    )
+    return (
+        f"Repetition is the evidence, and it is counted per provider: a route "
+        f"is recurring when one model kept finding it in its own runs "
+        f"({thresholds or 'too few runs each to judge'}). Agreement is counted "
+        f"separately, in vendors rather than runs, so several samples from one "
+        f"model cannot outweigh a second model that disagreed. This is not an "
+        f"observation, not a likelihood assessment, and not a complete list of "
+        f"the ways in."
+    )
+
+
 def _render_group_report(
     data: dict[str, Any],
     names: dict[str, str],
@@ -2515,6 +2766,11 @@ def _render_group_report(
     failed = data.get("failed", 0)
     if failed:
         run_line += f", {failed} failed"
+    # Named only when there is more than one, so a single-vendor report reads
+    # exactly as it did before providers could be mixed.
+    group_providers = list(data.get("providers") or [])
+    if len(group_providers) > 1:
+        run_line += f", across {', '.join(group_providers)}"
     start, end = period
     when = f" between {start} and {end}" if start and end and start != end else (
         f" on {start}" if start else ""
@@ -2568,6 +2824,35 @@ def _render_group_report(
             f"{strongest['run_count']} of {succeeded} runs."
         )
 
+        if len(group_providers) > 1:
+            unanimous = [r for r in recurring if r.get("agreement") == "unanimous"]
+            alone = [r for r in recurring if r.get("providers_finding_it") == 1]
+            lines.append("")
+            if unanimous:
+                lines.append(
+                    f"{_plural(len(unanimous), 'recurring route')} "
+                    f"{'was' if len(unanimous) == 1 else 'were'} found by every "
+                    f"provider in this group. A route that survives a change of "
+                    f"reasoner is the strongest signal a group of runs carries — "
+                    f"it is not an artefact of one model's habits."
+                )
+            else:
+                lines.append(
+                    "No recurring route was found by every provider in this "
+                    "group. Each rests on one vendor's reading of the same "
+                    "architecture, and the same question."
+                )
+            if alone:
+                lines.append("")
+                lines.append(
+                    f"{_plural(len(alone), 'recurring route')} "
+                    f"{'was' if len(alone) == 1 else 'were'} found by a single "
+                    f"provider. Kept rather than dropped — this tool exists to "
+                    f"surface credible paths nobody has considered, and one "
+                    f"model finding something repeatedly is a reason to look, "
+                    f"not to discount it."
+                )
+
         shared = set(recurring[0]["route"])
         for route in recurring[1:]:
             shared &= set(route["route"])
@@ -2615,6 +2900,17 @@ def _render_group_report(
         found = f"{route['run_count']} of {succeeded} runs"
         if not route["recurring"]:
             found += " — one-off"
+        if len(group_providers) > 1:
+            # Which vendors, and how often each. A route two vendors found
+            # twice each and one a single vendor found five times are
+            # different findings, and the run count alone cannot tell them
+            # apart — this column is where that shows.
+            per_vendor = ", ".join(
+                f"{provider} {entry['run_count']}"
+                for provider, entry in (route.get("by_provider") or {}).items()
+                if entry["run_count"]
+            )
+            found += f" ({per_vendor}; {route.get('agreement', 'single')})"
         lines.append(
             f"| {route_text(route['route'])} | {found} | {ends} | "
             f"{_hinge_assumption(route) or '—'} |"
@@ -2668,11 +2964,7 @@ def _render_group_report(
         f"ids, technique names and the architecture are sourced; the routes and "
         f"the step rationales are the model's projection.",
         "",
-        f"Repetition is the evidence. A route found once is a suggestion; a "
-        f"route found in {data.get('recurrence_threshold') or 'most'} or more "
-        f"of {succeeded} runs is a pattern worth testing. This is not an "
-        f"observation, not a likelihood assessment, and not a complete list of "
-        f"the ways in.",
+        _repetition_sentence(data, succeeded, len(group_providers) > 1),
         "",
     ]
     if not flow_map:
@@ -3254,9 +3546,11 @@ class AdversaryPathProjector:
                 ok=False,
                 error_code="LLM_UNAVAILABLE",
                 message=(
-                    "project_paths needs an LLM. Set GEMINI_PRO_API_KEY (see "
-                    ".env.example) and run 'connect', or use 'profile_actor' and "
-                    "'validate_flow_map' for the deterministic groundwork."
+                    "project_paths needs an LLM. Set at least one provider's "
+                    "key (see .env.example) and run 'connect' — 'providers' "
+                    "lists what is configured and which keys are missing. Or "
+                    "use 'profile_actor' and 'validate_flow_map' for the "
+                    "deterministic groundwork, neither of which needs a model."
                 ),
             )
 
@@ -3284,6 +3578,7 @@ class AdversaryPathProjector:
             "runs": runs,
             "flow_map_path": str(payload.get("file_path", "") or ""),
             "flow_map_sha256": _canonical_flow_map_hash(raw),
+            "prompt_sha256": _prompt_hash(prompt, PROJECTION_SYSTEM_CONTEXT),
             "application": flow_map["application"],
             "actor_input": str(payload.get("threat_actor", "") or ""),
             "unreachable": unreachable,
@@ -3312,6 +3607,14 @@ class AdversaryPathProjector:
                 context, prompt, thinking_level, core_ids, software_ids,
                 flow_map, entry_ids, profile["label"], procedures=procedures,
             )
+            # Minted here rather than in _build_run_record so the exports and
+            # the record carry the same run_id. The exports are written first,
+            # and they are written even when --export is off, so a run_id
+            # created inside the record would leave them with nothing to join
+            # on — which is exactly the gap the provenance block closes.
+            attempt["run_id"] = str(uuid.uuid4())
+            attempt["run_index"] = index
+            attempt["created_at"] = datetime.now(timezone.utc).isoformat()
 
             # The graph and the seed are the product of a projection and chain
             # onwards; in a loop only the first success needs to, or a 20-run
@@ -3322,6 +3625,7 @@ class AdversaryPathProjector:
                     profile, flow_map, attempt["attack_graph"],
                     attempt["validated"]["mitre_mappings"], attempt["seeds"],
                     context,
+                    self._export_provenance(run_context, attempt),
                 )
                 artifacts.extend(attempt["artifacts"])
                 graph_written = True
@@ -3467,7 +3771,12 @@ class AdversaryPathProjector:
         and must not vary between runs, so a reader comparing two records knows
         any difference below it came from the model.
         """
-        run_id = str(uuid.uuid4())
+        # Minted in the projection loop so the exports written before this
+        # record share it; the fallback keeps a record buildable in isolation.
+        run_id = attempt.get("run_id") or str(uuid.uuid4())
+        created_at = (
+            attempt.get("created_at") or datetime.now(timezone.utc).isoformat()
+        )
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         profile = run_context["profile"]
         response = attempt.get("response")
@@ -3479,13 +3788,15 @@ class AdversaryPathProjector:
                 "run_group": run_context["run_group"],
                 "run_index": index,
                 "run_count": run_context["runs"],
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": created_at,
                 "tool_version": {
                     "manifest_version": _manifest_version(),
                     "git_sha": _git_short_sha(),
+                    "code_id_source": _code_id_source(),
                 },
                 "flow_map_path": run_context["flow_map_path"],
                 "flow_map_sha256": run_context["flow_map_sha256"],
+                "prompt_sha256": run_context["prompt_sha256"],
                 "application": run_context["application"],
                 "actor_input": run_context["actor_input"],
                 "actor_resolved": {
@@ -3503,7 +3814,17 @@ class AdversaryPathProjector:
                 ),
             },
             "model": {
-                "provider": "gcp_gemini",
+                # Read from the response, never assumed. The dispatcher stamps
+                # provider_id as a backstop when a client omits it, so this is
+                # present on any real run; null means no response came back at
+                # all. Defaulting to a vendor name would be worse than null —
+                # with several providers bound, a record that quietly claims
+                # Gemini is not an incomplete measurement but a false one.
+                "provider": getattr(response, "provider_id", None),
+                # Two providers can be one vendor. Read from the response for
+                # the same reason as provider: with several bound at once, a
+                # derived value is a guess and a guess here reads as evidence.
+                "vendor": getattr(response, "vendor", None),
                 "model_configured": getattr(response, "model_used", None),
                 "model_served": getattr(response, "model_version", None),
                 "tier": "heavy",
@@ -3675,6 +3996,9 @@ class AdversaryPathProjector:
             "actor": profile["label"],
             "application": run_context["application"],
             "software_scope": profile["software_scope"],
+            # Which vendor answered, so an operator comparing providers can
+            # read it off the run rather than opening the exported record.
+            "provider": getattr(attempt.get("response"), "provider_id", None),
             "thinking_level": run_context["thinking_level"],
             "allowed_technique_count": run_context["allowed_technique_count"],
             "techniques_offered_to_model": listed,
@@ -3824,6 +4148,12 @@ class AdversaryPathProjector:
                 ),
             )
 
+        # Mixing PROVIDERS is allowed and is the point — one flow map past
+        # three vendors. Mixing the estate or the actor is not, and is checked
+        # below. What sits between those two is checked by _group_confounds:
+        # differences that are legitimate to record deliberately but ruin a
+        # comparison made by accident, so they warn rather than refuse.
+        #
         # One estate, one actor, or the counts mean nothing: the same route
         # found against two maps is not the same finding.
         maps = {r["run"].get("flow_map_sha256", "") for r in records}
@@ -3872,6 +4202,9 @@ class AdversaryPathProjector:
             "records": [r["run"].get("record_file", "") for r in records],
             **summary,
         }
+        confounds = _group_confounds(records)
+        if confounds:
+            result["report_warnings"] = confounds
 
         # The flow map is optional here: without it the report still counts
         # routes, it just cannot say which controls sit on them, and says so.
@@ -3883,10 +4216,10 @@ class AdversaryPathProjector:
             flow_map, map_errors, _ = _normalize_flow_map(raw)
             if map_errors:
                 flow_map = None
-                result["report_warnings"] = [
+                result.setdefault("report_warnings", []).append(
                     f"Flow map has {len(map_errors)} blocking error(s), so the "
                     f"report was written without control context."
-                ]
+                )
             elif _canonical_flow_map_hash(raw) != result["flow_map_sha256"]:
                 result.setdefault("report_warnings", []).append(
                     "The supplied flow map is not the one these runs were "
@@ -3958,6 +4291,46 @@ class AdversaryPathProjector:
         )
 
     @staticmethod
+    def _export_provenance(
+        run_context: dict[str, Any], attempt: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Identity a consumer can verify these exports against.
+
+        Every value here is already computed for the run record; the exports
+        simply had no copy. Without it a graph and a seed can only be paired by
+        filename stamp, and a flow map can only be matched to an export by
+        application name — which proves nothing, since two projections of
+        different actors against different estates produce files of identical
+        shape. The provider block is read from the response for the same reason
+        the record reads it: with several providers bound, a derived value
+        reads as evidence while being a guess.
+        """
+        profile = run_context["profile"]
+        response = attempt.get("response")
+        return {
+            "run_id": attempt.get("run_id", ""),
+            "run_group": run_context["run_group"],
+            "run_index": attempt.get("run_index", 1),
+            "created_at": attempt.get("created_at", ""),
+            "flow_map_path": run_context["flow_map_path"],
+            "flow_map_sha256": run_context["flow_map_sha256"],
+            "prompt_sha256": run_context["prompt_sha256"],
+            "attack_version": get_mitre_relationships().get("attack_version", ""),
+            "actor_attack_id": (profile.get("actor") or {}).get("attck_id", ""),
+            "tool_version": {
+                "manifest_version": _manifest_version(),
+                "git_sha": _git_short_sha(),
+                "code_id_source": _code_id_source(),
+            },
+            "model": {
+                "provider": getattr(response, "provider_id", None),
+                "vendor": getattr(response, "vendor", None),
+                "model_configured": getattr(response, "model_used", None),
+                "model_served": getattr(response, "model_version", None),
+            },
+        }
+
+    @staticmethod
     def _write_projection_artifacts(
         profile: dict[str, Any],
         flow_map: dict[str, Any],
@@ -3965,12 +4338,13 @@ class AdversaryPathProjector:
         mitre_mappings: list[dict[str, Any]],
         seeds: list[dict[str, Any]],
         context: Any,
+        provenance: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Write the visualizer graph and the scenario seed as separate files.
 
         The graph file carries exactly the keys attack_path_visualizer reads,
         so it chains with no translation; the extra per-step keys it does not
-        read are harmless.
+        read are harmless — which is why `provenance` can be added additively.
         """
         workspace = Path(os.environ.get("EVENTMILL_WORKSPACE", "./workspace"))
         art_dir = workspace / "artifacts"
@@ -3992,6 +4366,7 @@ class AdversaryPathProjector:
                     "interpretation": PROJECTION_INTERPRETATION,
                     "actor": profile["label"],
                     "application": flow_map["application"],
+                    "provenance": provenance or {},
                     "mitre_mappings": mitre_mappings,
                     "attack_graph": attack_graph,
                 },
@@ -4004,6 +4379,7 @@ class AdversaryPathProjector:
                     "interpretation": PROJECTION_INTERPRETATION,
                     "actor": profile["label"],
                     "application": flow_map["application"],
+                    "provenance": provenance or {},
                     "scenarios": seeds,
                 },
             ),

@@ -90,9 +90,23 @@ DRY_RUN="${DRY_RUN:-0}"
 
 PILLAR_SLUGS=(log-analysis network-forensics threat-modeling)
 COMMON_FOLDERS=(mitre capec cisa vendor_advisories threat_actors campaigns vulnerabilities)
+# Every secret Event Mill can mount is provisioned here, whether or not the
+# operator uses it. Gemini takes two — the tiers are keyed separately so bulk
+# Flash work cannot consume Pro quota. Anthropic and OpenAI take one each;
+# neither vendor splits keys by tier.
+#
+# The non-Gemini entries are created holding "placeholder" and stay that way
+# until someone adopts that provider. That is deliberate: it keeps the build
+# and the deploy identical for every project, so adopting a second vendor is
+# `gcloud secrets versions add` plus a runtime override rather than an
+# infrastructure change. Re-running this script on an existing project adds
+# only the missing entries.
 SECRET_NAMES=(
     eventmill-gemini-flash-api
     eventmill-gemini-pro-api
+    eventmill-anthropic-api
+    eventmill-openai-api
+    eventmill-anthropic-daybreak
     eventmill-gcs-sa
     eventmill-ttyd-user
     eventmill-ttyd-cred

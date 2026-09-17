@@ -3,7 +3,9 @@
   "$id": "https://eventmill.dev/plugins/threat_intel_ingester/output.schema.json",
   "title": "Threat Intel Ingester Output",
   "type": "object",
-  "required": ["ok"],
+  "required": [
+    "ok"
+  ],
   "properties": {
     "ok": {
       "type": "boolean",
@@ -12,23 +14,105 @@
     "result": {
       "type": "object",
       "description": "Ingestion results. Present only when ok=true.",
-      "required": ["report_metadata", "iocs", "mitre_mappings", "summary"],
+      "required": [
+        "report_metadata",
+        "iocs",
+        "mitre_mappings",
+        "summary"
+      ],
       "properties": {
         "report_metadata": {
           "type": "object",
           "description": "Metadata extracted from the source report.",
           "properties": {
-            "title": { "type": "string", "description": "Report title if identifiable." },
-            "source_organization": { "type": "string", "description": "Publishing organization." },
-            "publication_date": { "type": "string", "description": "Publication date if found (ISO 8601)." },
-            "page_count": { "type": "integer", "description": "Number of pages processed." },
-            "artifact_type": { "type": "string", "description": "Type of source artifact processed." },
-            "campaign_name": { "type": "string", "description": "Named campaign or operation if identified." },
-            "attributed_actor": { "type": "string", "description": "Threat actor attribution if stated." },
+            "title": {
+              "type": "string",
+              "description": "Report title if identifiable."
+            },
+            "source_organization": {
+              "type": "string",
+              "description": "Publishing organization."
+            },
+            "publication_date": {
+              "type": "string",
+              "description": "Publication date if found (ISO 8601)."
+            },
+            "page_count": {
+              "type": "integer",
+              "description": "Number of pages actually read and examined. Equal to pages_total unless max_pages capped the read."
+            },
+            "pages_total": {
+              "type": "integer",
+              "description": "Pages the source document actually has. Any gap from page_count is content that was never examined."
+            },
+            "pages_dropped": {
+              "type": "integer",
+              "description": "pages_total - page_count. Non-zero means incomplete coverage, so absence of an indicator is not evidence it is absent from the report."
+            },
+            "artifact_type": {
+              "type": "string",
+              "description": "Type of source artifact processed."
+            },
+            "campaign_name": {
+              "type": "string",
+              "description": "Named campaign or operation if identified."
+            },
+            "attributed_actor": {
+              "type": "string",
+              "description": "Threat actor attribution if stated."
+            },
             "attribution_confidence": {
               "type": "string",
-              "enum": ["low", "medium", "high"],
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
               "description": "Confidence level of actor attribution."
+            },
+            "actors": {
+              "type": "array",
+              "description": "Every threat actor named anywhere in the report, in order of first mention. attributed_actor above is the first of these and is kept for consumers that read it \u2014 a report describing two groups is not a report about whichever one a batch happened to name first.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Actor as named."
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "description": "Attribution confidence stated alongside this actor. Per actor, not per report: a later section qualifying an earlier assertion keeps its own confidence."
+                  },
+                  "batch_label": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Which call named it: a native page range (p12-19) or a chunk label (chunk 3/8)."
+                  }
+                }
+              }
+            },
+            "campaigns": {
+              "type": "array",
+              "description": "Every campaign or operation named anywhere in the report, in order of first mention. campaign_name above is the first of these.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Campaign as named."
+                  },
+                  "batch_label": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Which call named it."
+                  }
+                }
+              }
             }
           }
         },
@@ -37,16 +121,37 @@
           "description": "Extracted indicators of compromise.",
           "items": {
             "type": "object",
-            "required": ["ioc_type", "value", "confidence"],
+            "required": [
+              "ioc_type",
+              "value",
+              "confidence"
+            ],
             "properties": {
               "ioc_type": {
                 "type": "string",
-                "enum": ["ip", "domain", "hash_md5", "hash_sha1", "hash_sha256", "url", "email", "cve", "mitre_technique"]
+                "enum": [
+                  "ip",
+                  "domain",
+                  "hash_md5",
+                  "hash_sha1",
+                  "hash_sha256",
+                  "url",
+                  "email",
+                  "cve",
+                  "mitre_technique"
+                ]
               },
-              "value": { "type": "string", "description": "The indicator value." },
+              "value": {
+                "type": "string",
+                "description": "The indicator value."
+              },
               "confidence": {
                 "type": "string",
-                "enum": ["low", "medium", "high"],
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
                 "description": "Extraction confidence. 'low'=regex match only, 'medium'=regex + structural context, 'high'=LLM-confirmed."
               },
               "context": {
@@ -56,34 +161,145 @@
               },
               "priority": {
                 "type": "string",
-                "enum": ["low", "medium", "high"],
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
                 "description": "Operational priority based on LLM assessment of the IOC's role in the described attack."
               },
               "related_mitre": {
                 "type": "array",
-                "items": { "type": "string" },
+                "items": {
+                  "type": "string"
+                },
                 "description": "MITRE ATT&CK technique IDs associated with this IOC."
               },
               "defanged": {
                 "type": "boolean",
                 "description": "True if the original value was defanged (e.g., hxxp://, [.]com) and has been re-fanged."
+              },
+              "occurrences": {
+                "type": "array",
+                "description": "Every report of this indicator across the run, in merge order. (ioc_type, value) and (technique_id, tactic) are entity identities, not evidence identities \u2014 several procedures share one technique and one indicator carries several roles \u2014 so the canonical scalars above stay first-wins and each individual sighting is kept here.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "batch_label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Which call reported it: a native page range (p12-19) or a chunk label (chunk 3/8)."
+                    },
+                    "attempt_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Monotonic attempt number within the run, so a bisected retry can be told from its parent."
+                    },
+                    "page_start": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "First page of the reporting call's range. Null for a chunked-text call, which has no page range until Stage 2.5."
+                    },
+                    "page_end": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Last page of the reporting call's range. Null for a chunked-text call."
+                    },
+                    "context": {
+                      "type": "string",
+                      "description": "What this particular sighting said, which is the part a single canonical record cannot hold.",
+                      "maxLength": 300
+                    },
+                    "superseded": {
+                      "type": "boolean",
+                      "description": "Present and True when this sighting came from a truncated reply that a later attempt replaced. Kept for the audit trail; it sets no canonical value and raises no conflict."
+                    }
+                  }
+                }
+              },
+              "conflicts": {
+                "type": "array",
+                "description": "Present only when two standing reports of this entity disagreed on a scalar. Never auto-resolved: a later correction and a lower-confidence restatement are not distinguishable by value, so the first reading stays canonical and every reading is recorded. Non-empty makes analysis_status partial.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "The disagreeing field: confidence, priority, is_false_positive.",
+                      "enum": [
+                        "confidence",
+                        "priority",
+                        "is_false_positive"
+                      ]
+                    },
+                    "canonical": {
+                      "description": "The value reported above, from the first standing report."
+                    },
+                    "reported": {
+                      "description": "The value this other report gave instead."
+                    },
+                    "batch_label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "attempt_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "recovered_from_partial": {
+                "type": "boolean",
+                "description": "Present and True when this record survives only because a truncated reply mentioned it and the attempt that replaced that reply did not restate it. The evidence is kept rather than dropped, and the run is reported partial."
               }
             }
           }
         },
         "mitre_mappings": {
           "type": "array",
-          "description": "MITRE ATT&CK techniques identified in the report. Identity key is (technique_id, tactic) — the same technique may appear multiple times with different tactics when it serves different roles across attack paths.",
+          "description": "MITRE ATT&CK techniques identified in the report. Identity key is (technique_id, tactic) \u2014 the same technique may appear multiple times with different tactics when it serves different roles across attack paths.",
           "items": {
             "type": "object",
-            "required": ["technique_id", "technique_name"],
+            "required": [
+              "technique_id",
+              "technique_name"
+            ],
             "properties": {
-              "technique_id": { "type": "string", "description": "MITRE ATT&CK technique ID (e.g., T1566.001)." },
-              "technique_name": { "type": "string", "description": "Human-readable technique name." },
-              "tactic": { "type": "string", "description": "Parent tactic (e.g., Initial Access). Combined with technique_id forms the entry identity key." },
+              "technique_id": {
+                "type": "string",
+                "description": "MITRE ATT&CK technique ID (e.g., T1566.001), in the vocabulary of the bundled ATT&CK release."
+              },
+              "technique_id_retired_from": {
+                "type": "string",
+                "description": "Present only when the ID arrived under numbering ATT&CK has since retired and was remapped (e.g. T1562.001 -> T1685). The technique is unchanged; only its ID is."
+              },
+              "technique_name": {
+                "type": "string",
+                "description": "Human-readable technique name."
+              },
+              "tactic": {
+                "type": "string",
+                "description": "Parent tactic (e.g., Initial Access). Combined with technique_id forms the entry identity key."
+              },
               "confidence": {
                 "type": "string",
-                "enum": ["explicit", "inferred"],
+                "enum": [
+                  "explicit",
+                  "inferred"
+                ],
                 "description": "'explicit' if the technique ID appears in the report text. 'inferred' if the LLM mapped described behavior to a technique."
               },
               "report_context": {
@@ -93,26 +309,185 @@
               },
               "context_paths": {
                 "type": "array",
-                "items": { "type": "string" },
+                "items": {
+                  "type": "string"
+                },
                 "description": "Attack graph path IDs where this (technique_id, tactic) pair appears. Absent for entries not linked to a graph step."
               },
               "mitre_validated": {
                 "type": "boolean",
-                "description": "True if the technique_id exists in the official MITRE ATT&CK matrix. False indicates the ID was generated by the LLM and does not correspond to an official technique — the associated behavior may still be accurate."
+                "description": "True if the technique_id exists in the official MITRE ATT&CK matrix. False indicates the ID was generated by the LLM and does not correspond to an official technique \u2014 the associated behavior may still be accurate."
               },
               "tactic_mismatch": {
                 "type": "boolean",
-                "description": "Present and True when the assigned tactic is not in the official ATT&CK tactic list for this technique and could not be corrected deterministically. The technique_id is valid (mitre_validated=true) but the tactic needs analyst confirmation — see allowed_tactics. Absent when the tactic matches, was auto-corrected, or when no MITRE database is available."
+                "description": "Present and True when the assigned tactic is not in the official ATT&CK tactic list for this technique and could not be corrected deterministically. The technique_id is valid (mitre_validated=true) but the tactic needs analyst confirmation \u2014 see allowed_tactics. Absent when the tactic matches, was auto-corrected, or when no MITRE database is available."
               },
               "allowed_tactics": {
                 "type": "array",
-                "items": { "type": "string" },
+                "items": {
+                  "type": "string"
+                },
                 "description": "Present only with tactic_mismatch=true: the tactics ATT&CK allows for this technique, so the analyst can pick one or confirm the LLM's label from the report."
               },
               "tactic_corrected_from": {
                 "type": "string",
                 "description": "Present when the reconciler replaced the LLM's tactic label deterministically (retired tactic, Stealth/Defense Impairment sibling swap, or a technique with a single valid tactic). Holds the original label."
+              },
+              "occurrences": {
+                "type": "array",
+                "description": "Every report of this technique role across the run, in merge order. (ioc_type, value) and (technique_id, tactic) are entity identities, not evidence identities \u2014 several procedures share one technique and one indicator carries several roles \u2014 so the canonical scalars above stay first-wins and each individual sighting is kept here.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "batch_label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Which call reported it: a native page range (p12-19) or a chunk label (chunk 3/8)."
+                    },
+                    "attempt_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Monotonic attempt number within the run, so a bisected retry can be told from its parent."
+                    },
+                    "page_start": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "First page of the reporting call's range. Null for a chunked-text call, which has no page range until Stage 2.5."
+                    },
+                    "page_end": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Last page of the reporting call's range. Null for a chunked-text call."
+                    },
+                    "context": {
+                      "type": "string",
+                      "description": "What this particular sighting said, which is the part a single canonical record cannot hold.",
+                      "maxLength": 300
+                    },
+                    "superseded": {
+                      "type": "boolean",
+                      "description": "Present and True when this sighting came from a truncated reply that a later attempt replaced. Kept for the audit trail; it sets no canonical value and raises no conflict."
+                    }
+                  }
+                }
+              },
+              "conflicts": {
+                "type": "array",
+                "description": "Present only when two standing reports of this entity disagreed on a scalar. Never auto-resolved: a later correction and a lower-confidence restatement are not distinguishable by value, so the first reading stays canonical and every reading is recorded. Non-empty makes analysis_status partial.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "The disagreeing field: confidence. Not technique_name \u2014 two batches naming one technique differently agree about the technique, and the reconciler overwrites the name from the local ATT&CK lookup anyway.",
+                      "enum": [
+                        "confidence"
+                      ]
+                    },
+                    "canonical": {
+                      "description": "The value reported above, from the first standing report."
+                    },
+                    "reported": {
+                      "description": "The value this other report gave instead."
+                    },
+                    "batch_label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "attempt_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "recovered_from_partial": {
+                "type": "boolean",
+                "description": "Present and True when this record survives only because a truncated reply mentioned it and the attempt that replaced that reply did not restate it. The evidence is kept rather than dropped, and the run is reported partial."
               }
+            }
+          }
+        },
+        "attack_graph": {
+          "type": "object",
+          "description": "Multi-path attack graph the LLM described. Empty when no path was reported. Paths from separate calls are unioned and reconciled on their step sequence, not on path_id \u2014 separate calls coin slugs independently, so a shared slug is not evidence of a shared path.",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path_id": {
+                    "type": "string",
+                    "description": "Slug for this path. Namespaced with the reporting batch label (p11-20:slug) only when another, structurally different path already claimed the slug, so ids are unchanged on any run without a collision."
+                  },
+                  "original_path_id": {
+                    "type": "string",
+                    "description": "The slug the model emitted, present only when path_id was namespaced away from it."
+                  },
+                  "batch_labels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Every call that reported this path. More than one means independent calls described the same step sequence."
+                  },
+                  "recovered_from_partial": {
+                    "type": "boolean",
+                    "description": "This path survives only from a truncated reply that the attempt replacing it did not restate."
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "technique_id": {
+                          "type": "string"
+                        },
+                        "tactic": {
+                          "type": "string"
+                        },
+                        "leads_to": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Technique ids this step enables. Technique ids, never path ids."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "convergence_points": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Technique ids several paths pass through."
+            },
+            "branch_points": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Technique ids from which paths diverge."
             }
           }
         },
@@ -120,15 +495,28 @@
           "type": "object",
           "description": "Aggregated statistics for quick reference.",
           "properties": {
-            "total_iocs": { "type": "integer" },
+            "total_iocs": {
+              "type": "integer"
+            },
             "ioc_breakdown": {
               "type": "object",
-              "additionalProperties": { "type": "integer" },
+              "additionalProperties": {
+                "type": "integer"
+              },
               "description": "Count of IOCs by type, e.g., {\"ip\": 23, \"domain\": 12}."
             },
-            "high_priority_count": { "type": "integer", "description": "Number of high-priority IOCs." },
-            "mitre_technique_count": { "type": "integer", "description": "Total number of (technique_id, tactic) role entries." },
-            "unique_technique_count": { "type": "integer", "description": "Count of distinct technique_ids." },
+            "high_priority_count": {
+              "type": "integer",
+              "description": "Number of high-priority IOCs."
+            },
+            "mitre_technique_count": {
+              "type": "integer",
+              "description": "Total number of (technique_id, tactic) role entries."
+            },
+            "unique_technique_count": {
+              "type": "integer",
+              "description": "Count of distinct technique_ids."
+            },
             "document_profile": {
               "type": "object",
               "description": "Deterministic pre-flight description of the document: pages, text size, regex candidate counts (total, by type, per page), estimated output tokens and a 'narrative' / 'ioc_dense' classification. Computed before any LLM call."
@@ -139,18 +527,140 @@
             },
             "timings": {
               "type": "object",
-              "additionalProperties": { "type": "number" },
+              "additionalProperties": {
+                "type": "number"
+              },
               "description": "Seconds spent per phase: extract_s, native_s, chunks_s, reconcile_s, total_s."
             },
-            "tactic_corrected_count": { "type": "integer", "description": "Mapping entries whose tactic was corrected automatically against ATT&CK." },
-            "tactic_mismatch_count": { "type": "integer", "description": "Mapping entries whose tactic still needs analyst confirmation." },
+            "tactic_corrected_count": {
+              "type": "integer",
+              "description": "Mapping entries whose tactic was corrected automatically against ATT&CK."
+            },
+            "tactic_mismatch_count": {
+              "type": "integer",
+              "description": "Mapping entries whose tactic still needs analyst confirmation."
+            },
             "confidence_distribution": {
               "type": "object",
               "properties": {
-                "low": { "type": "integer" },
-                "medium": { "type": "integer" },
-                "high": { "type": "integer" }
+                "low": {
+                  "type": "integer"
+                },
+                "medium": {
+                  "type": "integer"
+                },
+                "high": {
+                  "type": "integer"
+                }
               }
+            },
+            "truncated": {
+              "type": "boolean",
+              "description": "True when at least one chunk's reply stopped at the output cap, so its candidates were only partly assessed."
+            },
+            "truncated_chunks": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              },
+              "description": "1-based indices of the chunks that were cut off. Empty when none were."
+            },
+            "analysis_status": {
+              "type": "string",
+              "enum": [
+                "complete",
+                "partial",
+                "degraded"
+              ],
+              "description": "Whether this run did the work it set out to do. complete: nothing truncated, no pages dropped, no fallback. partial: content is missing but every cause is known and named in analysis_notes. degraded: the tool fell back to a materially worse input path, so part of the output is not the kind of answer it normally produces."
+            },
+            "analysis_notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "One short line per cause behind analysis_status. Rendered ahead of the content in summarize_for_llm, which PluginExecutor caps at 2000 characters."
+            },
+            "chunks_attempted": {
+              "type": "integer",
+              "description": "How many chunked LLM calls this ingestion set out to make. 0 when the native path covered the whole document."
+            },
+            "chunks_failed": {
+              "type": "integer",
+              "description": "Chunks that produced no usable result. Their candidates were never assessed, so a non-zero value makes analysis_status partial."
+            },
+            "chunk_failure_breakdown": {
+              "type": "object",
+              "properties": {
+                "json_parse": {
+                  "type": "integer"
+                },
+                "llm_call": {
+                  "type": "integer"
+                },
+                "exception": {
+                  "type": "integer"
+                }
+              },
+              "description": "Why chunks failed, split by cause. A JSON parse failure means the model answered and the answer was unusable; an llm_call failure means it did not answer."
+            },
+            "candidates_rejected": {
+              "type": "integer",
+              "description": "Candidates the model assessed as false positives. When every candidate is rejected the IOC list is legitimately empty and ingestion_mode stays 'llm'."
+            },
+            "candidates_unassessed": {
+              "type": "integer",
+              "description": "Regex candidates the model was given but returned no verdict on \u2014 neither accepted nor ruled out. Counted against what actually reached a prompt, not against the whole-document regex pass. Non-zero makes analysis_status partial. mitre_technique matches are excluded: they are requested as techniques, not indicators."
+            },
+            "candidates_not_submitted": {
+              "type": "integer",
+              "description": "Regex candidates that reached no prompt at all, so no model was asked about them. Distinct from candidates_unassessed, which is the model's silence about a candidate it was given; this is a coverage gap in the batching. Non-zero makes analysis_status partial."
+            },
+            "merge_stats": {
+              "type": "object",
+              "description": "What the merge did, as opposed to what it produced. Empty on a run that never reached the merge (regex_only, or every call failing).",
+              "properties": {
+                "conflicts": {
+                  "type": "integer",
+                  "description": "Scalar disagreements recorded across all entities. Non-zero makes analysis_status partial."
+                },
+                "recovered_from_partial": {
+                  "type": "integer",
+                  "description": "Entities that survive only from a truncated reply its retry did not restate. Non-zero makes analysis_status partial."
+                },
+                "superseded_results": {
+                  "type": "integer",
+                  "description": "Truncated native partials that a later attempt covered in full, by page-range containment, and which therefore no longer supply canonical values."
+                },
+                "occurrences": {
+                  "type": "integer",
+                  "description": "Total sightings kept across every indicator and technique role."
+                },
+                "paths_namespaced": {
+                  "type": "integer",
+                  "description": "Attack paths whose path_id was rewritten because another, structurally different path had already claimed that slug. Separate calls coin slugs independently; before this the later path was dropped. Zero on any run with no collision, which is every single-batch run."
+                }
+              }
+            },
+            "rejected_with_dissent": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Indicator values dropped as false positives although another batch assessed them as real. The rejection stands (a rejection is an answer, per the Stage 1.5 rule against reinstating one), so these records are absent from iocs and their conflict entries are absent with them \u2014 this list and the REJECTED OVER DISSENT note are the only record. Capped at 25 values; the note carries the full count. Non-empty makes analysis_status partial.",
+              "maxItems": 25
+            },
+            "native_attempts": {
+              "type": "integer",
+              "description": "Native document calls that returned parseable JSON, including the partials later superseded. 0 on a run with no native path. Separate from chunks_attempted, which counts only chunked-text calls and is 0 on a clean native run."
+            },
+            "coverage_unit": {
+              "type": "string",
+              "enum": [
+                "pages",
+                "lines"
+              ],
+              "description": "What pages_total/pages_read count. A PDF is measured in pages; every other artifact type in lines. Without this a 114-line summary reads as a 114-page report."
             }
           }
         }
@@ -161,16 +671,30 @@
       "items": {
         "type": "object",
         "properties": {
-          "artifact_id": { "type": "string" },
-          "artifact_type": { "type": "string" },
-          "file_path": { "type": "string" },
-          "description": { "type": "string" }
+          "artifact_id": {
+            "type": "string"
+          },
+          "artifact_type": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
         }
       },
       "description": "Artifacts registered as output of this tool execution."
     },
-    "error_code": { "type": "string" },
-    "message": { "type": "string" },
-    "details": { "type": "object" }
+    "error_code": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "details": {
+      "type": "object"
+    }
   }
 }

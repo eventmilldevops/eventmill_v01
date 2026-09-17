@@ -1,8 +1,14 @@
 """
-Event Mill LLM Client
+Event Mill LLM Dispatcher
 
-MCP-based LLM client that implements the LLMQueryInterface protocol.
-The framework owns the MCP connection; plugins access LLM via this client.
+Routes queries across a provider's model tiers, clamps output budgets, guards
+oversized documents and retries retired model ids. It holds LLMModelClient
+instances and talks to them through that interface only.
+
+No vendor SDK is imported here, and none may be: the moment the dispatcher
+knows how one provider ships a document or phrases an error, adding the next
+provider means editing this file. tests/framework/test_provider_seam.py
+enforces that mechanically.
 """
 
 from __future__ import annotations
@@ -17,20 +23,20 @@ from typing import Any
 
 from ..plugins.protocol import LLMQueryInterface, LLMResponse, QueryHints, ArtifactRef
 from .backends.base import DocumentPart
+from .model_client import (
+    TIER_CHANGE_KINDS,
+    LLMModelClient,
+    compose_prompt,
+)
 from .providers import (
+    DEFAULT_PROVIDER_ID,
     TierSpec,
     default_media_resolution,
     load_tier_specs,
     pdf_handling,
     tokens_per_pdf_page,
+    vendor_of,
 )
-
-try:
-    from google import genai
-    from google.genai import types as genai_types
-    _HAS_GENAI = True
-except ImportError:
-    _HAS_GENAI = False
 
 logger = logging.getLogger("eventmill.framework.llm")
 
@@ -42,487 +48,58 @@ _NATIVE_CAPABILITY_BY_MIME = {
 # A 404 in status position, not a "404" anywhere in the message — request ids,
 # byte offsets and echoed log lines all contain those, and a false positive
 # permanently substitutes the tier's model for the rest of the session.
+# Used only by the string-matching fallback, for a client that classified
+# nothing; a client that sets error_kind never reaches it.
 _HTTP_404_RE = re.compile(r"(?:^|[\s:\[(])404(?=[\s:,\])]|$)")
 
-# QueryHints string values -> SDK enum members (Gemini 3.x).
-_THINKING_LEVELS = {"minimal", "low", "medium", "high"}
-_MEDIA_RESOLUTIONS = {"low", "medium", "high"}
+
+def _provider_of(client: LLMModelClient) -> str:
+    """Provider a client belongs to, defaulting for a fake that declares none."""
+    return getattr(client, "provider_id", None) or DEFAULT_PROVIDER_ID
 
 
-def _build_config(
-    system_context: str | None,
-    max_tokens: int,
-    hints: QueryHints | None = None,
-) -> Any:
-    """Build a GenerateContentConfig from max_tokens, system context, and hints.
+def _by_provider_tier(
+    clients: dict[Any, LLMModelClient],
+) -> dict[tuple[str, str], LLMModelClient]:
+    """Normalise a client map to (provider_id, tier) keys.
 
-    Shared by the text, multimodal, and document paths so the Gemini 3.x
-    controls are applied consistently rather than in three places.
-
-    Unset hints leave the provider default in place. Note that Gemini 3.x
-    deprecates temperature/top_p/top_k — this deliberately sets none of them.
+    Accepts the tier-keyed form every caller used before providers were
+    separable — unambiguous, because the client carries its own provider_id.
+    Keeping both shapes valid is what let this change stay inside the
+    dispatcher instead of rippling through the shell and the suite.
     """
-    config = genai_types.GenerateContentConfig(max_output_tokens=max_tokens)
-    if system_context:
-        config.system_instruction = system_context
-
-    if hints is None:
-        return config
-
-    # Deep reasoning implies maximum thinking unless the caller was explicit.
-    level = hints.thinking_level
-    if level is None and hints.needs_reasoning:
-        level = "high"
-    if level:
-        if level in _THINKING_LEVELS:
-            # Both fields are enum-typed in the SDK. Passing the string works by
-            # coercion but emits a Pydantic serializer warning on every call, so
-            # look the member up instead.
-            config.thinking_config = genai_types.ThinkingConfig(
-                thinking_level=genai_types.ThinkingLevel[level.upper()],
-            )
+    out: dict[tuple[str, str], LLMModelClient] = {}
+    for key, client in clients.items():
+        if isinstance(key, tuple):
+            out[(str(key[0]), str(key[1]))] = client
         else:
-            logger.warning("Ignoring unknown thinking_level %r", level)
-
-    if hints.media_resolution:
-        res = hints.media_resolution
-        if res in _MEDIA_RESOLUTIONS:
-            config.media_resolution = genai_types.MediaResolution[
-                f"MEDIA_RESOLUTION_{res.upper()}"
-            ]
-        else:
-            logger.warning("Ignoring unknown media_resolution %r", res)
-
-    return config
+            out[(_provider_of(client), str(key))] = client
+    return out
 
 
-def _finish_reason(response: Any) -> str | None:
-    """Stop reason of the first candidate, as a plain string.
+def _specs_by_provider_tier(
+    specs: dict[Any, TierSpec],
+    providers: tuple[str, ...] = (),
+) -> dict[tuple[str, str], TierSpec]:
+    """Normalise a tier-spec map to (provider_id, tier) keys.
 
-    "MAX_TOKENS" means the reply was cut off at the output cap — the SDK
-    still returns text and no error, so a caller that ignores this treats a
-    half-written answer as a complete one.
+    A tier-keyed dict means "the specs for this dispatcher's clients", so it is
+    attached to the providers actually bound rather than to whatever
+    provider_id the spec objects happen to carry. Those two can disagree — a
+    caller building TierSpec values by hand gets the default provider_id while
+    its clients declare their own — and a mismatch is invisible: every lookup
+    misses, so clamping silently falls back to defaults and a retired-model
+    retry quietly stops happening.
     """
-    candidates = getattr(response, "candidates", None)
-    if not candidates:
-        return None
-    reason = getattr(candidates[0], "finish_reason", None)
-    if reason is None:
-        return None
-    return str(getattr(reason, "name", None) or reason)
-
-
-def _model_version(response: Any) -> str | None:
-    """Model id the provider reports having served the request.
-
-    Distinct from the id the client was configured with: an alias resolves to a
-    dated build, so a provider-side version change inside one alias is
-    invisible unless this is recorded. Returns None when the response carries
-    nothing — older SDKs and the error paths both omit it.
-    """
-    version = getattr(response, "model_version", None)
-    return str(version) if version else None
-
-
-def _usage(response: Any) -> dict[str, int] | None:
-    """Token counts from the response, including thinking tokens."""
-    um = getattr(response, "usage_metadata", None)
-    if not um:
-        return None
-    prompt = getattr(um, "prompt_token_count", 0) or 0
-    completion = getattr(um, "candidates_token_count", 0) or 0
-    thoughts = getattr(um, "thoughts_token_count", 0) or 0
-    return {
-        "prompt_tokens": prompt,
-        "completion_tokens": completion,
-        "thinking_tokens": thoughts,
-        "total_tokens": getattr(um, "total_token_count", 0)
-        or (prompt + completion + thoughts),
-    }
-
-
-class MCPLLMClient:
-    """LLM client communicating via Model Context Protocol.
-    
-    This is the framework's LLM integration point. Plugins receive
-    a reference to this client via ExecutionContext.llm_query.
-    
-    The client abstracts away the specific model provider (Gemini, Claude,
-    GPT, etc.) behind the MCP transport layer.
-    """
-    
-    def __init__(
-        self,
-        model_id: str = "gemini-3.8-flash",
-        transport: str = "stdio",
-        endpoint: str | None = None,
-        max_retries: int = 3,
-    ):
-        """Initialize MCP LLM client.
-        
-        Args:
-            model_id: Model identifier for the LLM provider.
-            transport: MCP transport type (stdio or sse).
-            endpoint: Provider endpoint URL (if applicable).
-            max_retries: Maximum retry attempts for failed queries.
-        """
-        self.model_id = model_id
-        self.transport = transport
-        self.endpoint = endpoint
-        self.max_retries = max_retries
-        self._connected = False
-        self._mcp_session = None
-        self._genai_client = None
-        self._api_key_env_var: str | None = None
-        self._total_tokens_used = 0
-    
-    @property
-    def connected(self) -> bool:
-        """Whether the client is connected to the MCP server."""
-        return self._connected
-    
-    @property
-    def total_tokens_used(self) -> int:
-        """Total tokens consumed across all queries in this session."""
-        return self._total_tokens_used
-    
-    def connect(self, api_key: str | None = None) -> bool:
-        """Establish connection to the LLM provider.
-        
-        Args:
-            api_key: API key for the provider. If None, uses the
-                     key from the environment variable set during init.
-        
-        Returns:
-            True if connection succeeded.
-        """
-        if not _HAS_GENAI:
-            logger.error("google-generativeai package not installed")
-            self._connected = False
-            return False
-        
-        resolved_key = api_key or os.environ.get(self._api_key_env_var or "", "")
-        if not resolved_key:
-            logger.error("No API key available for %s", self.model_id)
-            self._connected = False
-            return False
-        
-        try:
-            self._genai_client = genai.Client(
-                api_key=resolved_key,
-                http_options={"timeout": 180_000},  # 180 s per request
-            )
-            self._connected = True
-            logger.info(
-                "Connected to %s via Google GenAI SDK", self.model_id,
-            )
-            return True
-        except Exception as e:
-            logger.error("Failed to connect to %s: %s", self.model_id, e)
-            self._connected = False
-            return False
-    
-    async def disconnect(self) -> None:
-        """Close MCP connection."""
-        if self._mcp_session:
-            # Close MCP session
-            pass
-        self._connected = False
-        logger.info("Disconnected from MCP")
-    
-    def query_text(
-        self,
-        prompt: str,
-        system_context: str | None = None,
-        max_tokens: int = 4096,
-        grounding_data: list[str] | None = None,
-        hints: QueryHints | None = None,
-    ) -> LLMResponse:
-        """Send a text prompt to the LLM via MCP.
-
-        Args:
-            prompt: The user prompt.
-            system_context: Optional system context override.
-            max_tokens: Maximum tokens in response.
-            grounding_data: Additional context strings.
-            hints: Tier selection is a no-op here (a single client has one
-                   model), but generation controls — thinking_level,
-                   media_resolution, needs_reasoning — are applied.
-
-        Returns:
-            LLMResponse with text or error.
-        """
-        if not self._connected:
-            return LLMResponse(
-                ok=False,
-                error="MCP connection not established",
-            )
-        
-        # Build the full prompt with grounding data
-        full_prompt = self._build_prompt(prompt, grounding_data)
-        
-        logger.debug(
-            "LLM query: %d chars prompt, max_tokens=%d",
-            len(full_prompt),
-            max_tokens,
-        )
-        
-        try:
-            # MCP query execution will be implemented when
-            # the mcp package is integrated. For now, return
-            # a placeholder indicating the query would be sent.
-            response_text, usage, reason, served = self._execute_mcp_query(
-                prompt=full_prompt,
-                system_context=system_context,
-                max_tokens=max_tokens,
-                hints=hints,
-            )
-
-            return LLMResponse(
-                ok=True,
-                text=response_text,
-                model_used=self.model_id,
-                model_version=served,
-                token_usage=usage,
-                finish_reason=reason,
-                truncated=reason == "MAX_TOKENS",
-            )
-        except Exception as e:
-            if self._is_quota_exhausted(e):
-                logger.debug("Quota exhausted on %s (handled by dispatcher)", self.model_id)
-            else:
-                logger.error("LLM query failed: %s", e)
-            return LLMResponse(
-                ok=False,
-                error=str(e),
-            )
-
-    def query_multimodal(
-        self,
-        prompt: str,
-        image_data: bytes,
-        image_format: str,
-        system_context: str | None = None,
-        max_tokens: int = 4096,
-        hints: QueryHints | None = None,
-    ) -> LLMResponse:
-        """Send a multimodal prompt to the LLM via MCP.
-
-        Args:
-            prompt: The text prompt.
-            image_data: Raw image bytes.
-            image_format: Image format (jpeg, png).
-            system_context: Optional system context.
-            max_tokens: Maximum tokens in response.
-            hints: Tier selection is a no-op here; generation controls
-                   (thinking_level, media_resolution) are applied.
-
-        Returns:
-            LLMResponse with text or error.
-        """
-        if not self._connected:
-            return LLMResponse(
-                ok=False,
-                error="MCP connection not established",
-            )
-        
-        logger.debug(
-            "Multimodal LLM query: %d chars prompt, %d bytes image (%s)",
-            len(prompt),
-            len(image_data),
-            image_format,
-        )
-        
-        try:
-            response_text, served = self._execute_mcp_multimodal_query(
-                prompt=prompt,
-                image_data=image_data,
-                image_format=image_format,
-                system_context=system_context,
-                max_tokens=max_tokens,
-                hints=hints,
-            )
-
-            return LLMResponse(
-                ok=True,
-                text=response_text,
-                model_used=self.model_id,
-                model_version=served,
-                token_usage={"prompt_tokens": 0, "completion_tokens": 0},
-            )
-        except Exception as e:
-            if self._is_quota_exhausted(e):
-                logger.debug("Quota exhausted on %s (handled by dispatcher)", self.model_id)
-            else:
-                logger.error("Multimodal LLM query failed: %s", e)
-            return LLMResponse(
-                ok=False,
-                error=str(e),
-            )
-    
-    def _build_prompt(
-        self,
-        prompt: str,
-        grounding_data: list[str] | None,
-    ) -> str:
-        """Build full prompt with grounding data prefix."""
-        parts = []
-        
-        if grounding_data:
-            parts.append("--- Context ---")
-            for i, data in enumerate(grounding_data, 1):
-                parts.append(f"[Context {i}]")
-                parts.append(data)
-            parts.append("--- End Context ---\n")
-        
-        parts.append(prompt)
-        return "\n".join(parts)
-    
-    @staticmethod
-    def _is_quota_exhausted(exc: Exception) -> bool:
-        """Return True for permanent quota exhaustion (free-tier daily/per-minute cap).
-        These errors will NOT recover on retry — fail fast so the dispatcher can
-        fall back to another model.
-        """
-        msg = str(exc)
-        return "RESOURCE_EXHAUSTED" in msg and "free_tier" in msg
-
-    @staticmethod
-    def _is_retriable(exc: Exception) -> bool:
-        """Return True for transient API errors that warrant a retry.
-        Quota exhaustion is excluded — it will not recover within the retry window.
-        """
-        if MCPLLMClient._is_quota_exhausted(exc):
-            return False
-        msg = str(exc)
-        # Google emits the screaming-snake form ("504 DEADLINE_EXCEEDED"), never
-        # the camelCase one, so matching only "DeadlineExceeded" made a gateway
-        # timeout fatal while 503 and 429 both retried — the one failure class
-        # long generations actually hit was the one that never backed off.
-        return any(marker in msg for marker in (
-            "503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED",
-            "504", "DEADLINE_EXCEEDED", "DeadlineExceeded",
-            "Timeout", "timed out",
-        ))
-
-    def _execute_mcp_query(
-        self,
-        prompt: str,
-        system_context: str | None,
-        max_tokens: int,
-        hints: QueryHints | None = None,
-    ) -> tuple[str, dict[str, int] | None, str | None, str | None]:
-        """Execute a text query via Google GenAI SDK (MCP bridge).
-
-        Returns:
-            Tuple of (response_text, token_usage, finish_reason, model_version).
-
-        Uses google.genai directly until full MCP transport
-        is integrated.
-        """
-        if self._genai_client is None:
-            raise RuntimeError("Client not initialised — call connect() first")
-
-        config = _build_config(system_context, max_tokens, hints)
-
-        last_exc: Exception | None = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                response = self._genai_client.models.generate_content(
-                    model=self.model_id,
-                    contents=prompt,
-                    config=config,
-                )
-                text = response.text or ""
-                reason = _finish_reason(response)
-                usage = _usage(response)
-                if usage:
-                    self._total_tokens_used += usage["total_tokens"]
-                if reason == "MAX_TOKENS":
-                    logger.warning(
-                        "Reply hit the %d-token output cap on %s (%s thinking "
-                        "tokens spent) — the text is partial",
-                        max_tokens, self.model_id,
-                        (usage or {}).get("thinking_tokens", "?"),
-                    )
-                return text, usage, reason, _model_version(response)
-            except Exception as exc:
-                if self._is_quota_exhausted(exc):
-                    logger.warning(
-                        "Quota exhausted on %s — will try fallback model",
-                        self.model_id,
-                    )
-                    raise
-                if attempt < self.max_retries and self._is_retriable(exc):
-                    wait = 2 ** attempt  # 1 s, 2 s, 4 s …
-                    logger.warning(
-                        "LLM transient error (attempt %d/%d), retrying in %ds",
-                        attempt + 1,
-                        self.max_retries + 1,
-                        wait,
-                    )
-                    time.sleep(wait)
-                    last_exc = exc
-                else:
-                    raise
-        raise last_exc  # type: ignore[misc]
-
-    def _execute_mcp_multimodal_query(
-        self,
-        prompt: str,
-        image_data: bytes,
-        image_format: str,
-        system_context: str | None,
-        max_tokens: int,
-        hints: QueryHints | None = None,
-    ) -> tuple[str, str | None]:
-        """Execute a multimodal query via Google GenAI SDK (MCP bridge).
-
-        Returns:
-            Tuple of (response_text, model_version).
-        """
-        if self._genai_client is None:
-            raise RuntimeError("Client not initialised — call connect() first")
-        
-        mime_map = {"jpeg": "image/jpeg", "jpg": "image/jpeg", "png": "image/png"}
-        mime_type = mime_map.get(image_format.lower(), f"image/{image_format}")
-        
-        config = _build_config(system_context, max_tokens, hints)
-
-        contents = [
-            prompt,
-            genai_types.Part.from_bytes(data=image_data, mime_type=mime_type),
-        ]
-        
-        last_exc: Exception | None = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                response = self._genai_client.models.generate_content(
-                    model=self.model_id,
-                    contents=contents,
-                    config=config,
-                )
-                return response.text or "", _model_version(response)
-            except Exception as exc:
-                if self._is_quota_exhausted(exc):
-                    logger.warning(
-                        "Quota exhausted on %s — will try fallback model",
-                        self.model_id,
-                    )
-                    raise
-                if attempt < self.max_retries and self._is_retriable(exc):
-                    wait = 2 ** attempt
-                    logger.warning(
-                        "LLM multimodal transient error (attempt %d/%d), retrying in %ds",
-                        attempt + 1,
-                        self.max_retries + 1,
-                        wait,
-                    )
-                    time.sleep(wait)
-                    last_exc = exc
-                else:
-                    raise
-        raise last_exc  # type: ignore[misc]
+    out: dict[tuple[str, str], TierSpec] = {}
+    for key, spec in specs.items():
+        if isinstance(key, tuple):
+            out[(str(key[0]), str(key[1]))] = spec
+            continue
+        targets = providers or (getattr(spec, "provider_id", DEFAULT_PROVIDER_ID),)
+        for provider_id in targets:
+            out.setdefault((provider_id, str(key)), spec)
+    return out
 
 
 class LLMDispatcher:
@@ -548,18 +125,47 @@ class LLMDispatcher:
     so a heavy-tier plugin still runs when only Flash is bound.
     """
 
-    def __init__(self, clients: dict[str, MCPLLMClient],
+    # Read by TierScopedLLMClient to decide whether it may pass a provider
+    # scope down. Duck-typed rather than an isinstance check, so a test fake
+    # can opt in or out without importing this class.
+    accepts_provider_scope = True
+
+    def __init__(self, clients: dict[Any, LLMModelClient],
                  preferred_tier: str | None = None,
-                 tier_specs: dict[str, TierSpec] | None = None) -> None:
-        self._clients = clients
+                 tier_specs: dict[Any, TierSpec] | None = None,
+                 preferred_provider: str | None = None) -> None:
+        # Keyed by (provider_id, tier). Keyed by tier alone it could not
+        # express two vendors bound at once: registering an Anthropic client
+        # under "heavy" would evict Gemini Pro and send every heavy plugin to
+        # a provider nobody selected.
+        #
+        # A tier-keyed dict is still accepted and normalised, because each
+        # client already knows its own provider_id — so every existing caller
+        # keeps working and the change stays inside this class.
+        self._clients = _by_provider_tier(clients)
         # When set, this tier is preferred for callers that pass no hints.
         # Lets explicit 'connect gemini-3.8-flash' keep Flash as primary.
         self._preferred_tier = preferred_tier
-        # Per-tier capability specs from the provider manifest. Used to clamp
-        # max_tokens to what the selected model can actually emit.
-        self._tier_specs = (
-            tier_specs if tier_specs is not None else load_tier_specs()
-        )
+        # The provider serving callers that name none. First one bound unless
+        # stated, so a single-provider session behaves exactly as before.
+        self._preferred_provider = preferred_provider
+        # Capability specs per (provider_id, tier), used to clamp max_tokens
+        # to what the selected model can actually emit. Loaded per provider
+        # when not supplied, so a second vendor's caps are never read off the
+        # first vendor's manifest.
+        if tier_specs is not None:
+            self._tier_specs = _specs_by_provider_tier(
+                tier_specs, providers=tuple(dict.fromkeys(
+                    p for p, _ in self._clients
+                )),
+            )
+        else:
+            self._tier_specs = {}
+            for provider_id in dict.fromkeys(p for p, _ in self._clients):
+                for tier, spec in load_tier_specs(provider_id).items():
+                    self._tier_specs[(provider_id, tier)] = spec
+            if not self._tier_specs:
+                self._tier_specs = _specs_by_provider_tier(load_tier_specs())
         # Output caps keyed by model id, so clamping follows the model that
         # actually runs — an EVENTMILL_MODEL_* override or a retired-model
         # substitution changes the model without changing the tier.
@@ -580,22 +186,62 @@ class LLMDispatcher:
 
     @property
     def model_id(self) -> str:
-        parts = [c.model_id for tier in ("light", "heavy")
-                 if (c := self._clients.get(tier)) and c.connected]
+        parts = [c.model_id
+                 for provider_id in self.bound_providers()
+                 for tier in ("light", "heavy")
+                 if (c := self._clients.get((provider_id, tier))) and c.connected]
         return " + ".join(parts) if parts else "disconnected"
 
     @property
     def total_tokens_used(self) -> int:
         return sum(c.total_tokens_used for c in self._clients.values())
 
+    def bound_providers(self) -> tuple[str, ...]:
+        """Providers with at least one connected client, in bind order."""
+        return tuple(dict.fromkeys(
+            provider_id for (provider_id, _), c in self._clients.items()
+            if c.connected
+        ))
+
+    @property
+    def default_provider(self) -> str | None:
+        """Provider serving callers that name none.
+
+        The one explicitly preferred if it is actually bound, else the first
+        bound. With a single provider this is that provider, which is why a
+        one-vendor session is unaffected by any of this.
+        """
+        bound = self.bound_providers()
+        if self._preferred_provider and self._preferred_provider in bound:
+            return self._preferred_provider
+        return bound[0] if bound else None
+
+    def client_at(
+        self, tier: str, provider: str | None = None,
+    ) -> LLMModelClient | None:
+        """The client registered for a tier of a provider, if any.
+
+        The supported way to ask what is bound where. Callers used to index
+        the client map by tier directly, which stopped meaning anything once
+        two vendors could hold the same tier at once.
+        """
+        selected = provider or self.default_provider
+        if selected is None:
+            return None
+        return self._clients.get((selected, tier))
+
     def connected_models(self) -> list[dict[str, str]]:
-        return [{"tier": tier, "model_id": c.model_id}
-                for tier, c in self._clients.items() if c.connected]
+        # provider_id rides along because with two vendors bound, "heavy" no
+        # longer identifies a model — and a run record that cannot say which
+        # provider served it is not interpretable afterwards.
+        return [{"provider_id": provider_id, "tier": tier, "model_id": c.model_id}
+                for (provider_id, tier), c in self._clients.items() if c.connected]
 
     # --- Routing ---------------------------------------------------------------
 
     def _route(self, max_tokens: int, hints: QueryHints | None = None,
-               document_mime: str | None = None) -> MCPLLMClient:
+               document_mime: str | None = None,
+               provider: str | None = None) -> LLMModelClient:
         """Select the appropriate client based on hints + capabilities.
 
         Routing priority:
@@ -624,48 +270,115 @@ class LLMDispatcher:
             # cheap default; anything needing depth says so in its manifest.
             order = ("light", "heavy")
 
+        # Provider is resolved before tier, and never falls through to
+        # another vendor. An operator running a module on Anthropic to compare
+        # it against Gemini gets Anthropic or an error — silently answering
+        # from the other vendor would make the comparison meaningless and the
+        # output unattributable.
+        selected = provider or self.default_provider
+        if selected is None:
+            raise RuntimeError("No LLM client connected — run 'connect' first")
+        if provider and provider not in self.bound_providers():
+            raise RuntimeError(
+                f"Provider {provider!r} is not bound — bound: "
+                f"{', '.join(self.bound_providers()) or 'none'}"
+            )
+
         if document_mime:
-            order = self._prefer_native_capable(order, document_mime)
+            order = self._prefer_native_capable(order, document_mime, selected)
 
         for tier in order:
-            c = self._clients.get(tier)
+            c = self._clients.get((selected, tier))
             if c and c.connected:
                 return c
-        # Nothing in the preferred order is connected. Accept any connected
-        # client rather than failing (e.g. a legacy single-key setup).
-        for c in self._clients.values():
-            if c.connected:
+        # No tier of the selected provider is in the preferred order. Take any
+        # connected tier of that same provider rather than failing (e.g. a
+        # legacy single-key setup, or a manifest declaring one tier).
+        for (provider_id, _), c in self._clients.items():
+            if provider_id == selected and c.connected:
                 return c
-        raise RuntimeError("No LLM client connected — run 'connect' first")
+        raise RuntimeError(
+            f"No connected client for provider {selected!r} — run 'connect' first"
+        )
 
     def _prefer_native_capable(
-        self, order: tuple[str, ...], document_mime: str,
+        self, order: tuple[str, ...], document_mime: str, provider: str,
     ) -> tuple[str, ...]:
         """Move tiers that natively handle this MIME type to the front.
 
         Relative order within each group is preserved, so this only breaks
         ties — it never overrides an explicit tier choice that is capable.
+        Scoped to one provider: native support is a property of a model, and
+        Gemini reading PDFs natively says nothing about another vendor's tier.
         """
         capability = _NATIVE_CAPABILITY_BY_MIME.get(document_mime)
         if not capability or not self._tier_specs:
             return order
         capable = [
             t for t in order
-            if capability in (self._tier_specs[t].capabilities
-                              if t in self._tier_specs else ())
+            if capability in (
+                self._tier_specs[(provider, t)].capabilities
+                if (provider, t) in self._tier_specs else ()
+            )
         ]
         if not capable:
             return order
         return tuple(capable) + tuple(t for t in order if t not in capable)
 
-    def _tier_of(self, client: MCPLLMClient) -> str | None:
-        """Reverse-lookup the tier a client is registered under."""
-        for tier, c in self._clients.items():
+    def _attributed(
+        self, result: LLMResponse, client: LLMModelClient,
+    ) -> LLMResponse:
+        """Ensure the response names the provider and vendor that served it.
+
+        Each client stamps its own provider_id and this does not override one.
+        It is a backstop: with several vendors bound concurrently, a response
+        that cannot say who produced it is not interpretable afterwards, and a
+        client that simply forgot would produce unattributable output rather
+        than an error. Too important to leave to every client getting it right.
+
+        Attributing to the routed client is correct even after a tier change or
+        a retired-model substitution: both stay within the same provider by
+        construction, so the vendor is unchanged either way.
+
+        Vendor is derived here rather than stamped by the client, because it is
+        a property of the provider manifest rather than of the SDK session —
+        one client class serves several providers, and asking each of them to
+        remember which lab it is speaking for is how attribution drifts. Two
+        providers can be one vendor, so the two fields answer different
+        questions and a reader needs both.
+        """
+        provider = result.provider_id or _provider_of(client)
+        if result.provider_id and result.vendor:
+            return result
+        return replace(
+            result,
+            provider_id=provider,
+            vendor=result.vendor or vendor_of(provider),
+        )
+
+    def _locate(self, client: LLMModelClient) -> tuple[str, str] | None:
+        """Reverse-lookup the (provider_id, tier) a client is registered under."""
+        for key, c in self._clients.items():
             if c is client:
-                return tier
+                return key
         return None
 
-    def _output_cap(self, client: MCPLLMClient) -> int | None:
+    def _tier_of(self, client: LLMModelClient) -> str | None:
+        """Tier a client is registered under, without its provider."""
+        located = self._locate(client)
+        return located[1] if located else None
+
+    def _spec_of(self, client: LLMModelClient) -> TierSpec | None:
+        """Tier spec for a client, looked up by its own provider and tier.
+
+        Looking this up by tier alone would read a second vendor's caps off
+        the first vendor's manifest — and the two are not interchangeable:
+        Anthropic and OpenAI cap output at 128k against Gemini's 65,536.
+        """
+        located = self._locate(client)
+        return self._tier_specs.get(located) if located else None
+
+    def _output_cap(self, client: LLMModelClient) -> int | None:
         """Output-token cap of the model this client actually runs.
 
         Keyed by model id first so an EVENTMILL_MODEL_* override or a
@@ -676,8 +389,8 @@ class LLMDispatcher:
         cap = self._caps_by_model.get(client.model_id)
         if cap:
             return cap
-        tier = self._tier_of(client)
-        spec = self._tier_specs.get(tier) if tier else None
+        spec = self._spec_of(client)
+        tier = spec.tier if spec else None
         if spec is None:
             return None
         if client.model_id != spec.model_id:
@@ -688,7 +401,7 @@ class LLMDispatcher:
             )
         return spec.max_output_tokens
 
-    def _context_cap(self, client: MCPLLMClient) -> int:
+    def _context_cap(self, client: LLMModelClient) -> int:
         """Input context window of the model this client actually runs.
 
         Keyed by model id for the same reason as _output_cap: an
@@ -698,11 +411,10 @@ class LLMDispatcher:
         cap = self._context_by_model.get(client.model_id)
         if cap:
             return cap
-        tier = self._tier_of(client)
-        spec = self._tier_specs.get(tier) if tier else None
+        spec = self._spec_of(client)
         return spec.max_context_tokens if spec else 1_048_576
 
-    def _clamp_tokens(self, client: MCPLLMClient, max_tokens: int) -> int:
+    def _clamp_tokens(self, client: LLMModelClient, max_tokens: int) -> int:
         """Clamp max_tokens to what the selected model can actually emit.
 
         Without this, a call sized for one model that lands on a
@@ -737,9 +449,29 @@ class LLMDispatcher:
             "403" in error and "denied" in lowered
         )
 
-    def _should_try_other_tier(self, error: str) -> bool:
+    def _kind_of(self, result: LLMResponse) -> str:
+        """Classify a failure, preferring what the client already decided.
+
+        A client that owns its provider's exceptions classifies them into the
+        shared error_kind vocabulary, and this routes on that. The string
+        matching below is the fallback for a client that classified nothing —
+        it reads Google's wire vocabulary and is the last thing in the
+        dispatcher that does.
+        """
+        if result.error_kind:
+            return result.error_kind
+        error = result.error or ""
+        if self._is_model_not_found(error):
+            return "model_not_found"
+        if self._is_access_error(error):
+            return "access"
+        if self._is_quota_error(error):
+            return "quota"
+        return "other"
+
+    def _should_try_other_tier(self, result: LLMResponse) -> bool:
         """Whether this failure is worth retrying on the other connected tier."""
-        return self._is_quota_error(error) or self._is_access_error(error)
+        return self._kind_of(result) in TIER_CHANGE_KINDS
 
     @staticmethod
     def _is_model_not_found(error: str) -> bool:
@@ -757,17 +489,18 @@ class LLMDispatcher:
         )
 
     def _retry_on_retired_model(
-        self, client: MCPLLMClient, error: str,
-    ) -> MCPLLMClient | None:
-        """Build a client on the tier's fallback model after a NOT_FOUND.
+        self, client: LLMModelClient, result: LLMResponse,
+    ) -> LLMModelClient | None:
+        """Rebind the tier to its fallback model after a NOT_FOUND.
 
-        Returns None when the error is not a model-id problem or the tier
+        Returns None when the failure is not a model-id problem or the tier
         declares no fallback.
         """
-        if not self._is_model_not_found(error):
+        if self._kind_of(result) != "model_not_found":
             return None
-        tier = self._tier_of(client)
-        spec = self._tier_specs.get(tier) if tier else None
+        located = self._locate(client)
+        spec = self._tier_specs.get(located) if located else None
+        tier = located[1] if located else None
         if not spec or not spec.fallback_model_id:
             return None
         if spec.fallback_model_id == client.model_id:
@@ -784,31 +517,42 @@ class LLMDispatcher:
             f"retrying with {spec.fallback_model_id}"
         )
 
-        substitute = MCPLLMClient(
-            model_id=spec.fallback_model_id,
-            transport=client.transport,
-            endpoint=client.endpoint,
-            max_retries=client.max_retries,
-        )
-        # Reuse the live connection; only the target model id differs.
-        substitute._genai_client = client._genai_client
-        substitute._api_key_env_var = client._api_key_env_var
-        substitute._connected = client._connected
-        # Carry the spend forward — total_tokens_used sums over the live
-        # clients, so dropping the original would undercount the session.
-        substitute._total_tokens_used = client._total_tokens_used
+        # The client decides what carrying a live connection forward means:
+        # it has to reuse the open session and keep the spend, because
+        # total_tokens_used sums over the live clients and a substitute that
+        # started at zero would undercount the session.
+        substitute = client.with_model(spec.fallback_model_id)
         # Register it so subsequent calls in this session skip the failed id.
-        if tier:
-            self._clients[tier] = substitute
+        # Under its own (provider, tier), so a retired model on one vendor
+        # cannot displace another vendor's client at the same tier.
+        if located:
+            self._clients[located] = substitute
         return substitute
 
-    def _fallback_client(self, primary: MCPLLMClient) -> MCPLLMClient | None:
-        """Return the other connected tier, or None if unavailable."""
-        for tier, c in self._clients.items():
+    def _fallback_client(self, primary: LLMModelClient) -> LLMModelClient | None:
+        """Return the other connected tier **of the same provider**, or None.
+
+        This is the one place the data-handling boundary lives. A quota
+        failure must never move a session to another vendor: nobody chose it,
+        investigation data would reach a provider the operator did not select,
+        and the output would be unattributable afterwards.
+
+        Deliberate provider selection is the requirement; silent failover is
+        the hazard. The two differ by who decided and whether it is recorded,
+        which is why this method is three lines of constraint rather than a
+        policy spanning the design.
+        """
+        located = self._locate(primary)
+        provider = located[0] if located else _provider_of(primary)
+        for (provider_id, tier), c in self._clients.items():
+            if provider_id != provider:
+                continue
             if c is not primary and c.connected:
                 logger.warning(
-                    "Tier change: %s (%s) → %s (%s) after quota exhaustion",
-                    self._tier_of(primary), primary.model_id, tier, c.model_id,
+                    "Tier change within %s: %s (%s) → %s (%s) after quota "
+                    "exhaustion", provider,
+                    located[1] if located else "?", primary.model_id,
+                    tier, c.model_id,
                 )
                 return c
         return None
@@ -822,9 +566,10 @@ class LLMDispatcher:
         max_tokens: int = 4096,
         grounding_data: list[str] | None = None,
         hints: QueryHints | None = None,
+        provider: str | None = None,
     ) -> LLMResponse:
         try:
-            client = self._route(max_tokens, hints=hints)
+            client = self._route(max_tokens, hints=hints, provider=provider)
         except RuntimeError as e:
             return LLMResponse(ok=False, error=str(e))
         result = client.query_text(
@@ -834,13 +579,13 @@ class LLMDispatcher:
             grounding_data=grounding_data,
             hints=hints,
         )
-        if not result.ok and self._should_try_other_tier(result.error or ""):
+        if not result.ok and self._should_try_other_tier(result):
             fallback = self._fallback_client(client)
             if fallback:
                 logger.warning(
                     "%s unavailable (%s) — falling back to %s",
                     client.model_id,
-                    "quota" if self._is_quota_error(result.error or "") else "access",
+                    self._kind_of(result),
                     fallback.model_id,
                 )
                 print(
@@ -855,7 +600,7 @@ class LLMDispatcher:
                     hints=hints,
                 )
         elif not result.ok:
-            substitute = self._retry_on_retired_model(client, result.error or "")
+            substitute = self._retry_on_retired_model(client, result)
             if substitute:
                 result = substitute.query_text(
                     prompt=prompt,
@@ -864,7 +609,7 @@ class LLMDispatcher:
                     grounding_data=grounding_data,
                     hints=hints,
                 )
-        return result
+        return self._attributed(result, client)
 
     def query_multimodal(
         self,
@@ -874,9 +619,10 @@ class LLMDispatcher:
         system_context: str | None = None,
         max_tokens: int = 4096,
         hints: QueryHints | None = None,
+        provider: str | None = None,
     ) -> LLMResponse:
         try:
-            client = self._route(max_tokens, hints=hints)
+            client = self._route(max_tokens, hints=hints, provider=provider)
         except RuntimeError as e:
             return LLMResponse(ok=False, error=str(e))
         result = client.query_multimodal(
@@ -887,13 +633,13 @@ class LLMDispatcher:
             max_tokens=self._clamp_tokens(client, max_tokens),
             hints=hints,
         )
-        if not result.ok and self._should_try_other_tier(result.error or ""):
+        if not result.ok and self._should_try_other_tier(result):
             fallback = self._fallback_client(client)
             if fallback:
                 logger.warning(
                     "%s unavailable (%s) — falling back to %s",
                     client.model_id,
-                    "quota" if self._is_quota_error(result.error or "") else "access",
+                    self._kind_of(result),
                     fallback.model_id,
                 )
                 print(
@@ -909,7 +655,7 @@ class LLMDispatcher:
                     hints=hints,
                 )
         elif not result.ok:
-            substitute = self._retry_on_retired_model(client, result.error or "")
+            substitute = self._retry_on_retired_model(client, result)
             if substitute:
                 result = substitute.query_multimodal(
                     prompt=prompt,
@@ -919,7 +665,7 @@ class LLMDispatcher:
                     max_tokens=self._clamp_tokens(substitute, max_tokens),
                     hints=hints,
                 )
-        return result
+        return self._attributed(result, client)
 
     def query_with_document(
         self,
@@ -929,39 +675,47 @@ class LLMDispatcher:
         max_tokens: int = 8192,
         grounding_data: list[str] | None = None,
         hints: QueryHints | None = None,
+        provider: str | None = None,
     ) -> LLMResponse:
         """Query with a document artifact.
 
-        Resolves the best ingestion path automatically:
-          1. Native document + GCS URI (zero-copy for Gemini)
-          2. Native document + inline bytes from local file
-          3. Fallback: returns ok=False so plugin can use text extraction
+        Resolves the artifact into a DocumentPart, applies the policy the
+        provider cannot decide — the size guard and the output clamp — and
+        hands the part to the client, which picks the ingestion path its own
+        provider supports. The response's transport_path records which one.
 
-        The response's transport_path records which path was used.
+        Returns ok=False when no connected model ingests this MIME type
+        natively, so the plugin can fall back to text extraction.
         """
         hints = hints or QueryHints(tier="heavy", prefers_native_file=True)
         mime_type = artifact.metadata.get("mime_type", "application/pdf")
 
-        # PDF page cost is set by media_resolution under Gemini 3.x
-        # (low 280 / medium 560 / high 1120 tokens per page). Make the default
-        # explicit rather than relying on the provider's implicit choice.
-        if mime_type == "application/pdf" and hints.media_resolution is None:
-            hints = replace(hints, media_resolution=default_media_resolution())
-
         try:
-            client = self._route(max_tokens, hints=hints, document_mime=mime_type)
+            client = self._route(
+                max_tokens, hints=hints, document_mime=mime_type,
+                provider=provider,
+            )
         except RuntimeError as e:
             return LLMResponse(ok=False, error=str(e))
 
         if mime_type == "application/pdf":
+            # PDF page cost is set by media_resolution
+            # (low 280 / medium 560 / high 1120 tokens per page). Make the
+            # default explicit rather than relying on the provider's implicit
+            # choice — and resolve it against the provider that was actually
+            # routed to, which is only known now that _route has answered.
+            if hints.media_resolution is None:
+                hints = replace(
+                    hints,
+                    media_resolution=default_media_resolution(_provider_of(client)),
+                )
             overflow = self._pdf_context_overflow(client, artifact, hints)
             if overflow:
                 return overflow
 
         # Check if the underlying model supports native document ingestion.
-        # MCPLLMClient doesn't have a capabilities() method — it uses the
-        # GenAI SDK directly. For the Gemini provider, PDFs are always
-        # supported natively.
+        # Read from the provider manifest rather than asked of the SDK, so
+        # this agrees with the routing that chose the client.
         if not self._model_supports_native_doc(client, mime_type):
             return LLMResponse(
                 ok=False,
@@ -977,12 +731,12 @@ class LLMDispatcher:
             file_path=artifact.file_path,
         )
 
-        # Build the full prompt with grounding data
-        full_prompt = client._build_prompt(prompt, grounding_data)
+        # Grounding data is folded in here rather than passed along: the
+        # document signature stays about the document, and composing it is
+        # string assembly no provider needs a say in.
+        full_prompt = compose_prompt(prompt, grounding_data)
 
-        # Delegate to the client's internal GenAI SDK for native doc handling
-        result = self._execute_document_query(
-            client=client,
+        result = client.query_with_document(
             prompt=full_prompt,
             doc=doc,
             system_context=system_context,
@@ -994,20 +748,19 @@ class LLMDispatcher:
         # through TierScopedLLMClient with their manifest tier already set —
         # the heavy default above applies only to direct framework callers.
         if not result.ok:
-            substitute = self._retry_on_retired_model(client, result.error or "")
+            substitute = self._retry_on_retired_model(client, result)
             if substitute:
-                result = self._execute_document_query(
-                    client=substitute,
+                result = substitute.query_with_document(
                     prompt=full_prompt,
                     doc=doc,
                     system_context=system_context,
                     max_tokens=self._clamp_tokens(substitute, max_tokens),
                     hints=hints,
                 )
-        return result
+        return self._attributed(result, client)
 
     def _pdf_context_overflow(
-        self, client: MCPLLMClient, artifact: ArtifactRef,
+        self, client: LLMModelClient, artifact: ArtifactRef,
         hints: QueryHints,
     ) -> LLMResponse | None:
         """Refuse a PDF that cannot fit the model's context at this resolution.
@@ -1017,9 +770,16 @@ class LLMDispatcher:
         that here with an actionable message instead of an opaque provider
         error partway through the call.
 
+        Every limit is read from the provider that was routed to, never from
+        the default. Anthropic and OpenAI accept 100 pages / 32 MB against
+        Gemini's 1000 / 50 MB, so reading Gemini's numbers for an Anthropic
+        call passes a 150-page document straight through to a vendor rejection
+        — which is the opaque failure this guard exists to replace.
+
         Returns None when the request fits, or when the page count is unknown.
         """
-        handling = pdf_handling()
+        provider = _provider_of(client)
+        handling = pdf_handling(provider)
         max_pages = handling.get("max_pages", 1000)
         max_mb = handling.get("max_size_mb", 50)
 
@@ -1028,8 +788,11 @@ class LLMDispatcher:
             return LLMResponse(
                 ok=False,
                 error=(
-                    f"PDF is {size_mb:,.1f} MB, above the provider limit of "
-                    f"{max_mb} MB. Split the document."
+                    f"PDF is {size_mb:,.1f} MB, above {provider}'s limit of "
+                    f"{max_mb} MB. Either run this on a provider with a larger "
+                    f"limit ('use gcp_gemini ...' allows "
+                    f"{pdf_handling('gcp_gemini').get('max_size_mb', 50)} MB) "
+                    f"or split the document."
                 ),
                 model_used=client.model_id,
                 fallback_reason="pdf_exceeds_provider_size_limit",
@@ -1043,15 +806,18 @@ class LLMDispatcher:
             return LLMResponse(
                 ok=False,
                 error=(
-                    f"PDF has {pages:,} pages, above the provider limit of "
-                    f"{max_pages:,} pages"
+                    f"PDF has {pages:,} pages, above {provider}'s limit of "
+                    f"{max_pages:,} pages. Either run this on a provider with "
+                    f"a larger limit ('use gcp_gemini ...' allows "
+                    f"{pdf_handling('gcp_gemini').get('max_pages', 1000):,} "
+                    f"pages) or split the document."
                 ),
                 model_used=client.model_id,
                 fallback_reason="pdf_exceeds_provider_page_limit",
             )
 
-        resolution = hints.media_resolution or default_media_resolution()
-        per_page = tokens_per_pdf_page(resolution)
+        resolution = hints.media_resolution or default_media_resolution(provider)
+        per_page = tokens_per_pdf_page(resolution, provider)
         estimated = pages * per_page
 
         context_limit = self._context_cap(client)
@@ -1061,7 +827,7 @@ class LLMDispatcher:
 
         # Try a cheaper resolution before giving up.
         for cheaper in ("medium", "low"):
-            if pages * tokens_per_pdf_page(cheaper) <= context_limit:
+            if pages * tokens_per_pdf_page(cheaper, provider) <= context_limit:
                 logger.warning(
                     "PDF %d pages at media_resolution=%s needs ~%d tokens "
                     "(limit %d) — use media_resolution=%r instead",
@@ -1074,7 +840,8 @@ class LLMDispatcher:
                         f"media_resolution={resolution!r}, above the "
                         f"{context_limit:,}-token context window. Retry with "
                         f"media_resolution={cheaper!r} (~"
-                        f"{pages * tokens_per_pdf_page(cheaper):,} tokens)."
+                        f"{pages * tokens_per_pdf_page(cheaper, provider):,} "
+                        f"tokens)."
                     ),
                     model_used=client.model_id,
                     fallback_reason="pdf_exceeds_context_at_resolution",
@@ -1145,7 +912,7 @@ class LLMDispatcher:
     # --- Internal helpers ------------------------------------------------------
 
     def _model_supports_native_doc(
-        self, client: MCPLLMClient, mime_type: str,
+        self, client: LLMModelClient, mime_type: str,
     ) -> bool:
         """Check if a client's model supports native ingestion of a MIME type.
 
@@ -1157,115 +924,10 @@ class LLMDispatcher:
         capability = _NATIVE_CAPABILITY_BY_MIME.get(mime_type)
         if not capability:
             return False
-        tier = self._tier_of(client)
-        spec = self._tier_specs.get(tier) if tier else None
+        spec = self._spec_of(client)
         if spec is None:
             return True
         return capability in spec.capabilities
-
-    @staticmethod
-    def _execute_document_query(
-        client: MCPLLMClient,
-        prompt: str,
-        doc: DocumentPart,
-        system_context: str | None,
-        max_tokens: int,
-        hints: QueryHints | None = None,
-    ) -> LLMResponse:
-        """Execute a document query via the GenAI SDK.
-
-        Tries ingestion paths in priority order:
-          1. GCS URI (zero-copy) — if storage_uri starts with gs://
-          2. Inline bytes from local file_path
-        """
-        if client._genai_client is None:
-            return LLMResponse(ok=False, error="Client not initialised")
-
-        try:
-            parts: list = []
-            transport_path = "unknown"
-
-            if doc.storage_uri and doc.storage_uri.startswith("gs://"):
-                parts.append(genai_types.Part.from_uri(
-                    file_uri=doc.storage_uri,
-                    mime_type=doc.mime_type,
-                ))
-                transport_path = "gs_uri"
-            elif doc.inline_bytes:
-                parts.append(genai_types.Part.from_bytes(
-                    data=doc.inline_bytes,
-                    mime_type=doc.mime_type,
-                ))
-                transport_path = "inline_bytes"
-            elif doc.file_path:
-                with open(doc.file_path, "rb") as f:
-                    data = f.read()
-                parts.append(genai_types.Part.from_bytes(
-                    data=data,
-                    mime_type=doc.mime_type,
-                ))
-                transport_path = "inline_bytes"
-            else:
-                return LLMResponse(
-                    ok=False,
-                    error="DocumentPart has no data source",
-                    model_used=client.model_id,
-                )
-
-            parts.append(prompt)
-
-            config = _build_config(system_context, max_tokens, hints)
-
-            last_exc: Exception | None = None
-            for attempt in range(client.max_retries + 1):
-                try:
-                    response = client._genai_client.models.generate_content(
-                        model=client.model_id,
-                        contents=parts,
-                        config=config,
-                    )
-                    usage = _usage(response)
-                    if usage:
-                        client._total_tokens_used += usage["total_tokens"]
-                    reason = _finish_reason(response)
-                    if reason == "MAX_TOKENS":
-                        logger.warning(
-                            "Document reply hit the %d-token output cap on %s "
-                            "(%s thinking tokens spent) — the text is partial",
-                            max_tokens, client.model_id,
-                            (usage or {}).get("thinking_tokens", "?"),
-                        )
-                    return LLMResponse(
-                        ok=True,
-                        text=response.text or "",
-                        model_used=client.model_id,
-                        model_version=_model_version(response),
-                        transport_path=transport_path,
-                        token_usage=usage,
-                        finish_reason=reason,
-                        truncated=reason == "MAX_TOKENS",
-                    )
-                except Exception as exc:
-                    if attempt < client.max_retries and client._is_retriable(exc):
-                        wait = 2 ** attempt
-                        logger.warning(
-                            "Document query transient error (attempt %d/%d), "
-                            "retrying in %ds: %s",
-                            attempt + 1, client.max_retries + 1, wait, exc,
-                        )
-                        time.sleep(wait)
-                        last_exc = exc
-                    else:
-                        raise
-            raise last_exc  # type: ignore[misc]
-
-        except Exception as e:
-            logger.error("Document query failed: %s", e)
-            return LLMResponse(
-                ok=False,
-                error=str(e),
-                model_used=client.model_id,
-            )
 
 
 class TierScopedLLMClient:
@@ -1280,13 +942,33 @@ class TierScopedLLMClient:
     stays plugin-agnostic, and no existing plugin call site has to change.
     """
 
-    def __init__(self, inner: LLMQueryInterface, default_tier: str = "light"):
+    def __init__(self, inner: LLMQueryInterface, default_tier: str = "light",
+                 default_provider: str | None = None):
         self._inner = inner
         # "none" means the plugin declares no LLM work; treat any incidental
         # call as light rather than silently promoting it to Pro.
         self.default_tier = (
             default_tier if default_tier in ("light", "heavy") else "light"
         )
+        # Provider for this execution, when the operator selected one. This is
+        # the right home for it and QueryHints is not: hints are plugin-facing,
+        # so a provider field there would put vendor choice in plugin code and
+        # let a plugin override an operator's A/B selection — which would make
+        # the comparison unattributable and break "the analysis tools do not
+        # change". None means the dispatcher's session default serves.
+        self.default_provider = default_provider
+
+    def _provider_kwargs(self) -> dict[str, str]:
+        """Provider scope to pass inward, if there is one and it is accepted.
+
+        Duck-typed on the inner object, because TierScopedLLMClient also wraps
+        bare clients and test fakes whose query methods take no provider.
+        """
+        if not self.default_provider:
+            return {}
+        if not getattr(self._inner, "accepts_provider_scope", False):
+            return {}
+        return {"provider": self.default_provider}
 
     def _with_default(self, hints: QueryHints | None) -> QueryHints:
         """Fill in the manifest tier when the caller expressed no opinion.
@@ -1331,6 +1013,7 @@ class TierScopedLLMClient:
             max_tokens=max_tokens,
             grounding_data=grounding_data,
             hints=self._with_default(hints),
+            **self._provider_kwargs(),
         )
 
     def query_multimodal(
@@ -1349,6 +1032,7 @@ class TierScopedLLMClient:
             system_context=system_context,
             max_tokens=max_tokens,
             hints=self._with_default(hints),
+            **self._provider_kwargs(),
         )
 
     def query_with_document(
@@ -1378,6 +1062,7 @@ class TierScopedLLMClient:
             max_tokens=max_tokens,
             grounding_data=grounding_data,
             hints=resolved,
+            **self._provider_kwargs(),
         )
 
     def supports_native_document(self, mime_type: str) -> bool:

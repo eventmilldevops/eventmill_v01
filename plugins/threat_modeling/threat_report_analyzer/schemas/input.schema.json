@@ -5,7 +5,11 @@
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["list_reports", "summarize", "search_reports"],
+      "enum": [
+        "list_reports",
+        "summarize",
+        "search_reports"
+      ],
       "description": "Action to perform"
     },
     "report_path": {
@@ -25,19 +29,48 @@
     },
     "focus_areas": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Optional focus areas to emphasize (e.g., ['attack_techniques', 'mitigations', 'threat_actors'])"
+    },
+    "ignore_caps": {
+      "type": "boolean",
+      "default": false,
+      "description": "Report key_findings and relevant_techniques in full, with no upper bound. Off by default, where the lists are bounded at 50 and 200 and anything cut is counted and named in analysis_notes. Set this when the complete lists matter more than a bounded result: being told seven findings were left out does not say which seven. The lists are extracted from a summary the model already produced, so this costs no extra model call."
     }
   },
-  "required": ["action"],
+  "required": [
+    "action"
+  ],
   "allOf": [
     {
-      "if": {"properties": {"action": {"const": "summarize"}}},
-      "then": {"required": ["report_path"]}
+      "if": {
+        "properties": {
+          "action": {
+            "const": "summarize"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "report_path"
+        ]
+      }
     },
     {
-      "if": {"properties": {"action": {"const": "search_reports"}}},
-      "then": {"required": ["query"]}
+      "if": {
+        "properties": {
+          "action": {
+            "const": "search_reports"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "query"
+        ]
+      }
     }
   ]
 }

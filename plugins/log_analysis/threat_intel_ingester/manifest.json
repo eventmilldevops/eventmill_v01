@@ -2,10 +2,12 @@
   "tool_name": "threat_intel_ingester",
   "version": "1.0.0",
   "pillar": "log_analysis",
-  "also_useful_in": ["threat_modeling"],
+  "also_useful_in": [
+    "threat_modeling"
+  ],
   "display_name": "Threat Intel Ingester",
   "description_short": "Ingest threat intelligence reports (PDF, HTML, STIX, CSV) and extract structured IOC data with MITRE ATT&CK mapping.",
-  "description_long": "Use this tool when the analyst has a threat intelligence report, vendor advisory, CERT bulletin, or IOC list that needs to be processed into structured, queryable data. The tool accepts PDF reports, HTML pages (blog posts, advisories), STIX 2.1 bundles, and CSV/JSON IOC lists. It extracts and normalizes embedded indicators of compromise (IP addresses, domains, file hashes, CVEs, MITRE technique IDs), maps findings to MITRE ATT&CK where applicable, and produces a compact JSON summary optimized for LLM context window usage. The output is registered as a json_events artifact that can feed the context_enriched_analyzer for cross-referencing against loaded event records. Use this tool BEFORE running context_enriched_analyzer — it produces the threat context that the enrichment tool consumes.",
+  "description_long": "Use this tool when the analyst has a threat intelligence report, vendor advisory, CERT bulletin, or IOC list that needs to be processed into structured, queryable data. The tool accepts PDF reports, HTML pages (blog posts, advisories), STIX 2.1 bundles, and CSV/JSON IOC lists. It extracts and normalizes embedded indicators of compromise (IP addresses, domains, file hashes, CVEs, MITRE technique IDs), maps findings to MITRE ATT&CK where applicable, and produces a compact JSON summary optimized for LLM context window usage. The output is registered as a json_events artifact that can feed the context_enriched_analyzer for cross-referencing against loaded event records. Use this tool BEFORE running context_enriched_analyzer \u2014 it produces the threat context that the enrichment tool consumes.",
   "author": "Event Mill Contributors",
   "owner_team": "log_analysis_core",
   "license": "Apache-2.0",
@@ -13,8 +15,14 @@
   "repository": "https://github.com/eventmilldevops/eventmill_v01",
   "entry_point": "tool.py",
   "class_name": "ThreatIntelIngester",
-  "artifacts_consumed": ["pdf_report", "html_report", "text"],
-  "artifacts_produced": ["json_events"],
+  "artifacts_consumed": [
+    "pdf_report",
+    "html_report",
+    "text"
+  ],
+  "artifacts_produced": [
+    "json_events"
+  ],
   "capabilities": [
     "artifact:pdf_report",
     "artifact:html_report",
@@ -36,6 +44,7 @@
   "output_schema": "schemas/output.schema.json",
   "timeout_class": "long",
   "cost_hint": "moderate",
+  "summary_budget": 8000,
   "model_tier": "light",
   "safe_for_auto_invoke": true,
   "requires_auth": false,
@@ -51,8 +60,16 @@
   "reference_data_overrides": [],
   "stability": "core",
   "tags": [
-    "threat_intel", "ioc", "pdf", "html", "stix",
-    "mitre", "cve", "indicator", "report", "advisory"
+    "threat_intel",
+    "ioc",
+    "pdf",
+    "html",
+    "stix",
+    "mitre",
+    "cve",
+    "indicator",
+    "report",
+    "advisory"
   ],
   "result_summary_fields": [
     "total_iocs",
@@ -61,5 +78,7 @@
     "high_priority_count",
     "campaign_attribution"
   ],
-  "chains_to": ["context_enriched_analyzer"]
+  "chains_to": [
+    "context_enriched_analyzer"
+  ]
 }

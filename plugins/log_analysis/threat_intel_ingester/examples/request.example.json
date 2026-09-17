@@ -2,6 +2,5 @@
   "artifact_id": "art_0001",
   "source_context": "Mandiant APT41 report covering supply chain compromise campaign targeting managed service providers, published February 2026.",
   "ioc_types": ["ip", "domain", "hash_sha256", "cve", "mitre_technique"],
-  "confidence_threshold": "medium",
-  "max_pages": 50
+  "confidence_threshold": "medium"
 }

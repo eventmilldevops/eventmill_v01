@@ -10,6 +10,90 @@ terminal (ttyd) on Cloud Run.
 
 ---
 
+## Where the work stands — 2026-09-14
+
+Branch `llm_5`. **Five providers bind concurrently, a tool can be pointed at
+any of them, and the projector has been run across vendors.** Plan:
+`docs/specs/multi_provider_llm_clients.md` (Part 1, the framework) and
+`docs/specs/projector_three_vendor_run.md` (the demonstration, now through
+Stage E).
+
+| | State |
+|---|---|
+| Gemini, Anthropic, OpenAI clients | done; all six tier clients verified live on Cloud Run 2026-09-13 |
+| `(provider_id, tier)` routing, no cross-vendor fallback | done |
+| `connect` binds every configured provider; `use <provider> [for <tool>]` | done |
+| `EVENTMILL_LLM_PROVIDERS` defaults to every known provider everywhere | done |
+| Daybreak Red + Blue as their own providers; `vendor` split from `provider_id` | done 2026-09-14 (`f84adfc`) |
+| Daybreak **Red** probed + full projector run on Cloud Run | done 2026-09-14 — manifest PARTIAL: limits and `thinking_levels` still documented, not measured |
+| Daybreak **Blue** | **registered, never called, and will not be** — manifest stays UNVERIFIED |
+| Adding a provider needs no code | **proven** — Red was the first provider added after the seam settled: one manifest, one secret, worked first time out. Swapping Red for e.g. Kimi 3 should need no code either (a vendor with its own SDK surface still needs a client) |
+| Daybreak Red access | **short-term** — treat it as a temporary tenant of the seam, not a fixture |
+| Projector run record names provider **and** vendor, hashes the prompt (schema v5) | done |
+| Group summary: recurrence per provider, agreement across them | done |
+| **The live cross-vendor run (Stage E)** | done 2026-09-14 — Gemini 3.1 Pro vs Daybreak Red completed with very similar output; `openai` and `anthropic` worked; `summarize_run_group` worked. Qualitative sign-off: runs-per-vendor and the `stepstate-medium-2` score were not captured |
+| Group summary counts **provider ids**, not vendors | **live overclaim**: `openai` and `openai_daybreak_red` are both `vendor: openai` and both bound by default, so a route the two of them find grades as two-provider agreement. Recommendation: grade on `model.vendor` (can only lower a grade). Recurrence stays per provider id |
+| ~~Probe Blue, then the Red/Blue A/B~~ | **retired, not deferred** — no Blue access, so the experiment that was to settle the grading row above will never run. Decide it on judgment: recommendation is to grade on `model.vendor` |
+| Does the agreement grade discriminate? | **open** — two independent vendors converging is also consistent with the prompt admitting few readings. Needs a flow map with ambiguous routes |
+
+**PDF page limits — fixed 2026-09-14, and how they work now:**
+
+- The guard reads **the provider actually routed to**
+  (`_pdf_context_overflow`). Gemini takes 1000 pages / 50 MB; Anthropic and
+  OpenAI take 100 / 32 MB and cost pages at 1500 tokens against Gemini's 560.
+- Over a provider's limit the call is **refused up front** with both ways out
+  named: run it on Gemini, or split the document. That is the intended
+  behaviour for a triage tool, not a gap to close.
+- `threat_intel_ingester` no longer imposes a **second** page limit. It had a
+  `max_pages` default of 50 that truncated silently, so a 150-page report
+  ingested as 50 pages was indistinguishable from a 50-page report ingested
+  whole. The default is now "read it all"; an explicit `max_pages` (1–1000) is
+  honoured as a cost ceiling and reported as `pages_dropped`.
+
+**Ingestion, validated 2026-09-14 on a 154-page report:** 154 pages read in
+~345 s, 169 IOCs, 45 attack paths, artifact consumed by the visualizer. Two
+things that run exposed:
+
+- **Retired ATT&CK ids no longer demote a finding.** The bundled DB is 19.2;
+  models emit pre-v19 numbering (`T1562.001`, `T1656`), which used to be
+  marked non-ATT&CK. `resolve_retired_technique()` now remaps them — curated
+  map for renamed ids, name matching for the rest — across both
+  `mitre_mappings` and the attack graph, recording
+  `technique_id_retired_from`. A split technique (`T1562` -> six successors)
+  is deliberately left flagged rather than guessed at.
+- **The latency model is ~6.3x pessimistic** and is **not** yet corrected:
+  it estimated 2185 s for that 345 s run, 85% of it from
+  `seconds_per_page=12.0`. The symptom is over-splitting (24 batches sized by
+  pages, not by work), which separates pages that should be read together.
+  Retune with `EVENTMILL_NATIVE_BASE_S` / `_S_PER_PAGE` / `_S_PER_CANDIDATE`
+  before trusting any estimate — and **do not** add a planner budget check
+  first: against this model it would refuse runs that succeed.
+
+  Those three are read per execution, so **no rebuild is needed** — but they
+  must be passed to the service. All four deploy paths now forward them
+  (`cloudbuild.yaml` substitutions `_NATIVE_*`, `deploy-cloudrun-secrets.sh`,
+  `deploy-cloudrun.sh`, `docker-compose.cloudrun.yml`), so set them in
+  `~/.eventmill/deploy.env` and redeploy. For a one-off experiment use
+  `gcloud run services update --update-env-vars=...`; note `--update-env-vars`,
+  not `--set-env-vars`, which replaces the whole environment and would drop
+  `GOOGLE_CLOUD_PROJECT`, the bucket prefix and the provider list.
+
+**Most likely to bite next:**
+
+1. **`run --file_path C:\Users\...` silently loses its backslashes.**
+   `_parse_flag_payload` uses `shlex.split` in POSIX mode, so the path arrives
+   as `C:Usersdleecemap.json` and the tool reports `ARTIFACT_UNREADABLE` naming
+   the mangled path. Quote it, or use forward slashes. Unfixed.
+2. **`validate_manifests.py` exits non-zero on 16 pre-existing errors** — 15
+   `stability` values the schema does not define, plus a capability-namespace
+   pattern that rejects underscores. Both are behaviour decisions, not typos;
+   nothing in the build or deploy path runs the validator.
+
+Read `docs/change_log/` newest-first for how any of it got that way; the
+entries dated 2026-09-14 are this thread.
+
+---
+
 ## Commands
 
 Python >= 3.11 (`pyproject.toml` targets 3.11; the container uses 3.12).
@@ -30,11 +114,16 @@ python scripts/generate_tool_catalog.py  # regenerate the tool catalog
 Run the shell locally: `python -m framework.cli.shell` (or the `eventmill`
 console script).
 
-Verified as of 2026-08-23: `pytest` (376 passing), `validate_manifests.py`,
-and `validate_schemas.py` (32 valid) all run. `ruff`, `black` and `mypy` are in
-the `dev` extra but were **not installed** in the environment they were checked
-from, so they are still unconfirmed — install with `pip install -e ".[dev]"`
-before trusting a clean lint.
+Verified as of 2026-09-14: `pytest` (**1095 passing**, 0 skipped, 0 xfailed) and
+`validate_schemas.py` (34 valid) both run. `ruff`, `black` and `mypy` are in the
+`dev` extra but are still **not installed** in the environment this was checked
+from, so a clean lint remains unconfirmed — install with
+`pip install -e ".[dev]"` before claiming one.
+
+On Windows, prefix the `scripts/` validators with `PYTHONIOENCODING=utf-8`;
+they print ✓/✗ and crash on cp1252 otherwise. The same trap applies to reading
+any repo JSON or Markdown from Python — pass `encoding="utf-8"` explicitly, or
+em dashes come back as mojibake and you will "fix" a file that was fine.
 
 > **`validate_manifests.py` currently exits non-zero with 15 errors**, all
 > `'stable' is not one of ['experimental','verified','core','deprecated']`.
@@ -72,14 +161,78 @@ resolution to GCS and logging to JSON for Cloud Logging.
 
 ## LLM models — read before changing anything under `framework/llm/`
 
-Two tiers, declared in `framework/llm/providers/gcp_gemini.json`. That file is
-the single source of truth for model ids, token limits and capabilities; do not
-hardcode any of them elsewhere.
+**The layer is no longer vendor-wired.** As of 2026-09-13 the Google SDK lives
+only in `framework/llm/clients/gemini.py`; `framework/llm/dispatcher.py` talks
+to whatever it holds through the `LLMModelClient` protocol in `model_client.py`
+and imports no vendor SDK — `tests/framework/test_provider_seam.py` enforces
+that with an `ast` walk over its imports. Adding a provider means a new file
+under `clients/` and a new manifest under `providers/`, and nothing else.
 
-| Tier | Model | Input | Output |
-|---|---|---|---|
-| light | `gemini-3.8-flash` | 1,048,576 | 65,536 |
-| heavy | `gemini-3.1-pro-preview` | 1,048,576 | 65,536 |
+**Three providers are implemented and any combination can be bound at once**
+(2026-09-14). Plan: `docs/specs/multi_provider_llm_clients.md`.
+
+| Provider | light | heavy | Key env var(s) | Input | Output |
+|---|---|---|---|---|---|
+| `gcp_gemini` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` | `GEMINI_FLASH_API_KEY`, `GEMINI_PRO_API_KEY` | 1,048,576 | 65,536 |
+| `anthropic` | `claude-sonnet-5` | `claude-opus-5` | `ANTHROPIC_API_KEY` | 1,000,000 | 128,000 |
+| `openai` | `gpt-5.6-terra` | `gpt-5.6-sol` | `OPENAI_API_KEY` | 400,000 | 128,000 |
+
+Each provider's manifest under `framework/llm/providers/` is the single source
+of truth for its model ids, token limits, accepted thinking levels and
+capabilities; do not hardcode any of them elsewhere. **The three do not share
+numbers** — Anthropic and OpenAI cap output at 128,000 against Gemini's 65,536,
+so anything that reads one provider's limits for another is wrong.
+
+Only Gemini splits keys by tier, so bulk Flash work cannot consume Pro quota;
+the other two issue one key per account.
+
+`EVENTMILL_LLM_PROVIDERS` (space-separated) names which providers a session may
+bind; every deploy path and `.env.example` default it to **every known
+provider**, because one whose key is unset or still `placeholder` is skipped at
+startup anyway.
+
+**A provider is not a vendor.** `openai`, `openai_daybreak_red` and
+`openai_daybreak_blue` are three providers reaching one lab on two credentials,
+so `vendor_of()` and `LLMResponse.vendor` answer the question `provider_id`
+used to. Anything counting how far a finding's support extends must count
+vendors; anything comparing two models counts providers. Both Daybreak colours
+declare their single model under **both** tiers — see
+`docs/change_log/2026-09-14-daybreak-providers.md` for why one tier would have
+let `_fallback_client` answer a Red run with something else. **A mounted key is not a bound provider** — but with all three named,
+a *real* key is, which is the point: adopting a vendor is a secret version and
+a restart, with no variable to remember.
+`providers` shows what is configured and keyed; `providers probe` proves
+reachability with two cheap phases — a model listing and a few-token ping — and
+works on a provider that is keyed but not yet named in that variable, so a key
+can be verified before it is adopted.
+
+`connect` cannot answer reachability: every client builds an SDK handle without
+a network call, so a wrong key connects cleanly and fails at first use.
+
+`connect` binds **every** configured provider whose key is present and is not
+the placeholder — ten clients when all five are named. The first entry of
+`EVENTMILL_LLM_PROVIDERS` is the session default and serves every tool that
+names no provider. `connect <model_id>` is the single-provider form: it binds
+that model's provider only, including its other tier for quota fallback.
+
+**`LLMDispatcher._clients` is keyed by `(provider_id, tier)`.** Keyed by tier
+alone it could not hold two vendors at once — a second provider's client under
+`"heavy"` evicted the first. A tier-keyed dict is still accepted and normalised
+from each client's own `provider_id`, so older call sites keep working.
+
+**Automatic cross-provider fallback is forbidden and enforced.**
+`_fallback_client` answers "the other connected tier *of the same provider*". A
+quota failure must never move a session to a vendor nobody selected — the data
+would go somewhere unchosen and the output would be unattributable. Deliberate
+selection is the requirement; silent failover is the hazard. Provider choice
+rides `TierScopedLLMClient(default_provider=...)`, never `QueryHints`, so a
+plugin cannot override an operator's selection.
+
+**`use <provider> [for <tool_name>]`** is how an operator makes that choice —
+session default or per-module override, `use default` to clear, bare `use` to
+report. It is session-scoped and never persisted. Selecting a provider that is
+not bound, or naming a tool that does not exist, is refused rather than stored.
+`ask:` follows the session default; a per-tool override does not apply to it.
 
 **The tiers are capacity-identical.** Tier selects reasoning depth and cost, and
 nothing else. Any logic that picks a tier based on how much data there is, is
@@ -310,6 +463,28 @@ ranges. Cloud Shell always works and is the reliable fallback.
 - Provisioning seeds every secret with the literal string `placeholder`. Run
   `provision-secrets.sh` or the LLM is dead and the web terminal password is
   `placeholder`.
+- **Seven secrets are provisioned, and all six LLM/ttyd ones are mounted, but
+  two are dormant by design.** `eventmill-anthropic-api` and
+  `eventmill-openai-api` are created and IAM-bound like the rest and hold
+  `placeholder` until someone adopts that vendor. This keeps the revision shape
+  identical for every deployment, so adopting a provider is a new secret version
+  plus a restart rather than an infrastructure change.
+  `EVENTMILL_LLM_PROVIDERS` (space-separated) names the ones a session may bind
+  and defaults to **all three** on every deploy path; an unknown id is refused
+  rather than ignored. **A placeholder in an unadopted provider is the expected
+  steady state** — Step 4 reports it as `·` and does not prompt. Because every
+  provider is named by default, "configured" no longer means "adopted", so
+  Step 4 blocks on **values**: ttyd holding `placeholder`, or no LLM provider
+  holding a real key at all. Do not make a per-provider placeholder blocking
+  again; it would fire on every deployment that has one vendor's key and not
+  the other two, and train operators to dismiss the check that stops ttyd
+  shipping with the password `placeholder`.
+- **A real key now does bind its provider.** `_discover_models` walks every
+  configured provider's manifest and `connect` builds each tier through the
+  provider registry, so `ANTHROPIC_API_KEY` holding a real value appears in
+  `models` and is selectable with `use`. A key that is unset or still
+  `placeholder` is skipped and named. `providers` is the diagnostic;
+  `printenv` is no longer the only way to see a key arrived.
 - Deploys default to `--allow-unauthenticated`; the only gate is shared ttyd
   basic auth. `ALLOW_UNAUTH=false` switches to IAM (`roles/run.invoker`).
   Prefer that for anything holding real investigation data.

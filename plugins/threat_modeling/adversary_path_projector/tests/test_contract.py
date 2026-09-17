@@ -961,6 +961,9 @@ class _Resp:
     finish_reason: str | None = "STOP"
     truncated: bool = False
     model_version: str | None = "mock-heavy-001"
+    # Every real client stamps this and the dispatcher stamps it as a backstop,
+    # so a response without one is the case the record has to refuse to guess at.
+    provider_id: str | None = "mock_provider"
 
 
 class _ScriptedLLM:
@@ -1056,7 +1059,12 @@ class TestProjectPathsValidation:
         )
         assert not result.ok
         assert result.error_code == "LLM_UNAVAILABLE"
-        assert "GEMINI_PRO_API_KEY" in result.message
+        # Provider-neutral since five providers became bindable: naming one
+        # vendor's key sent an operator to set a key they may not use, for a
+        # provider that may not even be the one they had configured.
+        assert "providers" in result.message
+        assert "connect" in result.message
+        assert "GEMINI" not in result.message.upper()
 
     def test_invalid_flow_map_blocks_before_the_llm(self, plugin_instance,
                                                    sample_flow_map):
@@ -1684,7 +1692,7 @@ class TestStepState:
         schema = json.loads(
             (PLUGIN_DIR / "schemas" / "projection_run.schema.json").read_text())
         jsonschema.validate(record, schema)
-        assert record["run"]["schema_version"] == 3
+        assert record["run"]["schema_version"] == 5
         assert record["model"]["max_tokens"] == _tool_mod.PROJECTION_MAX_TOKENS
         step = record["sampled"]["paths"][0]["steps"][0]
         assert step["access_after"] == "code_execution"
@@ -1707,6 +1715,121 @@ class TestStepState:
         record = _records_in(os.environ["EVENTMILL_WORKSPACE"])[0]
         assert record["model"]["model_configured"] == "mock-heavy"
         assert record["model"]["model_served"] == "mock-heavy-001"
+
+    def test_the_record_names_the_provider_that_served_it(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """With several vendors bound, a record that names none is unreadable.
+
+        The tool cannot know which provider served it — the operator's choice
+        rides the scoping wrapper, which a plugin cannot see — so the only
+        honest source is the response itself.
+        """
+        context = FakeContext()
+        context.llm_query = _ScriptedLLM(
+            _stateful_projection(), provider_id="anthropic",
+        )
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        assert result.ok, result.message
+        record = _records_in(os.environ["EVENTMILL_WORKSPACE"])[0]
+        assert record["model"]["provider"] == "anthropic"
+
+    def test_a_response_naming_no_provider_records_null_not_gemini(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """Null is the honest answer; a default would be a false one.
+
+        Until schema_version 4 this field was the literal 'gcp_gemini' on every
+        record. That was true while one vendor could be bound and silently
+        wrong the moment two could, which is worse than admitting ignorance:
+        a reader cannot tell a guess from an observation.
+        """
+        context = FakeContext()
+        context.llm_query = _ScriptedLLM(_stateful_projection(), provider_id=None)
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        assert result.ok, result.message
+        record = _records_in(os.environ["EVENTMILL_WORKSPACE"])[0]
+        assert record["model"]["provider"] is None
+
+    def test_the_record_hashes_what_the_model_was_asked(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """The comparison rests on the prompt being the same across vendors.
+
+        Recording the hash is what turns that from an argument into something
+        a reader can check.
+        """
+        llm = _ScriptedLLM(_stateful_projection())
+        context = FakeContext()
+        context.llm_query = llm
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map": sample_flow_map, "export": True,
+        }, context)
+        assert result.ok, result.message
+        record = _records_in(os.environ["EVENTMILL_WORKSPACE"])[0]
+
+        expected = _tool_mod._prompt_hash(
+            llm.prompts[0], _tool_mod.PROJECTION_SYSTEM_CONTEXT,
+        )
+        assert record["run"]["prompt_sha256"] == expected
+
+    def test_the_prompt_hash_moves_when_the_question_does(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """Same map, different ask — the hash has to separate them.
+
+        Two records sharing a flow_map_sha256 are not necessarily comparable:
+        max_paths changes what was asked without touching the estate.
+        """
+        asked = []
+        for max_paths in (2, 4):
+            llm = _ScriptedLLM(_stateful_projection())
+            context = FakeContext()
+            context.llm_query = llm
+            result = plugin_instance.execute({
+                "action": "project_paths", "threat_actor": "APT29",
+                "flow_map": sample_flow_map, "max_paths": max_paths,
+            }, context)
+            assert result.ok, result.message
+            asked.append(
+                _tool_mod._prompt_hash(
+                    llm.prompts[0], _tool_mod.PROJECTION_SYSTEM_CONTEXT,
+                )
+            )
+
+        assert asked[0] != asked[1]
+
+    def test_the_prompt_hash_is_stable_for_an_unchanged_question(
+        self, plugin_instance, sample_flow_map,
+    ):
+        """Two invocations asking the same thing must hash the same.
+
+        If the prompt carried anything ordered by a set or a timestamp this
+        would fail, and every cross-vendor comparison built on it would be
+        measuring the prompt rather than the model.
+        """
+        asked = []
+        for _ in range(2):
+            llm = _ScriptedLLM(_stateful_projection())
+            context = FakeContext()
+            context.llm_query = llm
+            result = plugin_instance.execute({
+                "action": "project_paths", "threat_actor": "APT29",
+                "flow_map": sample_flow_map,
+            }, context)
+            assert result.ok, result.message
+            asked.append(llm.prompts[0])
+
+        # Byte-identical, not merely equal in hash: the hash is what the record
+        # carries, but this is the property the record is claiming.
+        assert asked[0] == asked[1]
 
 
 class TestProjectionSummary:
@@ -2286,6 +2409,220 @@ def _assert_corpus_intact(context):
         assert not rejections, rejections
 
 
+def _mixed_record(index, provider, path, *, ok=True, **model):
+    """One synthetic run record, attributed to a provider.
+
+    Synthetic rather than driven through execute(), because a plugin execution
+    runs against exactly one provider by construction — the operator's choice
+    rides the scoping wrapper, which a plugin cannot see. A mixed group is
+    therefore assembled from several invocations, and this is that shape.
+    """
+    record = {
+        "run": {
+            "schema_version": 4, "run_index": index, "run_id": f"r{index}",
+            "run_group": "g", "flow_map_sha256": "h",
+            "prompt_sha256": model.pop("prompt_sha256", "p" * 64),
+            "application": "App", "created_at": f"2026-09-14T00:{index:02d}:00",
+            "actor_resolved": {"name": "VT"}, "record_file": f"rec{index}.json",
+        },
+        "model": {
+            "provider": provider, "tier": "heavy", "thinking_level": "medium",
+            "max_paths": 3, "software_scope": "delivery", **model,
+        },
+        "outcome": {"status": "ok" if ok else "error"},
+    }
+    if ok:
+        record["sampled"] = {"paths": [path]}
+    return record
+
+
+_ROUTE_DB = {"steps": [
+    {"tactic": "Initial Access", "component_id": "web", "technique_id": "T1190"},
+    {"tactic": "Collection", "component_id": "customer_db", "technique_id": "T1005"},
+]}
+_ROUTE_WEB = {"steps": [
+    {"tactic": "Initial Access", "component_id": "web", "technique_id": "T1190"},
+    {"tactic": "Persistence", "component_id": "web", "technique_id": "T1505.003"},
+]}
+
+
+class TestMixedProviderGroup:
+    """Recurrence is per provider; agreement is across providers.
+
+    Counted over the group as a whole, three samples from one vendor outvote
+    two other vendors and the cheapest provider to run decides the finding.
+    These two numbers are what keep that from happening.
+    """
+
+    def test_recurrence_is_measured_against_the_providers_own_runs(self):
+        # Gemini found it in all three of ITS runs. Over the group that is
+        # 3 of 9 and would not clear a group-wide threshold of 5.
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+            + [_mixed_record(i, "anthropic", _ROUTE_WEB) for i in (4, 5, 6)]
+            + [_mixed_record(i, "openai", _ROUTE_WEB) for i in (7, 8, 9)]
+        )
+        out = _tool_mod._summarize_run_group(records)
+        db = next(r for r in out["routes"] if r["route"] == ["web", "customer_db"])
+
+        assert db["run_count"] == 3
+        assert db["by_provider"]["gcp_gemini"]["recurring"] is True
+        assert db["by_provider"]["anthropic"]["run_count"] == 0
+        assert db["recurring"] is True, "a vendor that kept finding it was outvoted"
+        # "single" means one vendor was in the GROUP; here three were and only
+        # one found this route, which is partial support, not no comparison.
+        assert db["agreement"] == "partial"
+
+    def test_a_route_every_vendor_found_is_unanimous(self):
+        records = [
+            _mixed_record(i, provider, _ROUTE_DB)
+            for i, provider in enumerate(
+                ["gcp_gemini"] * 3 + ["anthropic"] * 3 + ["openai"] * 3, start=1,
+            )
+        ]
+        out = _tool_mod._summarize_run_group(records)
+        route = out["routes"][0]
+        assert route["providers_finding_it"] == 3
+        assert route["agreement"] == "unanimous"
+        assert out["unanimous_route_count"] == 1
+
+    def test_two_of_three_vendors_is_a_majority(self):
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+            + [_mixed_record(i, "anthropic", _ROUTE_DB) for i in (4, 5, 6)]
+            + [_mixed_record(i, "openai", _ROUTE_WEB) for i in (7, 8, 9)]
+        )
+        out = _tool_mod._summarize_run_group(records)
+        db = next(r for r in out["routes"] if r["route"] == ["web", "customer_db"])
+        assert db["agreement"] == "majority"
+
+    def test_with_two_providers_there_is_no_majority_tier(self):
+        # A strict majority of two is two, which is unanimous. One of two is
+        # precisely the disagreement the grade exists to show.
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+            + [_mixed_record(i, "anthropic", _ROUTE_WEB) for i in (4, 5, 6)]
+        )
+        out = _tool_mod._summarize_run_group(records)
+        assert {r["agreement"] for r in out["routes"]} == {"partial"}
+
+    def test_a_vendor_whose_runs_all_failed_cannot_block_unanimity(self):
+        # Counting a provider that produced nothing would make "found by every
+        # provider" unreachable for reasons that have nothing to do with the
+        # architecture.
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+            + [_mixed_record(i, "anthropic", _ROUTE_DB) for i in (4, 5, 6)]
+            + [_mixed_record(i, "openai", None, ok=False) for i in (7, 8)]
+        )
+        out = _tool_mod._summarize_run_group(records)
+        assert out["routes"][0]["agreement"] == "unanimous"
+        assert out["failed"] == 2
+        assert out["runs_by_provider"]["openai"]["succeeded"] == 0
+
+    def test_a_v3_record_is_grouped_as_unknown_not_guessed_at(self):
+        # Before schema_version 4 the provider was a hardcoded constant, so a
+        # v3 record's vendor genuinely is unknown.
+        records = [_mixed_record(i, None, _ROUTE_DB) for i in (1, 2, 3)]
+        for record in records:
+            del record["model"]["provider"]
+        out = _tool_mod._summarize_run_group(records)
+        assert out["providers"] == ["unknown"]
+        assert out["routes"][0]["agreement"] == "single"
+
+
+class TestSingleProviderGroupIsUnchanged:
+    """One vendor must read exactly as it did before providers could be mixed.
+
+    The per-provider denominator is the same denominator when there is one
+    provider, so this is arithmetic, not a special case — but it is the
+    property most worth pinning, because every existing group report depends
+    on it.
+    """
+
+    def test_the_old_numbers_are_the_same_numbers(self):
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2)]
+            + [_mixed_record(3, "gcp_gemini", _ROUTE_WEB)]
+        )
+        out = _tool_mod._summarize_run_group(records)
+
+        assert out["recurrence_threshold"] == 2
+        assert out["recurrence_countable"] is True
+        assert out["route_count"] == 2
+        assert out["recurring_route_count"] == 1
+        recurring, one_off = out["routes"]
+        assert recurring["route"] == ["web", "customer_db"]
+        assert recurring["recurring"] is True and recurring["run_count"] == 2
+        assert one_off["recurring"] is False
+        # And the new grade says plainly that there was nothing to compare to.
+        assert recurring["agreement"] == "single"
+
+    def test_the_report_gains_nothing_when_one_vendor_ran(self):
+        records = [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+        report = _tool_mod._render_group_report(
+            {**_tool_mod._summarize_run_group(records),
+             "application": "App", "actor": "VT", "flow_map_sha256": "h" * 64},
+            names={}, jewels=set(), flow_map=None, period=("", ""),
+        )
+        # The run header gains no vendor clause, the routes table gains no
+        # per-vendor column, and no agreement grade is claimed. ("across" on
+        # its own would match the existing "came back across the runs".)
+        assert "across gcp_gemini" not in report
+        assert "gcp_gemini 3" not in report
+        assert "unanimous" not in report
+        assert "found by every provider" not in report
+        assert "found by a single" not in report
+
+    def test_the_report_names_the_vendors_when_several_ran(self):
+        records = (
+            [_mixed_record(i, "gcp_gemini", _ROUTE_DB) for i in (1, 2, 3)]
+            + [_mixed_record(i, "anthropic", _ROUTE_DB) for i in (4, 5, 6)]
+        )
+        report = _tool_mod._render_group_report(
+            {**_tool_mod._summarize_run_group(records),
+             "application": "App", "actor": "VT", "flow_map_sha256": "h" * 64},
+            names={}, jewels=set(), flow_map=None, period=("", ""),
+        )
+        assert "across gcp_gemini, anthropic" in report
+        assert "gcp_gemini 3, anthropic 3; unanimous" in report
+        assert "found by every provider" in report
+
+
+class TestGroupConfounds:
+    """A group varying more than the vendor warns; it never refuses.
+
+    Deliberately varying one knob is a legitimate experiment. Arriving at the
+    same variation by accident turns "these vendors disagree" into "these
+    vendors were asked different questions", so it has to be said out loud.
+    """
+
+    def test_a_differing_prompt_is_named(self):
+        records = [
+            _mixed_record(1, "gcp_gemini", _ROUTE_DB, prompt_sha256="a" * 64),
+            _mixed_record(2, "anthropic", _ROUTE_DB, prompt_sha256="b" * 64),
+        ]
+        (warning,) = _tool_mod._group_confounds(records)
+        assert "2 different prompts" in warning
+
+    def test_a_differing_thinking_level_is_named(self):
+        records = [
+            _mixed_record(1, "gcp_gemini", _ROUTE_DB, thinking_level="medium"),
+            _mixed_record(2, "anthropic", _ROUTE_DB, thinking_level="high"),
+        ]
+        warnings = _tool_mod._group_confounds(records)
+        assert any("thinking_level" in w for w in warnings)
+        assert any("high" in w and "medium" in w for w in warnings)
+
+    def test_an_identical_group_warns_about_nothing(self):
+        records = [
+            _mixed_record(1, "gcp_gemini", _ROUTE_DB),
+            _mixed_record(2, "anthropic", _ROUTE_DB),
+            _mixed_record(3, "openai", _ROUTE_DB),
+        ]
+        assert _tool_mod._group_confounds(records) == []
+
+
 class TestRunGroupSummary:
     def _corpus(self, plugin, flow_map, replies, workspace, monkeypatch,
                 run_group="grp"):
@@ -2738,7 +3075,12 @@ class TestRunRecordSchema:
             monkeypatch, export=True,
         )
         version = _records_in(tmp_path)[0]["run"]["tool_version"]
-        assert set(version) == {"manifest_version", "git_sha"}
+        assert set(version) == {
+            "manifest_version", "git_sha", "code_id_source",
+        }
+        assert version["code_id_source"] in (
+            "git_worktree", "build_env", "unavailable",
+        )
 
     def test_run_group_is_slugged(self, plugin_instance, sample_flow_map,
                                   tmp_path, monkeypatch):
@@ -3118,3 +3460,155 @@ class TestExportFailureIsNotFatal:
         assert result.ok
         assert result.result["path_count"] == 1
         assert result.result["export_errors"]
+
+
+def _exports_in(workspace) -> tuple[dict, dict]:
+    art_dir = Path(workspace) / "artifacts"
+    graph = sorted(art_dir.glob("adversary_path_graph_*.json"))[0]
+    seed = sorted(art_dir.glob("adversary_scenario_seed_*.json"))[0]
+    return (
+        json.loads(graph.read_text(encoding="utf-8")),
+        json.loads(seed.read_text(encoding="utf-8")),
+    )
+
+
+class TestExportProvenance:
+    """The graph and the seed must be joinable to each other and to the map.
+
+    Without this block the only thing distinguishing two exports is the
+    filename stamp, and a flow map can only be matched to an export by
+    application name.  See docs/specs/attack_path_detection_normalization.md.
+    """
+
+    def test_both_exports_share_one_run_id(self, plugin_instance,
+                                           sample_flow_map, tmp_path,
+                                           monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch,
+        )
+        graph, seed = _exports_in(tmp_path)
+        assert graph["provenance"]["run_id"]
+        assert graph["provenance"]["run_id"] == seed["provenance"]["run_id"]
+
+    def test_run_id_matches_the_run_record(self, plugin_instance,
+                                           sample_flow_map, tmp_path,
+                                           monkeypatch):
+        """The exports are written before the record and even when export is
+        off, so the id has to be minted once for both."""
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        graph, _ = _exports_in(tmp_path)
+        records = _records_in(tmp_path)
+        assert len(records) == 1
+        assert graph["provenance"]["run_id"] == records[0]["run"]["run_id"]
+        assert graph["provenance"]["created_at"] == records[0]["run"]["created_at"]
+
+    def test_exports_carry_the_flow_map_hash(self, plugin_instance,
+                                             sample_flow_map, tmp_path,
+                                             monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch,
+        )
+        graph, seed = _exports_in(tmp_path)
+        expected = _tool_mod._canonical_flow_map_hash(sample_flow_map)
+        assert graph["provenance"]["flow_map_sha256"] == expected
+        assert seed["provenance"]["flow_map_sha256"] == expected
+
+    def test_exports_pin_the_attack_release_and_actor_id(self, plugin_instance,
+                                                         sample_flow_map,
+                                                         tmp_path, monkeypatch):
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch,
+        )
+        graph, _ = _exports_in(tmp_path)
+        provenance = graph["provenance"]
+        assert provenance["attack_version"]
+        assert provenance["actor_attack_id"] == "G0016"
+        assert provenance["prompt_sha256"]
+        assert "manifest_version" in provenance["tool_version"]
+        assert "provider" in provenance["model"]
+
+    def test_two_projections_do_not_share_an_id(self, plugin_instance,
+                                                sample_flow_map, tmp_path,
+                                                monkeypatch):
+        """A graph from one run must not pair with a seed from another."""
+        first = tmp_path / "a"
+        second = tmp_path / "b"
+        for workspace in (first, second):
+            _project_exporting(
+                plugin_instance, sample_flow_map, _good_projection(), workspace,
+                monkeypatch,
+            )
+        graph_a, _ = _exports_in(first)
+        graph_b, _ = _exports_in(second)
+        assert graph_a["provenance"]["run_id"] != graph_b["provenance"]["run_id"]
+
+    def test_provenance_is_additive(self, plugin_instance, sample_flow_map,
+                                    tmp_path, monkeypatch):
+        """attack_path_visualizer reads named keys; nothing it reads moved."""
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch,
+        )
+        graph, seed = _exports_in(tmp_path)
+        for key in ("source_tool", "status", "interpretation", "actor",
+                    "application", "mitre_mappings", "attack_graph"):
+            assert key in graph
+        assert "scenarios" in seed
+
+
+class TestCodeIdentity:
+    """A deployed container has no .git, so the SHA has to arrive another way.
+
+    An empty git_sha used to read the same whether the identity was
+    unavailable or nobody had looked — on the one platform where the operator
+    cannot inspect the working tree instead.
+    """
+
+    @staticmethod
+    def _reset(monkeypatch):
+        monkeypatch.setattr(_tool_mod, "_GIT_SHA", None, raising=False)
+
+    def test_build_env_sha_wins_over_the_working_tree(self, monkeypatch):
+        self._reset(monkeypatch)
+        monkeypatch.setenv("EVENTMILL_BUILD_SHA", "abc1234")
+        assert _tool_mod._git_short_sha() == "abc1234"
+        assert _tool_mod._code_id_source() == "build_env"
+
+    def test_working_tree_is_used_when_no_build_sha(self, monkeypatch):
+        self._reset(monkeypatch)
+        monkeypatch.delenv("EVENTMILL_BUILD_SHA", raising=False)
+        assert _tool_mod._code_id_source() == "git_worktree"
+        assert _tool_mod._git_short_sha()
+
+    def test_no_git_and_no_build_sha_is_unavailable(self, monkeypatch, tmp_path):
+        """The Cloud Run case: no .git anywhere above the module."""
+        self._reset(monkeypatch)
+        monkeypatch.delenv("EVENTMILL_BUILD_SHA", raising=False)
+        monkeypatch.setattr(
+            _tool_mod, "_GIT_SHA", "", raising=False
+        )
+        assert _tool_mod._git_short_sha() == ""
+        assert _tool_mod._code_id_source() == "unavailable"
+
+    def test_exports_and_record_agree_on_code_identity(self, plugin_instance,
+                                                       sample_flow_map,
+                                                       tmp_path, monkeypatch):
+        self._reset(monkeypatch)
+        monkeypatch.setenv("EVENTMILL_BUILD_SHA", "deadbee")
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        graph, seed = _exports_in(tmp_path)
+        record = _records_in(tmp_path)[0]
+        for block in (graph["provenance"]["tool_version"],
+                      seed["provenance"]["tool_version"],
+                      record["run"]["tool_version"]):
+            assert block["git_sha"] == "deadbee"
+            assert block["code_id_source"] == "build_env"

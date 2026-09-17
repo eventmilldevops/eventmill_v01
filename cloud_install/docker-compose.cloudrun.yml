@@ -17,12 +17,26 @@ services:
       - "8080:8080"
     environment:
       - PORT=8080
-      # LLM keys — dual-tier model (Flash=light, Pro=heavy)
+      # LLM keys — two tiers per provider. Gemini takes one key per tier so
+      # bulk Flash work cannot consume Pro quota; the other two vendors do not
+      # split keys by tier, so one key each serves both.
       - GEMINI_FLASH_API_KEY=${GEMINI_FLASH_API_KEY:-}
       - GEMINI_PRO_API_KEY=${GEMINI_PRO_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_DAYBREAK_API_KEY=${OPENAI_DAYBREAK_API_KEY:-}
+      # Which providers this session may bind. Passed explicitly rather than
+      # omitted so the local container matches the deployed revision. All three
+      # by default: a provider whose key is absent or still "placeholder" is
+      # skipped at runtime, so naming one costs nothing and forgetting to name
+      # one costs a vendor that is silently absent.
+      - EVENTMILL_LLM_PROVIDERS=${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue}
       # Storage — must match the GCS bucket prefix used during provisioning
       - EVENTMILL_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX:-eventmill}
+      # Native-document latency model; empty keeps the plugin's own values.
+      - EVENTMILL_NATIVE_BASE_S=${EVENTMILL_NATIVE_BASE_S:-}
+      - EVENTMILL_NATIVE_S_PER_PAGE=${EVENTMILL_NATIVE_S_PER_PAGE:-}
+      - EVENTMILL_NATIVE_S_PER_CANDIDATE=${EVENTMILL_NATIVE_S_PER_CANDIDATE:-}
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
       - GCS_LOG_BUCKET=${GCS_LOG_BUCKET:-}
       # GCS credentials — set GOOGLE_APPLICATION_CREDENTIALS on host or use ADC volume below

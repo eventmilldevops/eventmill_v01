@@ -4,9 +4,30 @@
 #
 # Usage:
 #   export GOOGLE_CLOUD_PROJECT="your-project-id"
+#   export CLOUD_RUN_REGION="us-central1"
+#
+#   # Gemini — the default provider. Light and heavy tiers are keyed
+#   # separately so bulk Flash work cannot consume Pro quota.
 #   export GEMINI_FLASH_API_KEY="your-key"  # light tier (optional)
 #   export GEMINI_PRO_API_KEY="your-key"    # heavy tier (optional)
+#
+#   # Anthropic / OpenAI — one key per provider. Neither vendor splits keys
+#   # by tier, so a single key serves both tiers of that provider.
+#   export ANTHROPIC_API_KEY="your-key"     # (optional)
+#   export OPENAI_API_KEY="your-key"        # (optional)
+#   export OPENAI_DAYBREAK_API_KEY="your-key"  # (optional, both Daybreak ids)
+#
 #   bash cloud_install/deploy-cloudrun.sh
+#
+# Every key is passed explicitly, empty when unset. Passing an empty value
+# rather than omitting the flag means a redeploy without a key CLEARS it —
+# omitting it would leave whatever the previous revision had, which is how a
+# rotated-out key keeps working and nobody notices.
+#
+# NOTE: this is the plain-env-var path, for quick tests. Keys land in the
+# Cloud Run service config in clear text, readable by anyone holding
+# run.services.get. Production uses deploy-cloudrun-secrets.sh, which mounts
+# them from Secret Manager instead (see the warning printed at the end).
 
 set -e
 
@@ -63,6 +84,43 @@ gcloud iam service-accounts add-iam-policy-binding "${DEFAULT_COMPUTE_SA}" \
 echo "   OK: roles/iam.serviceAccountUser on default compute SA for ${SA_NAME}"
 
 # ---------------------------------------------------------------------------
+# Step 1c: Report which LLM keys this deploy will carry
+# ---------------------------------------------------------------------------
+# Presence only — never the value, never a prefix of it. The 3.8 model swap
+# was correct in the source and inert in the environment for a whole session
+# because nothing announced what was actually configured. Three vendors have
+# strictly more ways to be half-applied, so the deploy says what it is doing
+# before it does it.
+# ---------------------------------------------------------------------------
+echo ""
+echo "🔑 LLM keys in this deploy:"
+key_state() {
+    # $1 = env var name
+    if [ -n "${!1:-}" ]; then echo "set"; else echo "not set"; fi
+}
+for var in GEMINI_FLASH_API_KEY GEMINI_PRO_API_KEY ANTHROPIC_API_KEY \
+           OPENAI_API_KEY OPENAI_DAYBREAK_API_KEY; do
+    printf '   %-22s %s\n' "${var}" "$(key_state "${var}")"
+done
+
+if [ -z "${GEMINI_FLASH_API_KEY:-}" ] && [ -z "${GEMINI_PRO_API_KEY:-}" ] \
+   && [ -z "${GEMINI_API_KEY:-}" ]; then
+    echo ""
+    echo "   ⚠  No Gemini key set. Gemini is currently the ONLY provider the"
+    echo "      runtime binds, so 'connect' will find no models."
+fi
+
+if [ -n "${ANTHROPIC_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
+    echo ""
+    echo "   ℹ  Anthropic / OpenAI keys are carried into the container, but the"
+    echo "      runtime does not bind them yet — model discovery still reads"
+    echo "      only framework/llm/providers/gcp_gemini.json. Until the"
+    echo "      provider registry lands, verify them with 'printenv' in the"
+    echo "      terminal, not with 'models' or 'connect'."
+    echo "      Plan: docs/specs/multi_provider_llm_clients.md (Stages 2 and 5)"
+fi
+
+# ---------------------------------------------------------------------------
 # Step 2: Build the container image
 # ---------------------------------------------------------------------------
 echo ""
@@ -96,9 +154,15 @@ gcloud run deploy "${SERVICE_NAME}" \
     --set-env-vars="GEMINI_FLASH_API_KEY=${GEMINI_FLASH_API_KEY:-}" \
     --set-env-vars="GEMINI_PRO_API_KEY=${GEMINI_PRO_API_KEY:-}" \
     --set-env-vars="ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
+    --set-env-vars="OPENAI_API_KEY=${OPENAI_API_KEY:-}" \
+    --set-env-vars="OPENAI_DAYBREAK_API_KEY=${OPENAI_DAYBREAK_API_KEY:-}" \
+    --set-env-vars="EVENTMILL_LLM_PROVIDERS=${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue}" \
     --set-env-vars="EVENTMILL_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX:-${PROJECT_ID}-eventmill}" \
     --set-env-vars="GCS_LOG_BUCKET=${GCS_LOG_BUCKET:-}" \
     --set-env-vars="EVENTMILL_LOG_LEVEL=${EVENTMILL_LOG_LEVEL:-INFO}" \
+    --set-env-vars="EVENTMILL_NATIVE_BASE_S=${EVENTMILL_NATIVE_BASE_S:-}" \
+    --set-env-vars="EVENTMILL_NATIVE_S_PER_PAGE=${EVENTMILL_NATIVE_S_PER_PAGE:-}" \
+    --set-env-vars="EVENTMILL_NATIVE_S_PER_CANDIDATE=${EVENTMILL_NATIVE_S_PER_CANDIDATE:-}" \
     --set-env-vars="TTYD_USERNAME=${TTYD_USERNAME:-admin}" \
     --set-env-vars="TTYD_PASSWORD=${TTYD_PASSWORD:-changeme}" \
     --allow-unauthenticated

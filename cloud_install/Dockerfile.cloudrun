@@ -17,13 +17,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency manifest and install with GCP + plugin extras
+# Copy dependency manifest and install with GCP + plugin + LLM provider extras
 # gcp:                  google-cloud-storage, secret-manager, logging
 # plugins-threat-modeling: pypdf (PDF extraction for threat_report_analyzer)
 # plugins-log-analysis: pdfplumber, beautifulsoup4, python-docx, stix2 (for threat_intel_ingester)
+# llm-anthropic / llm-openai: the Anthropic and OpenAI SDKs.
+#
+# google-genai is a BASE dependency, not an extra, which is why Gemini worked in
+# this image while the other two providers reported "package not installed" —
+# their clients import their own SDK and there was nothing to import.
+#
+# Installed unconditionally, for the same reason every LLM secret is mounted
+# unconditionally: the image is then identical for every deployment, and
+# adopting a vendor is a secret version plus a restart rather than a rebuild.
+# Both are small pure-Python wheels over httpx, which google-genai already pulls.
 COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir build && \
-    pip install --no-cache-dir ".[gcp,plugins-threat-modeling,plugins-log-analysis,plugins-network-forensics]"
+    pip install --no-cache-dir ".[gcp,plugins-threat-modeling,plugins-log-analysis,plugins-network-forensics,llm-anthropic,llm-openai]"
 
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime
@@ -75,7 +85,18 @@ ENV EVENTMILL_LOG_LEVEL=INFO
 # LLM API keys are injected via Cloud Run secrets (--set-secrets in deploy script):
 #   GEMINI_FLASH_API_KEY - Gemini Flash (light tier, fast/cheap)
 #   GEMINI_PRO_API_KEY   - Gemini Pro (heavy tier, powerful)
-# The shell auto-detects available models from these environment variables.
+#   ANTHROPIC_API_KEY    - Claude Sonnet 5 (light) / Opus 5 (heavy)
+#   OPENAI_API_KEY       - GPT-5.6 Terra (light) / Sol (heavy)
+# One key per provider for the latter two: neither vendor splits keys by tier,
+# unlike the two Gemini keys, which exist so bulk Flash work cannot consume Pro
+# quota.
+#
+# EVENTMILL_LLM_PROVIDERS (space-separated) names which providers the session
+# may bind; every deploy path defaults it to all three. A provider whose key is
+# absent or still holds "placeholder" is skipped at startup and reported as
+# dormant, so naming all three costs nothing and adopting a vendor is a secret
+# version plus a restart. 'providers' shows what bound; 'providers probe <id>'
+# verifies a key without binding it.
 
 EXPOSE 8080
 

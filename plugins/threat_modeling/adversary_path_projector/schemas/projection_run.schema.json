@@ -30,7 +30,12 @@
           "required": ["manifest_version", "git_sha"],
           "properties": {
             "manifest_version": { "type": "string" },
-            "git_sha": { "type": "string" }
+            "git_sha": { "type": "string" },
+            "code_id_source": {
+              "type": "string",
+              "enum": ["git_worktree", "build_env", "unavailable"],
+              "description": "Where git_sha came from, so an empty one is not ambiguous. A deployed container has no .git, so on Cloud Run the SHA is routinely unavailable — and that is the one platform where the operator cannot inspect the working tree instead. 'build_env' is the deploy script's image tag forwarded as EVENTMILL_BUILD_SHA, set only when the image was built from that tree."
+            }
           }
         },
         "flow_map_path": {
@@ -41,6 +46,11 @@
           "type": "string",
           "pattern": "^[0-9a-f]{64}$",
           "description": "SHA-256 over a canonical serialisation (sorted keys, no insignificant whitespace, UTF-8) of the flow map AS SUPPLIED, before normalization. Reformatting or key reordering does not change it; a content change does. This is the join key — two records sharing it were run against the same estate, and nothing else in the record can be trusted to say so."
+        },
+        "prompt_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 over exactly what the model was given: the system context and the prompt body. A comparison across two providers means nothing unless both were asked the same question, and until schema_version 4 that was an argument rather than something a reader could check. Two records sharing a flow_map_sha256 but differing here were not asked the same thing — max_paths, software_scope or the actor resolution moved. Null on records written before schema_version 4."
         },
         "application": { "type": "string" },
         "actor_input": {
@@ -78,17 +88,24 @@
     },
     "model": {
       "type": "object",
-      "description": "What was asked of the model. Gemini only; a second provider is a separate path and this block does not attempt to abstract over one.",
+      "description": "What was asked of the model, and which vendor answered. Provider-neutral since schema_version 4: several providers can be bound at once and any of them may serve this call, so nothing here may be read as Gemini's. Since schema_version 5 provider and vendor are separate fields, because one vendor became reachable under more than one provider id.",
       "required": ["provider", "tier", "thinking_level"],
       "properties": {
-        "provider": { "type": "string" },
+        "provider": {
+          "type": ["string", "null"],
+          "description": "The provider that actually served the request, read from response.provider_id rather than assumed. Null only when no response came back at all. Before schema_version 4 this was the literal 'gcp_gemini' on every record — true while one vendor was bound, and silently false the moment two were, so a v3 record's provider is an assumption rather than an observation."
+        },
+        "vendor": {
+          "type": ["string", "null"],
+          "description": "Which lab's model the provider reaches, e.g. 'openai', read from response.vendor. Added in schema_version 5, when adopting a specialist model alongside its lab's general one made provider and vendor different questions: openai, openai_daybreak_red and openai_daybreak_blue are three providers and one vendor. Recurrence is counted per provider — two models from one lab are two things worth comparing — but how far a route's support extends is a question about vendors, and a provider id alone can no longer answer it. Null on records written before schema_version 5; those must not be given a vendor by guesswork at read time."
+        },
         "model_configured": {
           "type": ["string", "null"],
-          "description": "The id the client was constructed with from gcp_gemini.json, including an EVENTMILL_MODEL_* override or a retired-model substitution. Read it as 'what we asked for'; 'what ran' is model_served."
+          "description": "The id the client was constructed with from its provider manifest, including an EVENTMILL_MODEL_* override or a retired-model substitution. Read it as 'what we asked for'; 'what ran' is model_served."
         },
         "model_served": {
           "type": ["string", "null"],
-          "description": "The id the API reports having served the request (response.model_version, captured by framework/llm/client.py since schema_version 3). An alias resolves to a dated build, so this is the only field that shows a provider-side version change inside one model name — the confound that would otherwise be invisible when comparing two models over the same flow map. Null on records written before schema_version 3, and whenever the provider reports nothing."
+          "description": "The id the API reports having served the request (response.model_version, captured by the provider client since schema_version 3). An alias resolves to a dated build, so this is the only field that shows a provider-side version change inside one model name — the confound that would otherwise be invisible when comparing two models over the same flow map. Null on records written before schema_version 3, and whenever the provider reports nothing."
         },
         "tier": { "type": "string" },
         "thinking_level": {

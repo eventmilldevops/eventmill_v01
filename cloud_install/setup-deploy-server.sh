@@ -104,12 +104,31 @@ export CLOUD_RUN_REGION=""
 export GCS_LOG_BUCKET=""
 
 # Secret names in GCP Secret Manager
-# Dual Gemini keys — display names match the env vars for traceability
+# Dual Gemini keys — display names match the env vars for traceability.
+# Anthropic and OpenAI take one key each: neither vendor splits keys by tier.
+# All four are mounted on every deployment, the unadopted ones holding the
+# literal "placeholder", so the revision shape is identical everywhere and
+# adopting a vendor is a secret version plus a restart rather than a redeploy.
 export EVENTMILL_SECRET_GEMINI_FLASH="eventmill-gemini-flash-api"
 export EVENTMILL_SECRET_GEMINI_PRO="eventmill-gemini-pro-api"
+export EVENTMILL_SECRET_ANTHROPIC="eventmill-anthropic-api"
+export EVENTMILL_SECRET_OPENAI="eventmill-openai-api"
 export EVENTMILL_SECRET_GCS_SA="eventmill-gcs-sa"
 export EVENTMILL_SECRET_TTYD_USER="eventmill-ttyd-user"
 export EVENTMILL_SECRET_TTYD_CRED="eventmill-ttyd-cred"
+
+# Providers this deployment may bind, space-separated. All three by default.
+# Known ids: gcp_gemini anthropic openai — an unknown one is refused, not
+# ignored, because a typo would otherwise deploy with that provider silently
+# absent.
+#
+# Leave this alone. A provider whose key is absent or still holds the seeded
+# "placeholder" is skipped at runtime and reported as dormant, so naming all
+# three costs nothing; removing one means a vendor with a real key in Secret
+# Manager never binds, and the symptom is a vendor that is simply missing
+# rather than an error. Adopting a vendor is a secret version plus a restart.
+# A key can be verified before adoption with 'providers probe <id>'.
+export EVENTMILL_LLM_PROVIDERS="gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue"
 
 # ttyd web terminal credentials (used by deploy-cloudrun.sh quick deploy only)
 export TTYD_USERNAME="analyst"
@@ -117,6 +136,17 @@ export TTYD_PASSWORD="changeme"
 
 # Log level for the deployed service
 export EVENTMILL_LOG_LEVEL="INFO"
+
+# Native-document latency model for threat_intel_ingester's page-range
+# batching (seconds). Leave unset to use the values compiled into the plugin.
+# These decide how a large PDF is split, NOT how long a run may take, and the
+# shipped model overestimates a 154-page report by ~6x — which over-splits it
+# into many small calls and separates pages that should be read together.
+# Retune here rather than rebuilding the image, then confirm against the
+# "[PLAN] ... est. Ns" line the next run logs.
+#   export EVENTMILL_NATIVE_BASE_S="10"
+#   export EVENTMILL_NATIVE_S_PER_PAGE="0.3"
+#   export EVENTMILL_NATIVE_S_PER_CANDIDATE="0.7"
 ENVEOF
     echo "✓ Created ${CONFIG_DIR}/deploy.env"
     echo "  Edit this file with your project settings before deploying."

@@ -303,10 +303,43 @@ Secret Manager. To manage secrets manually:
 #   GEMINI_FLASH_API_KEY  →  eventmill-gemini-flash-api
 #   GEMINI_PRO_API_KEY    →  eventmill-gemini-pro-api
 
+# Anthropic / OpenAI keys — issued in those vendors' own consoles, so there is
+# no `gcloud services api-keys create` equivalent. One key per provider: neither
+# vendor splits keys by tier the way the Gemini pair does.
+#   ANTHROPIC_API_KEY     ->  eventmill-anthropic-api
+#   OPENAI_API_KEY        ->  eventmill-openai-api
+
 # ttyd basic auth credentials
 echo -n "analyst" | gcloud secrets versions add eventmill-ttyd-user --data-file=-
 echo -n "strong-password" | gcloud secrets versions add eventmill-ttyd-cred --data-file=-
 ```
+
+### Why two secrets hold `placeholder`
+
+`eventmill-anthropic-api` and `eventmill-openai-api` are provisioned, IAM-bound
+and mounted for **every** deployment, holding `placeholder` until someone adopts
+that vendor. The build and the deploy are then identical for every project, and
+adopting a provider later is a new secret version plus a restart — no
+infrastructure change, no rebuild, no different deploy path.
+
+`EVENTMILL_LLM_PROVIDERS` names the ones a session may bind, and every deploy
+path defaults it to all three. A provider whose key is absent or still holds
+`placeholder` is skipped at startup and reported as dormant, so naming all
+three costs nothing — and leaving one out would mean a vendor with a real key
+in Secret Manager never binds, with no error to show for it.
+
+Step 4 of the deploy therefore checks the **values**, not the list: it reports
+each dormant secret, and blocks only if ttyd would deploy with the password
+`placeholder` or if no LLM provider holds a real key at all.
+
+**A mounted key is not automatically a bound provider — but a real one now is.**
+`connect` walks every provider named in `EVENTMILL_LLM_PROVIDERS` (all three by
+default) and binds each tier whose key holds a real value, so a genuine
+Anthropic key in Secret Manager appears in `models` and can be selected with
+`use anthropic for <tool>`. A key that is absent or still `placeholder` is
+skipped and reported. `providers` shows the whole picture; `providers probe
+<id>` proves a key reaches its vendor and works even before adoption. See
+`docs/specs/multi_provider_llm_clients.md`.
 
 ### GCS Access (Workload Identity)
 
@@ -397,8 +430,11 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | `EVENTMILL_BUCKET_PREFIX` | No | Bucket naming prefix — must match `provision-gcp-project.sh` (default: `${GOOGLE_CLOUD_PROJECT}-eventmill`) |
 | `CLOUD_RUN_REGION` | **Yes** | Deploy region. No default — must match the region you provisioned in, because the Artifact Registry image path embeds it. Every script refuses to guess. |
 | `GCS_LOG_BUCKET` | No | Legacy single-bucket override — leave empty for new deployments |
+| `EVENTMILL_LLM_PROVIDERS` | No | Space-separated providers a session may bind (default: **all three**). One whose key is absent or `placeholder` is skipped at startup and reported as dormant, so this normally needs no change. An unknown id is refused, not ignored |
 | `EVENTMILL_SECRET_GEMINI_FLASH` | No | Secret Manager name for Flash API key (default: `eventmill-gemini-flash-api`) |
 | `EVENTMILL_SECRET_GEMINI_PRO` | No | Secret Manager name for Pro API key (default: `eventmill-gemini-pro-api`) |
+| `EVENTMILL_SECRET_ANTHROPIC` | No | Secret Manager name for the Anthropic API key (default: `eventmill-anthropic-api`) |
+| `EVENTMILL_SECRET_OPENAI` | No | Secret Manager name for the OpenAI API key (default: `eventmill-openai-api`) |
 | `EVENTMILL_SECRET_TTYD_USER` | No | Secret Manager name for ttyd username (default: `eventmill-ttyd-user`) |
 | `EVENTMILL_SECRET_TTYD_CRED` | No | Secret Manager name for ttyd password (default: `eventmill-ttyd-cred`) |
 | `EVENTMILL_LOG_LEVEL` | No | Logging level (default: `INFO`) |
@@ -409,6 +445,9 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 |----------|-------------|
 | `GEMINI_FLASH_API_KEY` | Gemini Flash API key — light tier (injected from Secret Manager) |
 | `GEMINI_PRO_API_KEY` | Gemini Pro API key — heavy tier (injected from Secret Manager) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (injected from Secret Manager; `placeholder` until adopted) |
+| `OPENAI_API_KEY` | OpenAI API key (injected from Secret Manager; `placeholder` until adopted) |
+| `EVENTMILL_LLM_PROVIDERS` | Providers this deployment may bind (all three by default; unkeyed ones stay dormant) |
 | `TTYD_USERNAME` | ttyd basic auth username |
 | `TTYD_PASSWORD` | ttyd basic auth password |
 | `EVENTMILL_BUCKET_PREFIX` | Bucket prefix for pillar-based storage resolution |

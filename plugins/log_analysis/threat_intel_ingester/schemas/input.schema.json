@@ -34,9 +34,8 @@
     "max_pages": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 200,
-      "default": 50,
-      "description": "Maximum pages to process from PDF reports. Limits cost for very large documents."
+      "maximum": 1000,
+      "description": "Optional cost ceiling on pages read from a PDF. Omit it to read the whole document: the page limit that matters is the selected provider's (gcp_gemini 1000, anthropic/openai 100), enforced before the call. Set this only to cap cost deliberately - pages beyond it are reported as pages_dropped, not silently ignored."
     }
   }
 }
