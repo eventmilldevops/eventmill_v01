@@ -10,7 +10,9 @@ decisions 4 and 5. N1 is the next implementation step and its contract is
 now settled.
 Corpus refreshed 2026-09-17 (later): three new projector runs replaced the
 three pre-provenance pairs. §1.1b, §4.3 3a, §5, §6, §7a and decision 6 are
-restated over the new 43-node corpus. The producer-side shape those counts
+restated over the new 43-node corpus. Decision 7 then settled the plugin shape
+— one plugin, `safe_for_auto_invoke: false`, §2 corrected — which was the last
+thing blocking N1 code. The producer-side shape those counts
 come from is described once, separately, in
 `docs/specs/projector_export_shapes.md`.
 
@@ -317,10 +319,25 @@ with its own artifact. This is what "complete the normalization" means
 concretely, and it is what lets detection guidance development start against
 a stable input instead of against two raw JSON dialects.
 
-**Action:** `normalize_paths` (deterministic, no LLM, `model_tier` irrelevant,
-`safe_for_auto_invoke: true`). Accepts the same primary sources as
-`generate_detections`: `attack_graph`, `scenario`, or a verified pair, plus
-optional `flow_map_artifact_id` and `telemetry_profile_artifact_id`.
+**Action:** `normalize_paths` (deterministic, no LLM, `model_tier` irrelevant).
+Accepts the same primary sources as `generate_detections`: `attack_graph`,
+`scenario`, or a verified pair, plus optional `flow_map_artifact_id` and
+`telemetry_profile_artifact_id`.
+
+**Where it lives.** `normalize_paths` and `generate_detections` are **two
+actions of one plugin**, and that plugin declares
+`safe_for_auto_invoke: false`. *(Corrected 2026-09-17: this section previously
+declared `normalize_paths` as `safe_for_auto_invoke: true`, which the manifest
+cannot express — the field is whole-plugin and there is no per-action form.
+Decision 7, §8.)*
+
+The action is still free, deterministic and provider-less; what changes is only
+that the **plugin** it sits in is not marked auto-invocable, because it also
+holds a heavy-tier generation call. `adversary_path_projector` already has this
+shape — `profile_actor` and `validate_flow_map` are free and deterministic
+while `project_paths` is a heavy call, and the plugin is `false`. Any
+documentation of `normalize_paths` should say it is safe and free to run, and
+should not claim the manifest says so.
 
 **Output artifact:** `detection_context_pack_<timestamp>_<run_id>.json`,
 artifact type `json_events`, `metadata.kind:
@@ -339,7 +356,7 @@ warnings:       [ structured codes, never prose-only ]
 `generate_detections` then takes either a primary source (normalizing
 internally) **or** a context pack ID. Two benefits worth the extra action:
 
-- All four fixtures — 58 nodes across 15, 24, 10 and 9 — can be normalized,
+- All four fixtures — 43 nodes across 9, 11, 10 and 13 — can be normalized,
   diffed and reviewed today, with no provider configured and no cost.
 - A guidance run that produced a bad draft can be re-examined against the
   exact pack it was given, rather than re-derived.
@@ -700,6 +717,14 @@ N1–N4 need no provider and no cost. N5 is projector work and can run in
 parallel; the designer degrades to `asset_named` without it, which is a
 documented state rather than a failure.
 
+**Where N1's code lands.** One plugin directory under
+`plugins/threat_modeling/`, holding both `normalize_paths` and the later
+`generate_detections`, with `safe_for_auto_invoke: false` — decision 7, §8. The
+normalization library is plugin-local, not a `framework/` module, and nothing
+in it may be imported by another plugin. N1 may therefore create the plugin
+directory and manifest up front even though the action itself is N4; the
+adapters are ordinary modules beside `tool.py` until then.
+
 ### Corrections the designer plan needs
 
 - §1 table, §6 headings, §8 `expected_nodes: 15` and the §9 acceptance gates:
@@ -937,15 +962,60 @@ Decision taken, 2026-09-17 (operator), later the same day:
    committed under repository tests, and the path-presence skip the earlier
    decision contemplated is no longer needed.
 
-   **The first decision is still open**: where `normalize_paths` lives, given
-   that `safe_for_auto_invoke` is a whole-plugin manifest field. It still
-   belongs before the first line of N1 code.
+   The other decision is resolved separately, as decision 7 below.
 
    The cost of the refresh is recorded in §7a — the 10-step path, the
    three-path graph, the within-path repeats, the no-provenance case and the
    `git_worktree` code-identity branch all lose their real subject and become
    synthetic constructions — and the producer-side shape the new counts come
    from is `docs/specs/projector_export_shapes.md`.
+
+7. **`normalize_paths` and `generate_detections` are one plugin, declared
+   `safe_for_auto_invoke: false`.** This was the last decision blocking N1, and
+   it decides where the normalization library physically lives: inside a single
+   plugin directory, not in `framework/` and not duplicated across two plugins.
+   §2 is corrected accordingly.
+
+   **The constraint.** `safe_for_auto_invoke` is one boolean per plugin.
+   `docs/specs/manifest_schema.json` has no `actions` property and sets
+   `additionalProperties: false`; `framework/plugins/loader.py:67` reads a
+   single boolean. §2's original `safe_for_auto_invoke: true` for a single
+   action was therefore unimplementable as written.
+
+   **Why one plugin rather than two.** Decision 2 says `generate_detections`
+   accepts a raw export as well as a pack, so **both** actions need the
+   normalization library. No plugin in this repository imports another — the
+   loader imports each under a flat module name
+   (`eventmill_plugin_<pillar>_<tool>`) specifically to avoid parent-package
+   lookups, and plugins share code only through `framework.*`. A two-plugin
+   split would therefore force one of: moving detection-specific normalization
+   into `framework/` (which holds cross-cutting infrastructure — reference
+   data, LLM, documents — not one feature's logic), duplicating it, or
+   reversing decision 2 so generation only ever accepts a pack. None is worth
+   the flag.
+
+   **What it costs, stated plainly.** A free, deterministic, provider-less
+   action sits in a plugin the manifest does not mark auto-invocable, and the
+   router surfaces one catalog entry rather than two — so normalization is not
+   independently discoverable. **Today that cost is unobservable**: nothing in
+   the framework reads `safe_for_auto_invoke`. The only non-test reference in
+   the tree is the assignment in `loader.py`; routing scores on `capabilities`,
+   `tags`, `artifacts_consumed`, `chains_to` and `also_useful_in`. The field is
+   declarative intent, not a live gate.
+
+   **What was rejected, and what would reopen it.** Widening the manifest
+   schema for a per-action flag was rejected *for now*, not on principle: it is
+   a change to visibility and invoke policy, `additionalProperties: false`
+   means an unregistered field fails validation for every plugin at once, and
+   no caller reads the field yet, so there is no evidence to design it against
+   — the same reasoning that forbids widening the `stability` enum to silence
+   the validator. If `safe_for_auto_invoke` becomes a live gate and this action
+   is the case that proves per-action granularity is needed, that is when to
+   make the change, with a real caller to test it.
+
+   Precedent: `adversary_path_projector` already mixes free deterministic
+   actions (`profile_actor`, `validate_flow_map`) with a heavy-tier
+   `project_paths` under a single `safe_for_auto_invoke: false`.
 
 ## 9. Review status
 
@@ -993,3 +1063,15 @@ are dated to the retired corpus by §0, and their findings still stand even
 where their counts no longer do. Everything measured is set out once in
 `docs/specs/projector_export_shapes.md`. No code changed, no test run, no LLM
 call made in this revision.
+
+**Decision 7, 2026-09-17 (later still).** Before recommending a plugin shape,
+four things were read rather than recalled: `manifest_schema.json` (38
+top-level properties, no `actions`, `additionalProperties: false`);
+`framework/plugins/loader.py:67`; a tree-wide search for `auto_invoke`, which
+returns only that assignment outside tests and the `build/` copy; and the
+routing modules' manifest field usage (`capabilities`, `tags`,
+`artifacts_consumed`, `chains_to`, `also_useful_in` — the flag is not among
+them). Cross-plugin imports were checked for and do not exist: plugins import
+shared code only from `framework.*`. The projector's own manifest was read for
+the precedent. §2 and §6 were then corrected and decision 7 recorded. **N1 is
+now unblocked.** Still no code changed, no test run, no LLM call made.
