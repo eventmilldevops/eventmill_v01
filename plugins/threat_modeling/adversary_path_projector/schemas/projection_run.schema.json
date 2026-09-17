@@ -30,7 +30,12 @@
           "required": ["manifest_version", "git_sha"],
           "properties": {
             "manifest_version": { "type": "string" },
-            "git_sha": { "type": "string" }
+            "git_sha": { "type": "string" },
+            "code_id_source": {
+              "type": "string",
+              "enum": ["git_worktree", "build_env", "unavailable"],
+              "description": "Where git_sha came from, so an empty one is not ambiguous. A deployed container has no .git, so on Cloud Run the SHA is routinely unavailable — and that is the one platform where the operator cannot inspect the working tree instead. 'build_env' is the deploy script's image tag forwarded as EVENTMILL_BUILD_SHA, set only when the image was built from that tree."
+            }
           }
         },
         "flow_map_path": {

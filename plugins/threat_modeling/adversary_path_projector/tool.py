@@ -510,6 +510,17 @@ def _git_short_sha() -> str:
     if _GIT_SHA is not None:
         return _GIT_SHA
 
+    # A deployed container has no .git at all, so the walk below finds nothing
+    # and every export from Cloud Run would carry an empty SHA — on the one
+    # platform where the operator cannot look at the working tree instead. The
+    # deploy script already computes the short SHA to tag the image with, so it
+    # forwards it here. Only set when the image was actually built from that
+    # tree: a redeploy of :latest must not claim a SHA it did not build.
+    build_sha = (os.environ.get("EVENTMILL_BUILD_SHA") or "").strip()
+    if build_sha:
+        _GIT_SHA = build_sha[:12]
+        return _GIT_SHA
+
     _GIT_SHA = ""
     for parent in Path(__file__).resolve().parents:
         git_dir = parent / ".git"
@@ -541,6 +552,23 @@ def _git_short_sha() -> str:
             logger.debug("Could not read git SHA: %s", exc)
         break
     return _GIT_SHA
+
+
+def _code_id_source() -> str:
+    """Where the recorded SHA came from, so an empty one is not ambiguous.
+
+    An empty ``git_sha`` used to read the same whether the code identity was
+    unavailable or nobody had looked.  On Cloud Run it is routinely
+    unavailable, and that is exactly where ``manifest_version`` — which does
+    not move on its own — leaves an export with no code identity at all.  A
+    reader must be able to tell "this build is unidentified" from "this field
+    was never populated".
+    """
+    if (os.environ.get("EVENTMILL_BUILD_SHA") or "").strip():
+        return "build_env"
+    if _git_short_sha():
+        return "git_worktree"
+    return "unavailable"
 
 
 _MANIFEST_VERSION: str | None = None
@@ -3764,6 +3792,7 @@ class AdversaryPathProjector:
                 "tool_version": {
                     "manifest_version": _manifest_version(),
                     "git_sha": _git_short_sha(),
+                    "code_id_source": _code_id_source(),
                 },
                 "flow_map_path": run_context["flow_map_path"],
                 "flow_map_sha256": run_context["flow_map_sha256"],
@@ -4291,6 +4320,7 @@ class AdversaryPathProjector:
             "tool_version": {
                 "manifest_version": _manifest_version(),
                 "git_sha": _git_short_sha(),
+                "code_id_source": _code_id_source(),
             },
             "model": {
                 "provider": getattr(response, "provider_id", None),

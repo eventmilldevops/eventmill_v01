@@ -253,9 +253,10 @@ expected_result, success_indicators                             +
 access_before, access_after, access_source,                     + access_source
 credential_type, credential_scope, state_check, state_note
 
-# topology
-transition: {flow_id, from, to, protocol, port,                 + structured
-             authenticated, crosses_boundary, evidence: structured|text}
+# topology                                          + movement discriminator
+transition: {movement, flow_id, from, to, protocol,
+             authenticated, crosses_boundary, exposure,
+             evidence: structured|text, raw}
 predecessors, successors
 
 # control and coverage                                          + whole block
@@ -278,6 +279,30 @@ the same shape but marked `text`, with the original string retained. The
 designer plan's rule stands — parsing does not promote text to a structured
 flow — but the parsed form is what a sensor selector can read, so both are
 kept rather than only the string.
+
+**The graph's `transition` has three shapes, not one.** Counted across all
+three fixtures (49 nodes):
+
+| Source shape | Count | `movement` | Meaning |
+|---|---:|---|---|
+| `{entry: true, exposure: …}` | 8 | `entry` | The path's first step. There is no originating component; `exposure` is the surface it arrives on. |
+| `{flow, from, to, protocol, authenticated, crosses_boundary}` | 20 | `declared_flow` | Movement along a flow the map declares. `flow` is the flow map's flow id. |
+| `null` | 21 | `in_place` or `undeclared` | No transition object at all. |
+
+The `null` case is not one case. In 20 of 21 occurrences the step's
+`component_id` equals its predecessor's — the actor is acting *in place* on a
+component it already holds, which is a different detection problem from lateral
+movement and must not read as missing data. In the remaining occurrence
+(`204815` / `helpdesk-oracle-onprem` step 3, `okta` → `front_door`) the
+component changes with no declared flow: movement the flow map does not
+describe. Normalization sets `movement: in_place` for the first and
+`movement: undeclared` for the second, and an `undeclared` transition is a
+`review_flags` entry — an adversary crossing a boundary the model of the estate
+does not contain is precisely what a reviewer should see.
+
+Note also that `port` appears on flow-map flows but **not** on a step's
+`transition`; it is available only through the flow-map join, at
+`component_bound` grade.
 
 `monitoring_claim` is derived from `detecting_controls` and the catalogue's
 `detection_capability`, and exists so the phrase "a control is listed" can
@@ -304,14 +329,19 @@ already there are harmless.
   "flow_map_path": "…",
   "attack_version": "19.2",
   "actor_attck_id": "G0016",
-  "plugin_version": "…",
+  "tool_version": {"manifest_version": "…", "git_sha": "…",
+                   "code_id_source": "git_worktree|build_env|unavailable"},
   "prompt_sha256": "…",
   "provider": {"provider_id": "…", "model": "…"}
 }
 ```
 
 Every value already exists in `run_context` at `tool.py:3538-3562`; none is
-newly computed. A graph and seed written by the same call share a `run_id`,
+newly computed. `code_id_source` is required reading before trusting
+`git_sha`: a container has no working tree, so an export produced on Cloud Run
+before 2026-09-17 carries an empty SHA and no source field, and its code
+identity is simply not recoverable. Normalization records that as a provenance
+limitation rather than treating the empty string as a value. A graph and seed written by the same call share a `run_id`,
 which is the pair-join key the designer plan needs and cannot currently have.
 
 ### 4.2 What the designer does with older exports
@@ -435,6 +465,10 @@ Beyond the designer plan's list, and all runnable without a provider:
   operator flag.
 - **Flow map hash mismatch** blocks enrichment; a flow map with no hash in the
   export marks every derived field `asserted_by_operator`.
+- **All three transition shapes**, including both readings of `null`: a
+  same-component step becomes `movement: in_place`, and a component change with
+  no declared flow becomes `movement: undeclared` and raises a review flag.
+  Neither may be reported as absent data.
 - **Completeness grading** across all four grades, including a
   scenario-only run reaching `asset_text_only` with `component_id: null`.
 - **Taxonomy.** `Stealth` unchanged against v19.2; a deliberately retired ID

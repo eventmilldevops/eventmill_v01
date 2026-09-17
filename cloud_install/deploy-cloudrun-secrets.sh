@@ -803,6 +803,12 @@ fi
 # ---------------------------------------------------------------------------
 # Step 6: Build the image
 # ---------------------------------------------------------------------------
+# A deployed container has no .git, so anything the runtime writes carries no
+# code identity unless the build passes one in. IMAGE_TAG is that identity —
+# but only on the path that actually builds it. Reusing :latest would be
+# claiming a SHA this tree did not produce, which is worse than saying nothing:
+# the runtime records code_id_source: unavailable instead.
+BUILD_SHA=""
 if [ "${SKIP_BUILD}" = "1" ]; then
     echo "📦 Step 6: SKIP_BUILD=1 — reusing ${IMAGE_BASE}:latest"
     DEPLOY_IMAGE="${IMAGE_BASE}:latest"
@@ -846,6 +852,9 @@ BUILDEOF
         exit 1
     fi
     DEPLOY_IMAGE="${IMAGE_BASE}:${IMAGE_TAG}"
+    # IMAGE_TAG falls back to a UTC timestamp when git was unavailable at build
+    # time; forwarded either way, since it still identifies the image built.
+    BUILD_SHA="${IMAGE_TAG}"
 fi
 echo ""
 
@@ -881,7 +890,7 @@ if ! gcloud run deploy "${SERVICE_NAME}" \
         --session-affinity \
         --service-account="${SA_EMAIL}" \
         --set-secrets="${SECRET_MOUNTS}" \
-        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},EVENTMILL_BUCKET_PREFIX=${BUCKET_PREFIX},EVENTMILL_LOG_LEVEL=${LOG_LEVEL},EVENTMILL_LLM_PROVIDERS=${LLM_PROVIDERS},EVENTMILL_NATIVE_BASE_S=${NATIVE_BASE_S},EVENTMILL_NATIVE_S_PER_PAGE=${NATIVE_S_PER_PAGE},EVENTMILL_NATIVE_S_PER_CANDIDATE=${NATIVE_S_PER_CANDIDATE}" \
+        --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},EVENTMILL_BUCKET_PREFIX=${BUCKET_PREFIX},EVENTMILL_LOG_LEVEL=${LOG_LEVEL},EVENTMILL_LLM_PROVIDERS=${LLM_PROVIDERS},EVENTMILL_NATIVE_BASE_S=${NATIVE_BASE_S},EVENTMILL_NATIVE_S_PER_PAGE=${NATIVE_S_PER_PAGE},EVENTMILL_NATIVE_S_PER_CANDIDATE=${NATIVE_S_PER_CANDIDATE},EVENTMILL_BUILD_SHA=${BUILD_SHA}" \
         "${AUTH_FLAG}"; then
     echo ""
     if [ "${SERVICE_EXISTS}" = "1" ]; then

@@ -3075,7 +3075,12 @@ class TestRunRecordSchema:
             monkeypatch, export=True,
         )
         version = _records_in(tmp_path)[0]["run"]["tool_version"]
-        assert set(version) == {"manifest_version", "git_sha"}
+        assert set(version) == {
+            "manifest_version", "git_sha", "code_id_source",
+        }
+        assert version["code_id_source"] in (
+            "git_worktree", "build_env", "unavailable",
+        )
 
     def test_run_group_is_slugged(self, plugin_instance, sample_flow_map,
                                   tmp_path, monkeypatch):
@@ -3555,3 +3560,55 @@ class TestExportProvenance:
                     "application", "mitre_mappings", "attack_graph"):
             assert key in graph
         assert "scenarios" in seed
+
+
+class TestCodeIdentity:
+    """A deployed container has no .git, so the SHA has to arrive another way.
+
+    An empty git_sha used to read the same whether the identity was
+    unavailable or nobody had looked — on the one platform where the operator
+    cannot inspect the working tree instead.
+    """
+
+    @staticmethod
+    def _reset(monkeypatch):
+        monkeypatch.setattr(_tool_mod, "_GIT_SHA", None, raising=False)
+
+    def test_build_env_sha_wins_over_the_working_tree(self, monkeypatch):
+        self._reset(monkeypatch)
+        monkeypatch.setenv("EVENTMILL_BUILD_SHA", "abc1234")
+        assert _tool_mod._git_short_sha() == "abc1234"
+        assert _tool_mod._code_id_source() == "build_env"
+
+    def test_working_tree_is_used_when_no_build_sha(self, monkeypatch):
+        self._reset(monkeypatch)
+        monkeypatch.delenv("EVENTMILL_BUILD_SHA", raising=False)
+        assert _tool_mod._code_id_source() == "git_worktree"
+        assert _tool_mod._git_short_sha()
+
+    def test_no_git_and_no_build_sha_is_unavailable(self, monkeypatch, tmp_path):
+        """The Cloud Run case: no .git anywhere above the module."""
+        self._reset(monkeypatch)
+        monkeypatch.delenv("EVENTMILL_BUILD_SHA", raising=False)
+        monkeypatch.setattr(
+            _tool_mod, "_GIT_SHA", "", raising=False
+        )
+        assert _tool_mod._git_short_sha() == ""
+        assert _tool_mod._code_id_source() == "unavailable"
+
+    def test_exports_and_record_agree_on_code_identity(self, plugin_instance,
+                                                       sample_flow_map,
+                                                       tmp_path, monkeypatch):
+        self._reset(monkeypatch)
+        monkeypatch.setenv("EVENTMILL_BUILD_SHA", "deadbee")
+        _project_exporting(
+            plugin_instance, sample_flow_map, _good_projection(), tmp_path,
+            monkeypatch, export=True,
+        )
+        graph, seed = _exports_in(tmp_path)
+        record = _records_in(tmp_path)[0]
+        for block in (graph["provenance"]["tool_version"],
+                      seed["provenance"]["tool_version"],
+                      record["run"]["tool_version"]):
+            assert block["git_sha"] == "deadbee"
+            assert block["code_id_source"] == "build_env"
