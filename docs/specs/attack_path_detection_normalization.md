@@ -8,6 +8,8 @@ Date: 2026-09-16. Extended 2026-09-17 with §1.4b (mitigation focus),
 corrected §4.1 provenance names, the `component_bound_partial` grade, and
 decisions 4 and 5. N1 is the next implementation step and its contract is
 now settled.
+**N1 is built** (`docs/change_log/2026-09-17-n1-adapters-and-identity.md`,
+commit `bbd4384`), with artifact-id input added the same day per decision 8.
 Corpus refreshed 2026-09-17 (later): three new projector runs replaced the
 three pre-provenance pairs. §1.1b, §4.3 3a, §5, §6, §7a and decision 6 are
 restated over the new 43-node corpus. Decision 7 then settled the plugin shape
@@ -339,6 +341,24 @@ while `project_paths` is a heavy call, and the plugin is `false`. Any
 documentation of `normalize_paths` should say it is safe and free to run, and
 should not claim the manifest says so.
 
+**Inputs are artifacts, and so are outputs.** Confirmed 2026-09-17 as the
+shape of the first working version and implemented in N1 — decision 8, §8. The
+registered artifact, not a file path, is how a projector export reaches this
+plugin:
+
+| Input | Meaning |
+|---|---|
+| `artifact_ids: [graph, seed]` | the normal route; one or two registered exports of the same run |
+| `artifact_id` | a single export, because the shell's own `artifact_id` handling speaks the singular and injects `file_path`/`path` beside it |
+| `sources: [path, path]` | file paths, for a local export that was never registered |
+
+A path is a convenience for local work. It is not the route that works in the
+container, where an export is auto-exported to a bucket and only the registry
+knows where it landed; resolution therefore goes through `context.artifacts`
+like every other plugin's. An artifact that is registered but whose bytes are
+not readable on this disk is reported as `ARTIFACT_UNAVAILABLE` naming its
+`storage_uri` — not as a missing file, and never as an empty result.
+
 **Output artifact:** `detection_context_pack_<timestamp>_<run_id>.json`,
 artifact type `json_events`, `metadata.kind:
 attack_path_detection_context_pack`. Structure:
@@ -354,7 +374,8 @@ warnings:       [ structured codes, never prose-only ]
 ```
 
 `generate_detections` then takes either a primary source (normalizing
-internally) **or** a context pack ID. Two benefits worth the extra action:
+internally) **or** a context pack ID — in both cases by artifact id, per the
+table above. Two benefits worth the extra action:
 
 - All four fixtures — 43 nodes across 9, 11, 10 and 13 — can be normalized,
   diffed and reviewed today, with no provider configured and no cost.
@@ -709,7 +730,7 @@ Normalization first and separately; guidance builds on the pack.
 | **N1. Adapters and identity** | Graph, seed and single-scenario adapters; the three identities of §4.2a; `(projection_identity, path_id, node_index)` keys; deterministic `draft_id`; union merge with the §4.3 precedence table including the 3a `state_check` **and `transition`** canonicalizations; `provenance_by_field` | All four fixtures normalize graph-only and seed-only to identical ordered node keys (9, 11, 10, 13 — **43** in all). All four carry provenance, so the `run_id` join is the normal path and §4.2's derived-identity path has no fixture — it is covered by the §7a synthetic pair. A repeated `(technique, component)` inside one path stays distinct on the §7 synthetic case; the three cross-path repeats in `124121` survive as distinct nodes. `AE-0001` recurring per path never collides. Every field carries an origin and pointer. No pair joins without `verified` or an explicit operator assertion. |
 | **N2. Provenance** | Projector `provenance` block (§4.1) — **built 2026-09-16**; designer-side legacy handling (§4.2); conflict codes | A graph from one run and a seed from another are refused as a pair. A flow map whose hash differs does not enrich. Every field carries an origin and pointer. |
 | **N3. Enrichment and grading** | Flow-map join, control catalogue, mitigation-name resolution, the §1.4b focus cut and coverage ratio, taxonomy reconciliation, completeness grades | `Stealth` survives against v19.2. `uncovered_mitigations` resolve to names locally. `mitigation_focus[]` is the 1–2 narrowest by technique breadth, deterministic and tie-broken by M-ID. Grades match §5 across all four fixtures with and without the flow map — 38 `component_bound`, 5 `component_bound_partial`, and 43 `asset_named` when the map is withheld. The two `TACTIC_CORRECTED` relabels in `124121` and the one in `022646` survive normalization. |
-| **N4. Context pack artifact** | `normalize_paths` action, pack schema, registration, CLI `show`/`export`, bounded `summarize_for_llm` | Pack round-trips; re-normalizing the same inputs is byte-identical apart from run ID and timestamp; the summary states counts, grades and conflicts without pasting node bodies. |
+| **N4. Context pack artifact** | `normalize_paths` action, pack schema, registration, CLI `show`/`export`, bounded `summarize_for_llm` | Pack round-trips; re-normalizing the same inputs is byte-identical apart from run ID and timestamp; the summary states counts, grades and conflicts without pasting node bodies. Input by `artifact_ids` and output as a registered artifact are **done in N1** (decision 8); what N4 adds is the pack's own schema and `metadata.kind`, not persistence — the shell already auto-persists a result that registers nothing. |
 | **N5. `normalize_flow_map`** | The projector's own Phase 4 action | Prose/Markdown/Mermaid → canonical flow map JSON with a stable `_canonical_flow_map_hash`. An unstated control status becomes `partial` and is flagged, never `implemented` — the rule already recorded in `docs/change_log/2026-09-11-adversary-path-projector-phase-3.md`. This is what makes `component_bound` routinely reachable. |
 | **G1…** | Grounding, generation, workbook — designer plan stages 2–5, unchanged except that they consume a pack | As in the designer plan, with the node-count constants replaced by pack inventory. |
 
@@ -1017,6 +1038,45 @@ Decision taken, 2026-09-17 (operator), later the same day:
    actions (`profile_actor`, `validate_flow_map`) with a heavy-tier
    `project_paths` under a single `safe_for_auto_invoke: false`.
 
+Decision taken, 2026-09-17 (operator), after N1 was built:
+
+8. **Artifacts are the input and output route for the first working version of
+   detection generation, through this plugin.** Registered artifacts, resolved
+   through `context.artifacts`, rather than file paths passed by hand.
+   Implemented in N1 and confirmed end to end in the running shell:
+
+   ```text
+   run attack_path_detection_designer --artifact_ids art_e2697614,art_2df55952
+     ✓ Completed successfully
+     Normalized 10 nodes across 2 paths.
+     Pair: run_id (provenance verified, verified=True).
+   ```
+
+   **Why this and not file paths.** In the container an export is auto-exported
+   to the common bucket and only the registry knows where it landed, so a path
+   is not a usable handle there. The artifact route is also what lets the chain
+   run without an operator in the middle: the projector registers its two
+   exports, the designer consumes them by id, and its own result is registered
+   in turn. `chains_from: adversary_path_projector` states that relationship
+   where the router can read it.
+
+   **What follows from it.** Three things are settled rather than open. File
+   paths stay supported but are a local convenience, not the contract. An
+   artifact that is registered but whose bytes are unreadable here is its own
+   reported condition — `ARTIFACT_UNAVAILABLE`, naming the `storage_uri` —
+   because on Cloud Run that is a real state and must not read as a missing
+   file or as an empty result. And the shell already auto-persists a result
+   that registers no artifact of its own, so a result is an artifact before N4
+   exists; N4's remaining work is the pack's schema and `metadata.kind`, not
+   persistence. Adding the tool to `DEFAULT_AUTO_EXPORT_TOOLS` (currently only
+   `attack_path_visualizer`) is what makes a container run's output leave the
+   container.
+
+   **Untested:** whether `artifact.file_path` points at readable bytes on Cloud
+   Run. If it does not, the condition is reported precisely, but fetching from
+   the bucket would need the storage resolver, which plugins do not receive.
+   Change log `docs/change_log/2026-09-17-artifact-input-route.md`.
+
 ## 9. Review status
 
 Parsed both export pairs and diffed their per-node fields; read
@@ -1063,6 +1123,16 @@ are dated to the retired corpus by §0, and their findings still stand even
 where their counts no longer do. Everything measured is set out once in
 `docs/specs/projector_export_shapes.md`. No code changed, no test run, no LLM
 call made in this revision.
+
+**After N1, 2026-09-17.** The claims in decision 8 were checked in the code
+before being written: `do_run`'s `artifact_id` handling and its injection of
+`file_path`/`path` (`framework/cli/shell.py:2925-2932`), the auto-persistence
+of a result that registers nothing (`shell.py:3105-3110`), the auto-export
+gate and its `DEFAULT_AUTO_EXPORT_TOOLS` default of `attack_path_visualizer`
+(`shell.py:932`, `1061-1072`), and `context.artifacts` as the only artifact
+handle a plugin receives (`framework/plugins/protocol.py:256-287`). The shell
+transcript quoted there is a real run against two registered fixtures. Suite
+1597 passing.
 
 **Decision 7, 2026-09-17 (later still).** Before recommending a plugin shape,
 four things were read rather than recalled: `manifest_schema.json` (38

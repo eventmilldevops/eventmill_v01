@@ -20,10 +20,31 @@ occurrence key, a deterministic `draft_id`, the union merge and
 | `normalize_paths` | planned, stage N4 | The same normalization, persisted as a `detection_context_pack` artifact. |
 | `generate_detections` | planned | Reasons over a pack to draft detection guidance. Heavy tier. |
 
+## Inputs: artifacts first
+
+Registered artifacts are the route (spec decision 8). The projector registers
+its two exports; this tool consumes them by id, and its own result is
+registered in turn.
+
 ```bash
-run attack_path_detection_designer --action validate_input \
-  --sources '["…/path_graph_20260917_124121.json","…/scenario_seed_20260917_124121.json"]'
+# the normal route — a graph and a seed of the same run
+run attack_path_detection_designer --artifact_ids art_e2697614,art_2df55952
+
+# a single document
+run attack_path_detection_designer --artifact_id art_e2697614
+
+# file paths, for a local export that was never registered
+run attack_path_detection_designer --sources ./path_graph.json,./scenario_seed.json
 ```
+
+A path is a local convenience. It is not the handle that works in the
+container, where an export is auto-exported to the common bucket and only the
+registry knows where it landed. `file_path` and `path` are also accepted
+because `do_run` injects both when it resolves a singular `artifact_id`.
+
+An artifact that is registered but whose bytes are not readable here comes back
+as `ARTIFACT_UNAVAILABLE` naming its `storage_uri` — on Cloud Run that is a
+real state, and it is not the same thing as a missing file.
 
 ## Why this plugin is not auto-invocable
 

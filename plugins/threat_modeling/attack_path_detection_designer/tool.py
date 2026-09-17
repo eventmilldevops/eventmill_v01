@@ -74,6 +74,77 @@ class ValidationResult:
     errors: list[str] | None = None
 
 
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    return list(value) if isinstance(value, list) else [value]
+
+
+def _requested_artifact_ids(payload: dict[str, Any]) -> list[Any]:
+    """Artifact ids the caller asked for, in the order given.
+
+    A pair needs two, so `artifact_ids` is the form to use. `artifact_id` is
+    also accepted because the shell's own flag handling speaks the singular.
+    """
+    ids = _as_list(payload.get("artifact_ids")) + _as_list(payload.get("artifact_id"))
+    seen: list[Any] = []
+    for entry in ids:
+        if entry not in seen:
+            seen.append(entry)
+    return seen
+
+
+def _requested_paths(payload: dict[str, Any]) -> list[Any]:
+    """File paths the caller asked for.
+
+    `file_path` and `path` are here because `do_run` injects both when it
+    resolves a singular `artifact_id`. Ignoring them would make that route
+    fail with "no input" on a payload the shell believed it had filled in.
+    """
+    paths = _as_list(payload.get("sources"))
+    if not _requested_artifact_ids(payload):
+        for key in ("file_path", "path"):
+            for entry in _as_list(payload.get(key)):
+                if entry not in paths:
+                    paths.append(entry)
+    return paths
+
+
+def _resolve_artifact(artifact_id: Any, context: Any) -> tuple[Any, ToolResult | None]:
+    """Find a registered artifact and return (display name, local path).
+
+    Resolution goes through `context.artifacts`, which is how every other
+    plugin reaches a file: in the container the registry is what knows where
+    an export actually landed.
+    """
+    artifacts = getattr(context, "artifacts", None) or []
+    artifact = next((a for a in artifacts if a.artifact_id == artifact_id), None)
+    if artifact is None:
+        return None, ToolResult(
+            ok=False,
+            error_code="ARTIFACT_NOT_FOUND",
+            message=(
+                f"Artifact '{artifact_id}' not found in session. "
+                "Use 'artifacts' to list loaded artifacts."
+            ),
+        )
+
+    path = Path(artifact.file_path) if artifact.file_path else None
+    if path is None or not path.exists():
+        storage_uri = getattr(artifact, "storage_uri", None)
+        return None, ToolResult(
+            ok=False,
+            error_code="ARTIFACT_UNAVAILABLE",
+            message=(
+                f"Artifact '{artifact_id}' is registered but its file is not readable "
+                f"at {artifact.file_path!r}"
+                + (f"; it is stored at {storage_uri}" if storage_uri else "")
+            ),
+            details={"artifact_id": artifact_id, "storage_uri": storage_uri},
+        )
+    return (Path(artifact.file_path).name, path), None
+
+
 class AttackPathDetectionDesigner:
     """Normalize projected attack paths into reviewable node contexts."""
 
@@ -100,34 +171,56 @@ class AttackPathDetectionDesigner:
                 f"Unknown action '{action}'. Valid actions: {', '.join(ACTIONS)}"
             )
 
-        sources = payload.get("sources")
-        if not isinstance(sources, list) or not sources:
+        artifact_ids = _requested_artifact_ids(payload)
+        sources = _requested_paths(payload)
+
+        if not artifact_ids and not sources:
             errors.append(
-                "'sources' must be a non-empty list of file paths to projector exports "
-                "(one document, or a path graph and a scenario seed of the same run)"
+                "Supply 'artifact_ids' (registered projector exports, the usual route) "
+                "or 'sources' (file paths): one document, or a path graph and a "
+                "scenario seed of the same run"
             )
-        elif len(sources) > 2:
+        if len(artifact_ids) + len(sources) > 2:
             errors.append(
-                "'sources' accepts at most two documents: one graph and one seed"
+                "At most two documents: one graph and one seed. "
+                f"Got {len(artifact_ids)} artifact id(s) and {len(sources)} path(s)"
             )
-        else:
-            for entry in sources:
-                if not isinstance(entry, str):
-                    errors.append("each entry in 'sources' must be a file path string")
-                elif not Path(entry).exists():
-                    errors.append(f"source not found: {entry}")
+        for entry in artifact_ids:
+            if not isinstance(entry, str):
+                errors.append("each entry in 'artifact_ids' must be an artifact id string")
+        for entry in sources:
+            if not isinstance(entry, str):
+                errors.append("each entry in 'sources' must be a file path string")
+            elif not Path(entry).exists():
+                # Artifact ids cannot be checked here: resolving one needs the
+                # execution context, which validation does not receive.
+                errors.append(f"source not found: {entry}")
 
         if errors:
             return ValidationResult(ok=False, errors=errors)
         return ValidationResult(ok=True)
 
     def execute(self, payload: dict[str, Any], context: Any) -> ToolResult:
-        sources: list[str] = payload.get("sources") or []
         accept_unverified = bool(payload.get("accept_unverified_pair", False))
 
+        inputs: list[tuple[str, Path]] = []
+        for artifact_id in _requested_artifact_ids(payload):
+            resolved, failure = _resolve_artifact(artifact_id, context)
+            if failure is not None:
+                return failure
+            inputs.append(resolved)
+        for entry in _requested_paths(payload):
+            inputs.append((Path(entry).name, Path(entry)))
+
+        if not inputs:
+            return ToolResult(
+                ok=False,
+                error_code="NO_INPUT",
+                message="No artifact id or source path supplied.",
+            )
+
         documents = []
-        for entry in sources:
-            path = Path(entry)
+        for name, path in inputs:
             try:
                 # Always explicit: the default encoding on Windows is cp1252,
                 # and these documents contain a U+2014 that a mojibake read
@@ -138,16 +231,16 @@ class AttackPathDetectionDesigner:
                 return ToolResult(
                     ok=False,
                     error_code="INPUT_UNREADABLE",
-                    message=f"Could not read {path.name}: {exc}",
+                    message=f"Could not read {name}: {exc}",
                 )
             try:
-                documents.append(nz.load_document(parsed, path.name))
+                documents.append(nz.load_document(parsed, name))
             except nz.NormalizationError as exc:
                 return ToolResult(
                     ok=False,
                     error_code="INPUT_UNRECOGNIZED",
                     message=str(exc),
-                    details={"file": path.name},
+                    details={"file": name},
                 )
 
         primary = documents[0]
