@@ -4,7 +4,7 @@
   "pillar": "threat_modeling",
   "display_name": "Attack Path Detection Designer",
   "description_short": "Normalize projected attack paths into a reviewable per-node detection context.",
-  "description_long": "Reads adversary_path_projector exports - a path graph, a scenario seed, or a verified pair of both - and produces one normalized context per attack step, with a stable identity, a JSON pointer and origin for every field, and an explicit record of anything the two documents disagree about. Stage N1: adapters, identity and the union merge, all deterministic and provider-free. The normalize_paths action and its context pack artifact are stage N4; generate_detections, which reasons over the pack, lands later and is why this plugin is not marked auto-invocable.",
+  "description_long": "Reads adversary_path_projector exports - a path graph, a scenario seed, or a verified pair of both - and produces one normalized context per attack step, with a stable identity, a JSON pointer and origin for every field, and an explicit record of anything the two documents disagree about. Stages N1 and N2: adapters, identity, the union merge, and flow-map lineage and fit - a supplied flow map is recorded as the projected map, an edited copy or unhashed, and is never refused for it. All deterministic and provider-free. The normalize_paths action and its context pack artifact are stage N4; generate_detections, which reasons over the pack, lands later and is why this plugin is not marked auto-invocable.",
   "author": "Event Mill Contributors",
   "entry_point": "tool.py",
   "class_name": "AttackPathDetectionDesigner",

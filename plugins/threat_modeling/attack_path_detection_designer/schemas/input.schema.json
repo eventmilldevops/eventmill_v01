@@ -44,6 +44,14 @@
       "type": "boolean",
       "default": false,
       "description": "Join two documents that carry no provenance block, on equal derived projection identity. The join is recorded as asserted_by_operator and never as verified."
+    },
+    "flow_map_artifact_id": {
+      "type": "string",
+      "description": "Registered artifact id of a JSON flow map. Its lineage against the export's flow_map_sha256 is recorded as same_map, edited_map or unhashed and is never grounds for refusal: an analyst's edited copy is an expected input."
+    },
+    "flow_map_path": {
+      "type": "string",
+      "description": "Local path to a JSON flow map, as an alternative to flow_map_artifact_id."
     }
   },
   "additionalProperties": false,

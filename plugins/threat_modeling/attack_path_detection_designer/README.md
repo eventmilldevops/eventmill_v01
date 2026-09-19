@@ -8,9 +8,12 @@ of anything the source documents disagree about.
 Plan: `docs/specs/attack_path_detection_normalization.md`.
 Producer shape it reads: `docs/specs/projector_export_shapes.md`.
 
-**Stage N1 is implemented.** Adapters, the three identities, the node
-occurrence key, a deterministic `draft_id`, the union merge and
-`provenance_by_field`. No LLM, no network, no flow map.
+**Stages N1, N2, N3a and N3b are implemented.** Adapters, the three
+identities, the node occurrence key, a deterministic `draft_id`, the union
+merge and `provenance_by_field` (N1); flow-map lineage and fit, and a closed
+code catalogue (N2); the flow-map join and the five completeness grades (N3a);
+controls per node and `monitoring_claim` (N3b). Mitigation focus (N3c) and
+taxonomy reconciliation (N3d) are outstanding. No LLM, no network.
 
 ## Actions
 
@@ -45,6 +48,95 @@ because `do_run` injects both when it resolves a singular `artifact_id`.
 An artifact that is registered but whose bytes are not readable here comes back
 as `ARTIFACT_UNAVAILABLE` naming its `storage_uri` — on Cloud Run that is a
 real state, and it is not the same thing as a missing file.
+
+## Flow maps: recorded, never refused
+
+A flow map is a working document. An analyst is expected to copy a generated
+map, correct it from inside knowledge and track it in git, so the export's
+`flow_map_sha256` is **lineage**, not an integrity check (spec decision 9):
+
+```bash
+run attack_path_detection_designer --artifact_ids art_e2697614,art_2df55952 \
+    --flow_map_artifact_id art_5c01ffee
+# or locally: --flow_map_path ./telemetry_saas_flow_map.json
+```
+
+| Export hash vs supplied map | `flow_map.lineage` | Effect |
+|---|---|---|
+| equal | `same_map` | none |
+| different | `edited_map` | advisory `FLOW_MAP_EDITED`; re-project if topology or controls changed |
+| absent | `unhashed` | advisory `FLOW_MAP_UNHASHED`; no operator flag needed |
+
+The hash cannot tell an edited map from the wrong one, so fit is checked
+directly: `FLOW_MAP_APPLICATION_MISMATCH` when the map names another
+application, and `FLOW_MAP_COMPONENT_UNRESOLVED` for each node component the
+map lacks — the one flow-map condition that withholds anything, and only from
+that component's nodes. Reordering or reformatting a map does not change its
+hash; any content change does.
+
+A map is refused only when it is not a JSON flow map at all:
+`FLOW_MAP_UNREADABLE` (a prose or Mermaid map is stage N5's job) or
+`FLOW_MAP_NOT_OBJECT`.
+
+What the map then contributes to a node is below.
+
+## What a supplied map adds, and what it may not do
+
+With a map, a node whose `component_id` resolves gains `zone`, `exposure`,
+`technologies`, `authentication`, `data_classification`, `crown_jewel` and
+`port` — `port` lives on the map's flow, not on a step's `transition`, so this
+is the only way to reach it. Each carries origin `flow_map` and the map's
+lineage.
+
+The map **fills only what no export carried**. A component renamed in an
+analyst's copy produces an `input_conflicts[]` entry with the export's value
+kept, and does not affect whether the graph/seed pair is `verified` — that is a
+statement about the two exports, not about the map.
+
+A field the map had nothing for is **absent, not null**, as `component_id` is
+on a seed-only node.
+
+## Grades
+
+`context_completeness` per node, and a distribution on the result:
+
+| Inputs | Distribution on the four fixtures |
+|---|---|
+| pair + map | 38 `component_bound`, 5 `component_bound_partial` |
+| pair, no map | 43 `asset_named` |
+| seed only | 43 `asset_text_only` |
+
+`authentication: "none"` counts as absent — a declared absence is not a product
+to name — so `front_door` grades partial despite carrying technologies. A
+partial node names what is missing in `telemetry_requirements[]`. A node whose
+component is not in the map stays `asset_named` while the rest of the map is
+still used.
+
+## Controls on a node
+
+`control_catalogue[]` per node, plus a derived `monitoring_claim` of `none`,
+`partial` or `claimed`:
+
+- **With a map** the join is structural — the component owns its controls, with
+  `detection_capability`, `bypass_difficulty` and `mitre_mitigation_id`.
+  Marked `evidence: "structured"`.
+- **Without one** a `controls_in_play` name is matched against catalogue
+  entries whose description names that node's component (`"Protects CDN
+  (cdn)."`), and marked `evidence: "text"`. Name alone is not a key: `WAF`
+  protects two components in the Claims Portal map. A control matching nothing
+  is left unattached, never guessed.
+
+`monitoring_claim` is a claim about what is watched, never coverage. Every
+draft still starts at `catalogue_status: new_unchecked`.
+
+## Codes
+
+Warnings, review flags and errors are closed sets (spec §4.4): `WARNING_CODES`
+and `REVIEW_FLAG_CODES` in `normalization.py`, `ERROR_CODES` in `tool.py`.
+Every warning carries a `severity` — `blocking` if the output omits or
+downgrades something because of it, `advisory` otherwise — and the summary
+reports the two separately. Add a code to the catalogue and the spec table
+together; the tests hold them to each other.
 
 ## Why this plugin is not auto-invocable
 
@@ -91,8 +183,9 @@ should not be read as saying so.
 
 ## What it deliberately does not do
 
-- No flow-map join, no control catalogue resolution, no mitigation names, no
-  completeness grade — **stage N3**.
+- No mitigation names, focus cut or coverage ratio — **stage N3c**; no
+  taxonomy reconciliation or `tactic_status` / `technique_status` — **stage
+  N3d**.
 - No artifact, no CLI `show`/`export` — **stage N4**.
 - No `DS####` data components: no local ATT&CK reference carries them, so any
   that appeared would be invented.
@@ -113,6 +206,11 @@ distinguishes *key absent* from *value null*. Similarly `actor_attack_id`, not
 revision, all projected against flow maps in this repository. Copies, not
 builders: a builder re-derives the fixture from the same assumptions the
 normalizer encodes, so it cannot catch a misreading of a real export.
+
+`tests/fixtures/flow_maps/` holds copies of the three repository maps those
+runs were projected against, frozen so that an edit to the projector's
+examples cannot break the test that holds this plugin's hash to the
+projector's.
 
 Two properties no current fixture has, covered synthetically in the tests and
 noted so nobody assumes they are covered by real data: a within-path

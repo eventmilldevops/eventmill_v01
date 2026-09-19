@@ -31,6 +31,33 @@
         "reason": { "type": ["string", "null"] }
       }
     },
+    "flow_map_lineage": {
+      "type": ["string", "null"],
+      "enum": ["same_map", "edited_map", "unhashed", null],
+      "description": "Lineage of the supplied flow map; null when none was supplied."
+    },
+    "flow_map": {
+      "type": "object",
+      "description": "Spec section 4.2 and decision 9. Always carries supplied, export_sha256 and export_flow_map_path; when a map was supplied, also its filename, sha256, lineage, application, application_matches and the resolved and unresolved node component ids.",
+      "properties": {
+        "supplied": { "type": "boolean" },
+        "export_sha256": { "type": ["string", "null"] },
+        "export_flow_map_path": { "type": ["string", "null"] },
+        "filename": { "type": "string" },
+        "sha256": { "type": "string" },
+        "lineage": { "type": "string", "enum": ["same_map", "edited_map", "unhashed"] },
+        "application": { "type": ["string", "null"] },
+        "application_matches": { "type": "boolean" },
+        "components_resolved": { "type": "array", "items": { "type": "string" } },
+        "components_unresolved": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["supplied"]
+    },
+    "completeness": {
+      "type": "object",
+      "description": "Spec section 5: how many nodes reached each context grade, from component_bound down to unbound.",
+      "additionalProperties": { "type": "integer" }
+    },
     "engagement": { "type": "object", "description": "Actor, application, ATT&CK version and model attribution read from provenance.model." },
     "inventory": { "type": "object", "description": "Paths, node count and the ordered node keys." },
     "nodes": {
@@ -43,13 +70,42 @@
           "path_id": { "type": "string" },
           "node_index": { "type": "integer" },
           "provenance_by_field": { "type": "object" },
+          "context_completeness": {
+            "type": "string",
+            "enum": ["component_bound", "component_bound_partial", "asset_named", "asset_text_only", "unbound"],
+            "description": "Stage N3a. What a later draft may claim for this node."
+          },
+          "telemetry_requirements": { "type": "array", "items": { "type": "string" } },
+          "control_catalogue": {
+            "type": "array",
+            "description": "Stage N3b, decision 10. Controls attached to this node: structurally from the flow map's component, or by control name plus the component id named in a catalogue entry's description, marked evidence 'text'.",
+            "items": { "type": "object" }
+          },
+          "monitoring_claim": {
+            "type": "string",
+            "enum": ["none", "partial", "claimed"],
+            "description": "Derived from detecting_controls and detection_capability. A claim about what is watched, never coverage."
+          },
           "input_conflicts": { "type": "array", "items": { "type": "object" } },
           "review_flags": { "type": "array", "items": { "type": "object" } }
         },
         "required": ["draft_id", "path_id", "node_index", "provenance_by_field"]
       }
     },
-    "warnings": { "type": "array", "items": { "type": "object" } },
+    "warnings": {
+      "type": "array",
+      "description": "Codes from the closed catalogue of spec section 4.4.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string" },
+          "severity": { "type": "string", "enum": ["blocking", "advisory"] },
+          "location": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "required": ["code", "severity", "location", "message"]
+      }
+    },
     "input_conflicts": { "type": "array", "items": { "type": "object" } }
   },
   "required": ["node_count", "nodes", "identities", "pair"]

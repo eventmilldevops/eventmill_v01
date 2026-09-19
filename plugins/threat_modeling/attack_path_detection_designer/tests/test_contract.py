@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -279,7 +280,8 @@ def test_summary_leads_with_status_and_stays_within_budget(tool, graph_path, see
     assert summary.startswith("Normalized 11 nodes")
     assert len(summary) < budget
     assert "gcp_gemini" in summary
-    assert "unenriched" in summary
+    assert "Context grades: asset_named 11." in summary
+    assert "stages N3c, N3d" in summary
 
 
 def test_summary_does_not_paste_node_bodies(tool, graph_path, seed_path):
@@ -294,6 +296,159 @@ def test_summary_of_a_failure_names_the_error(tool):
         ok=False, error_code="INPUT_UNREADABLE", message="Could not read x.json"
     )
     assert "INPUT_UNREADABLE" in tool.summarize_for_llm(failed)
+
+
+def test_summary_says_when_no_flow_map_was_supplied(tool, graph_path):
+    result = tool.execute({"sources": [graph_path]}, context=None)
+    assert "Flow map: none supplied." in tool.summarize_for_llm(result)
+
+
+def test_summary_separates_blocking_from_advisory_warnings(tool, graph_path, seed_path):
+    wrong_map = str(FLOW_MAPS / "claims_portal_flow_map.json")
+    result = tool.execute(
+        {"sources": [graph_path, seed_path], "flow_map_path": wrong_map}, context=None
+    )
+    summary = tool.summarize_for_llm(result)
+    assert "Warnings (blocking): FLOW_MAP_COMPONENT_UNRESOLVED" in summary
+    assert "Warnings (advisory): FLOW_MAP_APPLICATION_MISMATCH" in summary
+    assert "application 'Claims Portal' differs" in summary
+
+
+# ---------------------------------------------------------------------------
+# Flow map input, stage N2
+# ---------------------------------------------------------------------------
+
+FLOW_MAPS = FIXTURES / "flow_maps"
+
+
+@pytest.fixture
+def map_path() -> str:
+    return str(FLOW_MAPS / "telemetry_saas_flow_map.json")
+
+
+def test_a_flow_map_by_path_reports_its_lineage(tool, graph_path, seed_path, map_path):
+    result = tool.execute(
+        {"sources": [graph_path, seed_path], "flow_map_path": map_path}, context=None
+    )
+    assert result.ok is True
+    assert result.result["flow_map_lineage"] == "same_map"
+    summary = tool.summarize_for_llm(result)
+    assert "Flow map: same_map (telemetry_saas_flow_map.json)" in summary
+    assert "Warnings" not in summary
+
+
+def test_a_flow_map_by_artifact_id_resolves_through_the_registry(
+    tool, graph_path, seed_path, map_path
+):
+    context = FakeContext(
+        [
+            FakeArtifact("art_graph", "json_events", graph_path),
+            FakeArtifact("art_seed", "json_events", seed_path),
+            FakeArtifact("art_map", "json_events", map_path),
+        ]
+    )
+    result = tool.execute(
+        {"artifact_ids": ["art_graph", "art_seed"], "flow_map_artifact_id": "art_map"},
+        context,
+    )
+    assert result.ok is True
+    assert result.result["flow_map"]["lineage"] == "same_map"
+
+
+def test_a_joined_run_reports_its_grade_distribution(
+    tool, graph_path, seed_path, map_path
+):
+    result = tool.execute(
+        {"sources": [graph_path, seed_path], "flow_map_path": map_path}, context=None
+    )
+    assert result.result["completeness"] == {"component_bound": 11}
+    summary = tool.summarize_for_llm(result)
+    assert "Context grades: component_bound 11." in summary
+    assert len(summary) < 4000
+
+
+def test_the_summary_never_pastes_an_enriched_node(tool, graph_path, seed_path, map_path):
+    result = tool.execute(
+        {"sources": [graph_path, seed_path], "flow_map_path": map_path}, context=None
+    )
+    summary = tool.summarize_for_llm(result)
+    node = result.result["nodes"][0]
+    assert node["rationale"] not in summary
+    assert str(node["control_catalogue"]) not in summary
+
+
+def test_an_edited_flow_map_succeeds(tool, graph_path, map_path, tmp_path):
+    with open(map_path, encoding="utf-8") as handle:
+        edited = json.load(handle)
+    edited["description"] = "corrected by an analyst with inside knowledge"
+    edited_path = tmp_path / "telemetry_saas_flow_map.json"
+    edited_path.write_text(json.dumps(edited), encoding="utf-8")
+
+    result = tool.execute(
+        {"sources": [graph_path], "flow_map_path": str(edited_path)}, context=None
+    )
+    assert result.ok is True
+    assert result.result["flow_map_lineage"] == "edited_map"
+    assert "FLOW_MAP_EDITED" in tool.summarize_for_llm(result)
+
+
+def test_an_unknown_flow_map_artifact_names_itself(tool, graph_path):
+    result = tool.execute(
+        {"sources": [graph_path], "flow_map_artifact_id": "art_nomap"}, FakeContext([])
+    )
+    assert result.ok is False
+    assert result.error_code == "ARTIFACT_NOT_FOUND"
+    assert "art_nomap" in result.message
+
+
+def test_a_prose_flow_map_points_at_n5(tool, graph_path, tmp_path):
+    prose = tmp_path / "flow_map.md"
+    prose.write_text("# Flow map\n\nThe portal talks to the API.", encoding="utf-8")
+    result = tool.execute(
+        {"sources": [graph_path], "flow_map_path": str(prose)}, context=None
+    )
+    assert result.ok is False
+    assert result.error_code == "FLOW_MAP_UNREADABLE"
+    assert "N5" in result.message
+
+
+def test_an_export_passed_as_the_flow_map_is_refused(tool, graph_path, seed_path):
+    result = tool.execute(
+        {"sources": [graph_path], "flow_map_path": seed_path}, context=None
+    )
+    assert result.ok is False
+    assert result.error_code == "FLOW_MAP_NOT_OBJECT"
+
+
+def test_the_flow_map_is_supplied_once(tool, graph_path, map_path):
+    both = {
+        "sources": [graph_path],
+        "flow_map_path": map_path,
+        "flow_map_artifact_id": "art_map",
+    }
+    assert tool.validate_inputs(both).ok is False
+
+
+def test_a_missing_flow_map_file_is_named(tool, graph_path):
+    result = tool.validate_inputs(
+        {"sources": [graph_path], "flow_map_path": "no_such_map.json"}
+    )
+    assert result.ok is False
+    assert any("no_such_map.json" in error for error in result.errors)
+
+
+def test_every_error_code_the_tool_returns_is_declared():
+    source = (PLUGIN_DIR / "tool.py").read_text(encoding="utf-8")
+    returned = set(re.findall(r'error_code="([A-Z_]+)"', source))
+    assert returned
+    assert returned <= set(_tool_mod.ERROR_CODES)
+
+
+def test_the_spec_catalogue_lists_every_error_code():
+    spec = PLUGIN_DIR.parents[2] / "docs" / "specs" / "attack_path_detection_normalization.md"
+    section = spec.read_text(encoding="utf-8").split("### 4.4", 1)[1].split("\n## ", 1)[0]
+    for code in _tool_mod.ERROR_CODES:
+        assert f"| `{code}` |" in section, f"{code} is not in spec section 4.4"
 
 
 def test_summary_reports_a_refused_pair(tool):

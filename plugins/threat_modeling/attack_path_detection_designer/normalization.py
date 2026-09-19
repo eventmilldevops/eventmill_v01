@@ -5,7 +5,12 @@ the three input shapes, the three identities of section 4.2a, the node
 occurrence key, a deterministic ``draft_id``, and the union merge with the
 section 4.3 precedence table.
 
-No LLM, no network, no flow map. Enrichment and grading are stage N3; the
+Stage N2 adds flow-map lineage: a supplied map is hashed, compared with the
+export's ``flow_map_sha256`` and checked for fit, but never refused, because a
+map is an analyst-editable working document (spec decision 9). It also closes
+the warning and review-flag codes into the section 4.4 catalogue.
+
+No LLM, no network. Enrichment and grading are stage N3; the
 ``normalize_paths`` action and the context pack artifact are stage N4.
 
 This module is plugin-local by decision 7 of the spec. It is loaded as a
@@ -35,6 +40,18 @@ ORIGIN_GRAPH = "graph"
 ORIGIN_SEED = "seed"
 ORIGIN_PAIR_AGREED = "pair_agreed"
 ORIGIN_DERIVED = "derived"
+ORIGIN_FLOW_MAP = "flow_map"
+
+# Context completeness, section 5. The grade limits what a later draft may
+# claim, so it is a property of the inputs supplied and not of the export.
+GRADE_COMPONENT_BOUND = "component_bound"
+GRADE_COMPONENT_BOUND_PARTIAL = "component_bound_partial"
+GRADE_ASSET_NAMED = "asset_named"
+GRADE_ASSET_TEXT_ONLY = "asset_text_only"
+GRADE_UNBOUND = "unbound"
+
+# A control that observes nothing cannot support a monitoring claim.
+_CAPABILITY_CLAIMS = ("medium", "high")
 
 # Fields each document alone carries, section 1.3. Precedence rules 1 and 2
 # are these two lists; rule 3 is everything in SHARED_FIELDS.
@@ -75,8 +92,49 @@ SHARED_FIELDS = (
 )
 
 
+SEVERITY_BLOCKING = "blocking"
+SEVERITY_ADVISORY = "advisory"
+
+# Section 4.4. Blocking: the output omits or downgrades something because of
+# the condition. Advisory: the output is complete but needs a second look.
+WARNING_CODES = {
+    "PAIR_REFUSED": SEVERITY_BLOCKING,
+    "PAIR_CONTENT_CONFLICT": SEVERITY_BLOCKING,
+    "NODE_ONLY_IN_SECONDARY": SEVERITY_BLOCKING,
+    "PATH_NOT_IN_BOTH": SEVERITY_ADVISORY,
+    "PATH_LENGTH_DIFFERS": SEVERITY_ADVISORY,
+    "STATE_NOTE_ENCODING": SEVERITY_ADVISORY,
+    "FLOW_MAP_EDITED": SEVERITY_ADVISORY,
+    "FLOW_MAP_UNHASHED": SEVERITY_ADVISORY,
+    "FLOW_MAP_APPLICATION_MISMATCH": SEVERITY_ADVISORY,
+    "FLOW_MAP_COMPONENT_UNRESOLVED": SEVERITY_BLOCKING,
+}
+REVIEW_FLAG_CODES = ("UNDECLARED_TRANSITION", "TRANSITION_UNPARSED")
+
+# Flow map lineage, section 4.2. Recorded, never used to refuse a map.
+LINEAGE_SAME = "same_map"
+LINEAGE_EDITED = "edited_map"
+LINEAGE_UNHASHED = "unhashed"
+
+
 class NormalizationError(ValueError):
     """Raised when inputs cannot be normalized at all."""
+
+
+def _warning(code: str, location: str, message: str) -> dict[str, str]:
+    """A warning from the closed catalogue. An undeclared code is a bug."""
+    return {
+        "code": code,
+        "severity": WARNING_CODES[code],
+        "location": location,
+        "message": message,
+    }
+
+
+def _review_flag(code: str, message: str) -> dict[str, str]:
+    if code not in REVIEW_FLAG_CODES:
+        raise KeyError(code)
+    return {"code": code, "message": message}
 
 
 # ---------------------------------------------------------------------------
@@ -581,14 +639,12 @@ def _adapt_scenario(
         combined = event.get("state_check")
         if looks_like_mangled_separator(combined):
             warnings.append(
-                {
-                    "code": "STATE_NOTE_ENCODING",
-                    "location": f"{path_id}.attack_sequence[{node_index}]",
-                    "message": (
-                        "state_check separator is not U+2014; the transport did not "
-                        "preserve the em dash, so the note cannot be split reliably"
-                    ),
-                }
+                _warning(
+                    "STATE_NOTE_ENCODING",
+                    f"{path_id}.attack_sequence[{node_index}]",
+                    "state_check separator is not U+2014; the transport did not "
+                    "preserve the em dash, so the note cannot be split reliably",
+                )
             )
         state_check, state_note = split_state_check(combined)
         asset_name = event.get("target_asset")
@@ -739,6 +795,144 @@ def decide_pair(
 
 
 # ---------------------------------------------------------------------------
+# Flow map lineage, section 4.2 and decision 9
+# ---------------------------------------------------------------------------
+
+class FlowMapError(NormalizationError):
+    """The supplied flow map is not a flow map at all."""
+
+
+@dataclass
+class FlowMapSource:
+    """A supplied flow map with the hash the projector would have recorded."""
+
+    document: dict[str, Any]
+    filename: str
+    sha256: str
+
+
+def flow_map_hash(raw: Any) -> str:
+    """The projector's ``_canonical_flow_map_hash``, reproduced.
+
+    Plugins cannot import each other, so this is a second implementation of
+    the same serialisation. The tests hold it to the ``flow_map_sha256`` the
+    four fixture exports recorded against the repository maps, which fails the
+    moment the two drift. Like the projector, it hashes the map as supplied,
+    before any normalization.
+    """
+    return _sha256(canonical_json(raw))
+
+
+def load_flow_map(document: Any, filename: str) -> FlowMapSource:
+    if not isinstance(document, dict) or not isinstance(
+        document.get("components"), list
+    ):
+        raise FlowMapError(
+            f"{filename} is not a flow map: expected an object with a 'components' list"
+        )
+    return FlowMapSource(
+        document=document, filename=filename, sha256=flow_map_hash(document)
+    )
+
+
+def assess_flow_map(
+    flow_map: FlowMapSource | None,
+    engagement: dict[str, Any],
+    nodes: list[NormalizedNode],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Record where a supplied map came from and how well it fits the nodes.
+
+    Nothing here refuses a map. The hash says whether this is the map the
+    projection ran against; an analyst's edited copy is an expected input, not
+    a conflict. The application and component checks are what say whether the
+    map fits, and an unresolved component withholds enrichment from its own
+    nodes only.
+    """
+    export_hash = engagement.get("flow_map_sha256") or None
+    record: dict[str, Any] = {
+        "supplied": flow_map is not None,
+        "export_sha256": export_hash,
+        "export_flow_map_path": engagement.get("flow_map_path"),
+    }
+    if flow_map is None:
+        return record, []
+
+    warnings: list[dict[str, str]] = []
+    if export_hash is None:
+        lineage = LINEAGE_UNHASHED
+        warnings.append(
+            _warning(
+                "FLOW_MAP_UNHASHED",
+                flow_map.filename,
+                "the export records no flow map hash, so which map the projection "
+                "used cannot be checked; supplying the map is taken as the "
+                "operator's assertion",
+            )
+        )
+    elif export_hash == flow_map.sha256:
+        lineage = LINEAGE_SAME
+    else:
+        lineage = LINEAGE_EDITED
+        warnings.append(
+            _warning(
+                "FLOW_MAP_EDITED",
+                flow_map.filename,
+                "the supplied map differs from the one the paths were projected "
+                "against; it is used as given, but re-project if the edit changes "
+                "topology or controls",
+            )
+        )
+
+    map_application = flow_map.document.get("application")
+    export_application = engagement.get("application")
+    application_matches = map_application == export_application
+    if not application_matches:
+        warnings.append(
+            _warning(
+                "FLOW_MAP_APPLICATION_MISMATCH",
+                flow_map.filename,
+                f"map describes {map_application!r}, the export {export_application!r}; "
+                "this is likelier the wrong map than an edited one",
+            )
+        )
+
+    known = {
+        component.get("id")
+        for component in flow_map.document.get("components") or []
+        if isinstance(component, dict)
+    }
+    nodes_per_component: dict[str, int] = {}
+    for node in nodes:
+        component_id = node.fields.get("component_id")
+        if component_id:
+            nodes_per_component[component_id] = (
+                nodes_per_component.get(component_id, 0) + 1
+            )
+    resolved = [c for c in nodes_per_component if c in known]
+    unresolved = [c for c in nodes_per_component if c not in known]
+    for component_id in unresolved:
+        warnings.append(
+            _warning(
+                "FLOW_MAP_COMPONENT_UNRESOLVED",
+                component_id,
+                f"component not in the supplied map; its "
+                f"{nodes_per_component[component_id]} node(s) will not be enriched",
+            )
+        )
+
+    record.update(
+        filename=flow_map.filename,
+        sha256=flow_map.sha256,
+        lineage=lineage,
+        application=map_application,
+        application_matches=application_matches,
+        components_resolved=resolved,
+        components_unresolved=unresolved,
+    )
+    return record, warnings
+
+
+# ---------------------------------------------------------------------------
 # Union merge, section 4.3
 # ---------------------------------------------------------------------------
 
@@ -775,6 +969,7 @@ class NormalizationResult:
     pair: dict[str, Any]
     warnings: list[dict[str, str]]
     input_conflicts: list[dict[str, Any]]
+    flow_map: dict[str, Any] = field(default_factory=dict)
 
     @property
     def node_keys(self) -> list[tuple[str, str, int]]:
@@ -786,6 +981,7 @@ class NormalizationResult:
             "engagement": self.engagement,
             "identities": self.identities,
             "pair": self.pair,
+            "flow_map": self.flow_map,
             "nodes": [node.as_dict() for node in self.nodes],
             "warnings": self.warnings,
             "input_conflicts": self.input_conflicts,
@@ -797,11 +993,13 @@ def normalize(
     secondary: SourceDocument | None = None,
     *,
     accept_unverified_pair: bool = False,
+    flow_map: FlowMapSource | None = None,
 ) -> NormalizationResult:
     """Normalize one document, or a graph and seed of the same projection.
 
     A refused pair is not an error: the primary source is processed alone and
-    the refusal is reported, because half a join is worse than none.
+    the refusal is reported, because half a join is worse than none. A flow
+    map is assessed for lineage and fit only; enrichment from it is stage N3.
     """
     warnings: list[dict[str, str]] = []
     pair_decision = PairDecision(False, "single_source", "not_attempted")
@@ -812,11 +1010,11 @@ def normalize(
         )
         if not pair_decision.join:
             warnings.append(
-                {
-                    "code": "PAIR_REFUSED",
-                    "location": secondary.filename,
-                    "message": pair_decision.reason or "pair join refused",
-                }
+                _warning(
+                    "PAIR_REFUSED",
+                    secondary.filename,
+                    pair_decision.reason or "pair join refused",
+                )
             )
             secondary = None
 
@@ -873,13 +1071,11 @@ def normalize(
     if follower:
         for key in sorted(set(follower_by_key) - leader_keys):
             warnings.append(
-                {
-                    "code": "NODE_ONLY_IN_SECONDARY",
-                    "location": f"{key[0]}.steps[{key[1]}]",
-                    "message": (
-                        "node present in the secondary document only; not merged"
-                    ),
-                }
+                _warning(
+                    "NODE_ONLY_IN_SECONDARY",
+                    f"{key[0]}.steps[{key[1]}]",
+                    "node present in the secondary document only; not merged",
+                )
             )
 
     engagement = dict(leader.engagement)
@@ -919,16 +1115,39 @@ def normalize(
     pair["verified"] = bool(pair_decision.join and not conflicts)
     if conflicts:
         warnings.append(
-            {
-                "code": "PAIR_CONTENT_CONFLICT",
-                "location": primary.filename,
-                "message": (
-                    f"{len(conflicts)} field(s) disagree between the paired documents "
-                    "after canonicalization; the graph value is kept and the join is "
-                    "not reported verified"
-                ),
-            }
+            _warning(
+                "PAIR_CONTENT_CONFLICT",
+                primary.filename,
+                f"{len(conflicts)} field(s) disagree between the paired documents "
+                "after canonicalization; the graph value is kept and the join is "
+                "not reported verified",
+            )
         )
+
+    flow_map_record, flow_map_warnings = assess_flow_map(flow_map, engagement, nodes)
+    warnings.extend(flow_map_warnings)
+
+    components = _component_index(flow_map)
+    catalogues = _catalogue_by_path(leader, follower)
+    catalogue_source = _catalogue_source(leader, follower)
+    for node in nodes:
+        component_id = node.fields.get("component_id")
+        component, component_index = components.get(component_id, (None, None))
+        before = len(node.input_conflicts)
+        enrich_node(
+            node,
+            component,
+            component_index,
+            flow_map,
+            flow_map_record.get("lineage"),
+            catalogues.get(node.path_id, []),
+            catalogue_source,
+        )
+        # Appended after the pair statistics above: a map disagreeing with an
+        # export is not the two documents disagreeing with each other.
+        conflicts.extend(node.input_conflicts[before:])
+
+    inventory["completeness"] = _grade_distribution(nodes)
 
     return NormalizationResult(
         nodes=nodes,
@@ -938,7 +1157,52 @@ def normalize(
         pair=pair,
         warnings=warnings,
         input_conflicts=conflicts,
+        flow_map=flow_map_record,
     )
+
+
+def _component_index(
+    flow_map: FlowMapSource | None,
+) -> dict[Any, tuple[dict[str, Any], int]]:
+    if flow_map is None:
+        return {}
+    return {
+        component.get("id"): (component, index)
+        for index, component in enumerate(flow_map.document.get("components") or [])
+        if isinstance(component, dict)
+    }
+
+
+def _catalogue_by_path(
+    leader: AdaptedDocument, follower: AdaptedDocument | None
+) -> dict[str, list[dict[str, Any]]]:
+    """The seed carries the control catalogue, one per scenario."""
+    catalogues: dict[str, list[dict[str, Any]]] = {}
+    for document in (leader, follower):
+        if document is None:
+            continue
+        for path in document.paths:
+            entries = path.get("control_catalogue") or []
+            if entries:
+                catalogues[path["path_id"]] = entries
+    return catalogues
+
+
+def _catalogue_source(
+    leader: AdaptedDocument, follower: AdaptedDocument | None
+) -> SourceDocument | None:
+    for document in (leader, follower):
+        if document is not None and document.source.role in (SEED_ROLE, SCENARIO_ROLE):
+            return document.source
+    return None
+
+
+def _grade_distribution(nodes: list[NormalizedNode]) -> dict[str, int]:
+    distribution: dict[str, int] = {}
+    for node in nodes:
+        grade = node.fields.get("context_completeness")
+        distribution[grade] = distribution.get(grade, 0) + 1
+    return dict(sorted(distribution.items()))
 
 
 def _document_with_role(
@@ -957,23 +1221,19 @@ def _check_path_alignment(
     follower_paths = {p["path_id"]: p["node_count"] for p in follower.paths}
     for path_id in sorted(set(leader_paths) ^ set(follower_paths)):
         warnings.append(
-            {
-                "code": "PATH_NOT_IN_BOTH",
-                "location": str(path_id),
-                "message": "path present in one document only",
-            }
+            _warning(
+                "PATH_NOT_IN_BOTH", str(path_id), "path present in one document only"
+            )
         )
     for path_id in sorted(set(leader_paths) & set(follower_paths)):
         if leader_paths[path_id] != follower_paths[path_id]:
             warnings.append(
-                {
-                    "code": "PATH_LENGTH_DIFFERS",
-                    "location": str(path_id),
-                    "message": (
-                        f"{leader_paths[path_id]} nodes in {leader.source.role}, "
-                        f"{follower_paths[path_id]} in {follower.source.role}"
-                    ),
-                }
+                _warning(
+                    "PATH_LENGTH_DIFFERS",
+                    str(path_id),
+                    f"{leader_paths[path_id]} nodes in {leader.source.role}, "
+                    f"{follower_paths[path_id]} in {follower.source.role}",
+                )
             )
 
 
@@ -1165,6 +1425,229 @@ def _merge_transition(
         )
 
 
+def enrich_node(
+    node: NormalizedNode,
+    component: dict[str, Any] | None,
+    component_index: int | None,
+    flow_map: FlowMapSource | None,
+    lineage: str | None,
+    catalogue: list[dict[str, Any]],
+    catalogue_source: SourceDocument | None,
+) -> None:
+    """Stage N3a and N3b: place one node in the estate and attach its controls.
+
+    The map fills only what no export carried (section 4.3 rule 4), so a
+    disagreement is recorded rather than applied. Everything written here
+    carries the map's lineage, because an edited map is an expected input.
+    """
+    crown_jewels = set((flow_map.document.get("crown_jewels") or []) if flow_map else ())
+
+    def record(
+        name: str,
+        value: Any,
+        origin: str,
+        pointer: str,
+        basis: list[str] | None = None,
+    ) -> None:
+        """Write a field and its origin.
+
+        A derived field has no document to point at, so it names the fields it
+        was computed from instead: every field still has to answer "where did
+        this come from", which is the N1 gate.
+        """
+        node.fields[name] = value
+        document = ""
+        if origin == ORIGIN_FLOW_MAP and flow_map is not None:
+            document = flow_map.filename
+        elif origin == ORIGIN_SEED and catalogue_source is not None:
+            document = catalogue_source.filename
+        entry: dict[str, Any] = {
+            "origin": origin,
+            "document": document,
+            "role": "flow_map" if origin == ORIGIN_FLOW_MAP else origin,
+            "pointer": pointer,
+        }
+        if origin == ORIGIN_FLOW_MAP and lineage:
+            entry["flow_map_lineage"] = lineage
+        if basis is not None:
+            entry["basis"] = basis
+        node.provenance_by_field[name] = entry
+
+    if component is not None:
+        base = f"/components/{component_index}"
+        for name, key in (
+            ("zone", "zone"),
+            ("exposure", "exposure"),
+            ("technologies", "technologies"),
+            ("authentication", "authentication"),
+            ("data_classification", "data_classification"),
+        ):
+            record(name, component.get(key), ORIGIN_FLOW_MAP, f"{base}/{key}")
+        record(
+            "crown_jewel",
+            component.get("id") in crown_jewels,
+            ORIGIN_FLOW_MAP,
+            "/crown_jewels",
+        )
+        record("port", _flow_port(flow_map, node), ORIGIN_FLOW_MAP, "/flows")
+
+        component_name = component.get("name")
+        asset_name = node.fields.get("asset_name")
+        if component_name and asset_name and component_name != asset_name:
+            # Rule 4: the map never overwrites an export value.
+            node.input_conflicts.append(
+                {
+                    "draft_field": "asset_name",
+                    "path_id": node.path_id,
+                    "node_index": node.node_index,
+                    "kept": asset_name,
+                    "kept_pointer": node.provenance_by_field["asset_name"]["pointer"],
+                    "kept_document": node.provenance_by_field["asset_name"]["document"],
+                    "rejected": component_name,
+                    "rejected_pointer": f"{base}/name",
+                    "rejected_document": flow_map.filename if flow_map else "",
+                }
+            )
+
+    controls, origin, pointer = _attach_controls(node, component, component_index, catalogue)
+    record(
+        "control_catalogue",
+        controls,
+        origin,
+        pointer if origin == ORIGIN_FLOW_MAP else _catalogue_pointer(catalogue_source),
+    )
+    record(
+        "monitoring_claim",
+        _monitoring_claim(node.fields.get("detecting_controls") or [], controls),
+        ORIGIN_DERIVED,
+        "",
+        basis=["detecting_controls", "control_catalogue"],
+    )
+
+    grade, requirements = grade_node(node, component, flow_map is not None)
+    grade_basis = ["component_id", "technologies", "authentication"]
+    record("context_completeness", grade, ORIGIN_DERIVED, "", basis=grade_basis)
+    record("telemetry_requirements", requirements, ORIGIN_DERIVED, "", basis=grade_basis)
+
+
+def _flow_port(flow_map: FlowMapSource | None, node: NormalizedNode) -> Any:
+    """Port lives on the map's flow, never on a step's transition."""
+    if flow_map is None:
+        return None
+    flow_id = (node.fields.get("transition") or {}).get("flow_id")
+    if not flow_id:
+        return None
+    for flow in flow_map.document.get("flows") or []:
+        if isinstance(flow, dict) and flow.get("id") == flow_id:
+            return flow.get("port")
+    return None
+
+
+def _attach_controls(
+    node: NormalizedNode,
+    component: dict[str, Any] | None,
+    component_index: int | None,
+    catalogue: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str, str]:
+    """Decision 10: structural from the map, else name plus component id.
+
+    A control name alone is not a key — ``WAF`` protects two components in the
+    Claims Portal map — so a text match must also find the node's component in
+    the catalogue entry's description, and is marked as the weaker evidence it
+    is.
+    """
+    if component is not None:
+        attached = [
+            {
+                "name": control.get("name"),
+                "control_type": control.get("control_type"),
+                "status": control.get("implementation_status"),
+                "bypass_difficulty": control.get("bypass_difficulty"),
+                "detection_capability": control.get("detection_capability"),
+                "mitre_mitigation_id": control.get("mitre_mitigation_id"),
+                "evidence": "structured",
+            }
+            for control in component.get("controls") or []
+            if isinstance(control, dict)
+        ]
+        return attached, ORIGIN_FLOW_MAP, f"/components/{component_index}/controls"
+
+    component_id = node.fields.get("component_id")
+    names = {
+        control.get("name")
+        for control in node.fields.get("controls_in_play") or []
+        if isinstance(control, dict)
+    }
+    attached = []
+    for entry in catalogue:
+        if not isinstance(entry, dict) or entry.get("name") not in names:
+            continue
+        if not component_id or f"({component_id})" not in (entry.get("description") or ""):
+            # Written for another component, or nothing to tie it to.
+            continue
+        attached.append(
+            {
+                "name": entry.get("name"),
+                "control_id": entry.get("control_id"),
+                "control_type": entry.get("control_type"),
+                "status": entry.get("implementation_status"),
+                "bypass_difficulty": entry.get("bypass_difficulty"),
+                "detection_capability": entry.get("detection_capability"),
+                "evidence": "text",
+            }
+        )
+    return attached, ORIGIN_SEED, ""
+
+
+def _catalogue_pointer(catalogue_source: SourceDocument | None) -> str:
+    return "/scenarios/*/security_controls" if catalogue_source else ""
+
+
+def _monitoring_claim(
+    detecting_controls: list[Any], controls: list[dict[str, Any]]
+) -> str:
+    """Derived, and never coverage: a listed control is not an event stream."""
+    if detecting_controls:
+        return "claimed"
+    if any(
+        (control.get("detection_capability") or "").lower() in _CAPABILITY_CLAIMS
+        for control in controls
+    ):
+        return "partial"
+    return "none"
+
+
+def grade_node(
+    node: NormalizedNode, component: dict[str, Any] | None, map_supplied: bool
+) -> tuple[str, list[str]]:
+    """Section 5. The grade is a property of the inputs, not of the export."""
+    component_id = node.fields.get("component_id")
+    if not component_id:
+        if node.fields.get("asset_name"):
+            return GRADE_ASSET_TEXT_ONLY, [
+                "no component id: describe the collection required, never a product"
+            ]
+        return GRADE_UNBOUND, ["no component and no asset: telemetry is a declared gap"]
+    if not map_supplied or component is None:
+        return GRADE_ASSET_NAMED, [
+            "no flow map joined for this component: behaviour-level sources only"
+        ]
+
+    missing = []
+    if not component.get("technologies"):
+        missing.append("technologies")
+    # 'none' is a declared absence of authentication, not a value to name.
+    if (component.get("authentication") or "none") == "none":
+        missing.append("authentication")
+    if missing:
+        return GRADE_COMPONENT_BOUND_PARTIAL, [
+            f"component '{component_id}' declares no {name}; "
+            "logsource.product stays unset"
+            for name in missing
+        ]
+    return GRADE_COMPONENT_BOUND, []
+
+
 def _flag_transition(
     transition: dict[str, Any] | None, flags: list[dict[str, str]]
 ) -> None:
@@ -1172,18 +1655,16 @@ def _flag_transition(
         return
     if transition.get("movement") == "undeclared":
         flags.append(
-            {
-                "code": "UNDECLARED_TRANSITION",
-                "message": (
-                    "the component changes with no declared flow: movement "
-                    "the flow map does not describe"
-                ),
-            }
+            _review_flag(
+                "UNDECLARED_TRANSITION",
+                "the component changes with no declared flow: movement "
+                "the flow map does not describe",
+            )
         )
     elif transition.get("movement") == "unparsed":
         flags.append(
-            {
-                "code": "TRANSITION_UNPARSED",
-                "message": "transition text did not match a known form; kept verbatim",
-            }
+            _review_flag(
+                "TRANSITION_UNPARSED",
+                "transition text did not match a known form; kept verbatim",
+            )
         )

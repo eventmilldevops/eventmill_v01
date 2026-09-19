@@ -17,6 +17,9 @@ restated over the new 43-node corpus. Decision 7 then settled the plugin shape
 thing blocking N1 code. The producer-side shape those counts
 come from is described once, separately, in
 `docs/specs/projector_export_shapes.md`.
+**N2 is closed 2026-09-19** (decision 9): a flow map is an analyst-editable
+working document, so its hash records lineage and never gates enrichment; the
+§4.2 flow-map rows, §5 and the new §4.4 code catalogue are revised to match.
 
 ## 0. Which "phase 3" this addresses, and why both readings converge
 
@@ -591,12 +594,46 @@ without it:
 | Present, `run_id` differs | `conflict` | Refuse the join; process the primary source alone and warn. |
 | Absent (legacy) | `derived` | Derive `projection_identity` per §4.2a — over run-invariant content, **not** over the document hash or filename, so graph-only and seed-only agree. Join a pair **only** if the operator passes `--accept_unverified_pair` and the derived identities are equal. Record `pair_join: asserted_by_operator`. |
 | Present in one document only | `conflict` | Refuse the join. A verified document and a legacy one are not comparable: the one `run_id` cannot be checked against anything. Process the primary source alone and warn. |
-| Flow map supplied, `flow_map_sha256` present and equal | `verified` | Enrich freely. |
-| Flow map supplied, hash present and different | `conflict` | Do not enrich. Report it as a blocking warning, as `summarize_run_group` already does at `tool.py:4180`. |
-| Flow map supplied, no hash in export | `asserted_by_operator` | Enrich, and stamp every flow-map-derived field's `provenance_by_field` entry with that status so it cannot later read as sourced fact. |
+Name-matching is never sufficient on its own to join a pair and never silently
+upgrades a pair status.
 
-Name-matching is never sufficient on its own and never silently upgrades a
-status.
+**Flow maps are recorded, not gated (decision 9, 2026-09-19).** A flow map is
+not a forensic copy. An analyst with inside knowledge is expected to copy a
+generated map and correct it, git is the recommended way to track those
+edits, and a tampered map is not a meaningful threat in this workflow. The
+export's `flow_map_sha256` therefore answers *is this the map the projection
+ran against, or something else?* — lineage — and never decides whether the map
+may be used:
+
+| Flow map supplied, compared with the export's `flow_map_sha256` | `flow_map_lineage` | Behaviour |
+|---|---|---|
+| Hash present and equal | `same_map` | Enrich. |
+| Hash present and different | `edited_map` | Enrich. Advisory `FLOW_MAP_EDITED`: the paths were reasoned against an earlier version of the estate; re-project if the edit changes topology or controls. |
+| No hash in the export | `unhashed` | Enrich. Supplying the map is the operator's assertion; no flag is required. Advisory `FLOW_MAP_UNHASHED`. |
+
+The hash cannot tell a descendant of the projected map from an unrelated one;
+both read `edited_map`. Two direct checks stand in for the integrity reading
+the hash used to be given, and both are advisory:
+
+- **Application.** The map's `application` against the export's. A difference
+  raises `FLOW_MAP_APPLICATION_MISMATCH` — the likeliest sign of the wrong
+  map, not of an edit.
+- **Component fit.** Every distinct `component_id` the nodes carry is looked up
+  in the map. One that does not resolve raises `FLOW_MAP_COMPONENT_UNRESOLVED`
+  and its nodes receive no flow-map enrichment in N3; they stay `asset_named`.
+  A renamed or removed component therefore surfaces per node, not as a
+  pass/fail on the whole map.
+
+Substantive contradictions between an edited map and the projection are
+already caught by §4.3 rule 4: the map only fills fields no export carries,
+and a disagreement is a conflict record with the export value kept. An edited
+map can add context; it cannot rewrite what the projection reasoned about.
+
+The lineage is recorded once on the result and, from N3, on every
+flow-map-derived field's `provenance_by_field` entry as `flow_map_lineage`, so
+a draft can say it rests on an edited map. This does **not** relax the pair
+rows above: the `run_id` join guards against merging two different runs into
+one context, which is an error whatever the trust model.
 
 ### 4.3 Field-level precedence
 
@@ -660,7 +697,49 @@ reference_data | derived`. Precedence when a pair is joined:
    U+2014 must raise an encoding warning rather than a content conflict.
 4. Flow map fills only fields neither export carries. It never overwrites an
    export value; a disagreement (asset name vs component name) is a conflict
-   record.
+   record. Each field it fills is stamped origin `flow_map` plus the
+   `flow_map_lineage` of §4.2.
+
+### 4.4 Warning, review-flag and error codes
+
+Closed sets, each code declared once in the plugin
+(`WARNING_CODES` and `REVIEW_FLAG_CODES` in `normalization.py`, `ERROR_CODES`
+in `tool.py`). Emitting an undeclared code is a programming error, not a new
+code. Every warning carries its severity.
+
+**Severity.** `blocking` means the output omits or downgrades something
+because of the condition — a document dropped, a node not merged, a join not
+reported verified, a component left unenriched. `advisory` means the output is
+complete and the reader should know why it may need a second look.
+
+| Warning | Severity | Raised when |
+|---|---|---|
+| `PAIR_REFUSED` | blocking | §4.2 refuses the pair; the primary document is processed alone. |
+| `PAIR_CONTENT_CONFLICT` | blocking | A shared field disagrees after canonicalization; the join is not reported verified. |
+| `NODE_ONLY_IN_SECONDARY` | blocking | A node the leading document lacks; it is not merged. |
+| `PATH_NOT_IN_BOTH` | advisory | A path present in one document of a pair only. |
+| `PATH_LENGTH_DIFFERS` | advisory | The two documents disagree on a path's length. |
+| `STATE_NOTE_ENCODING` | advisory | The `state_check` separator is not U+2014; the transport damaged it (§4.3 3a). |
+| `FLOW_MAP_EDITED` | advisory | The supplied map's hash differs from the export's (§4.2). |
+| `FLOW_MAP_UNHASHED` | advisory | The export records no flow map hash (§4.2). |
+| `FLOW_MAP_APPLICATION_MISMATCH` | advisory | The map names a different application from the export. |
+| `FLOW_MAP_COMPONENT_UNRESOLVED` | blocking | A node's `component_id` is not in the supplied map; its nodes are not enriched. |
+
+| Review flag (per node) | Raised when |
+|---|---|
+| `UNDECLARED_TRANSITION` | The component changes with no declared flow. |
+| `TRANSITION_UNPARSED` | Transition prose matched no known form; kept verbatim. |
+
+| Error (the call fails) | Raised when |
+|---|---|
+| `NO_INPUT` | No export supplied. |
+| `ARTIFACT_NOT_FOUND` | An artifact id, export or flow map, is not registered in the session. |
+| `ARTIFACT_UNAVAILABLE` | Registered, but its bytes are not readable here; names the `storage_uri`. |
+| `INPUT_UNREADABLE` | An export is not readable JSON. |
+| `INPUT_UNRECOGNIZED` | An export is not a graph, seed or scenario. |
+| `FLOW_MAP_UNREADABLE` | The flow map is not readable JSON. Prose, Markdown and Mermaid maps are N5's job. |
+| `FLOW_MAP_NOT_OBJECT` | The flow map is not an object with a `components` list. |
+| `NORMALIZATION_FAILED` | Normalization raised on inputs that passed the checks above. |
 
 ---
 
@@ -675,18 +754,19 @@ product-specific detection. Grade it explicitly:
 
 | Grade | Condition | What guidance may claim |
 |---|---|---|
-| `component_bound` | Flow map **supplied, verified or operator-asserted, and joined**; component matched by ID; technologies **and** authentication both non-empty | Product-named log sources; `logsource.product` may be set |
+| `component_bound` | Flow map **supplied and joined**, whatever its lineage; component matched by ID; technologies **and** authentication both non-empty | Product-named log sources; `logsource.product` may be set |
 | `component_bound_partial` | Same, but the matched component has empty `technologies` or `authentication` | Zone, exposure and boundary facts may be used; `logsource.product` stays unset and the missing field is named in `telemetry_requirements[]` |
 | `asset_named` | Component ID present, no flow map supplied | Behaviour-level sources only; `logsource.definition` describes required collection, `product` stays unset |
 | `asset_text_only` | Scenario-only input, asset name but no component ID | Conditional design; the plan's existing rule that a guessed ID must not become a join key |
 | `unbound` | No component and no asset | Draft still produced, telemetry section is a declared gap |
 
-**A provenance hash alone does not grade a node `component_bound`.** All three
-conditions must hold independently: the operator supplied a map, its hash
-matched (or was explicitly asserted per §4.2), **and** the node's
-`component_id` resolved to a component in it. An export carrying a
-`flow_map_sha256` but run without the map is `asset_named` — the hash records
-which map *would* bind, not any binding that happened. Likewise a scenario-only
+**The hash neither grants nor withholds a grade** (decision 9). Two conditions
+must hold: the operator supplied a map, **and** the node's `component_id`
+resolved to a component in it. An export carrying a `flow_map_sha256` but run
+without the map is `asset_named` — the hash records which map the projection
+used, not any binding that happened. A map whose hash differs grades exactly
+as a matching one would; the difference is carried as `flow_map_lineage:
+edited_map` so a draft can say what it rests on. Likewise a scenario-only
 input stays `asset_text_only` no matter what provenance accompanies it, because
 it carries no `component_id` to join on.
 
@@ -728,8 +808,8 @@ Normalization first and separately; guidance builds on the pack.
 | Stage | Deliverable | Acceptance gate |
 |---|---|---|
 | **N1. Adapters and identity** | Graph, seed and single-scenario adapters; the three identities of §4.2a; `(projection_identity, path_id, node_index)` keys; deterministic `draft_id`; union merge with the §4.3 precedence table including the 3a `state_check` **and `transition`** canonicalizations; `provenance_by_field` | All four fixtures normalize graph-only and seed-only to identical ordered node keys (9, 11, 10, 13 — **43** in all). All four carry provenance, so the `run_id` join is the normal path and §4.2's derived-identity path has no fixture — it is covered by the §7a synthetic pair. A repeated `(technique, component)` inside one path stays distinct on the §7 synthetic case; the three cross-path repeats in `124121` survive as distinct nodes. `AE-0001` recurring per path never collides. Every field carries an origin and pointer. No pair joins without `verified` or an explicit operator assertion. |
-| **N2. Provenance** | Projector `provenance` block (§4.1) — **built 2026-09-16**; designer-side legacy handling (§4.2); conflict codes | A graph from one run and a seed from another are refused as a pair. A flow map whose hash differs does not enrich. Every field carries an origin and pointer. |
-| **N3. Enrichment and grading** | Flow-map join, control catalogue, mitigation-name resolution, the §1.4b focus cut and coverage ratio, taxonomy reconciliation, completeness grades | `Stealth` survives against v19.2. `uncovered_mitigations` resolve to names locally. `mitigation_focus[]` is the 1–2 narrowest by technique breadth, deterministic and tie-broken by M-ID. Grades match §5 across all four fixtures with and without the flow map — 38 `component_bound`, 5 `component_bound_partial`, and 43 `asset_named` when the map is withheld. The two `TACTIC_CORRECTED` relabels in `124121` and the one in `022646` survive normalization. |
+| **N2. Provenance** — **closed 2026-09-19** | Projector `provenance` block (§4.1) — built 2026-09-16; designer-side pair handling (§4.2) — built in N1; flow-map lineage, application and component-fit checks (§4.2, decision 9); the §4.4 code catalogue | A graph from one run and a seed from another are refused as a pair. A supplied flow map is recorded as `same_map`, `edited_map` or `unhashed` and **never refused**; the four fixture exports reproduce their recorded `flow_map_sha256` from the repository maps. Every field carries an origin and pointer. Every emitted code is in §4.4. |
+| **N3. Enrichment and grading** — built in slices: **N3a** flow-map join and grades and **N3b** controls landed 2026-09-19; N3c mitigations and N3d taxonomy outstanding | Flow-map join, control catalogue, mitigation-name resolution, the §1.4b focus cut and coverage ratio, taxonomy reconciliation, completeness grades | `Stealth` survives against v19.2. `uncovered_mitigations` resolve to names locally. `mitigation_focus[]` is the 1–2 narrowest by technique breadth, deterministic and tie-broken by M-ID. Grades match §5 across all four fixtures with and without the flow map — 38 `component_bound`, 5 `component_bound_partial`, and 43 `asset_named` when the map is withheld. The two `TACTIC_CORRECTED` relabels in `124121` and the one in `022646` survive normalization. |
 | **N4. Context pack artifact** | `normalize_paths` action, pack schema, registration, CLI `show`/`export`, bounded `summarize_for_llm` | Pack round-trips; re-normalizing the same inputs is byte-identical apart from run ID and timestamp; the summary states counts, grades and conflicts without pasting node bodies. Input by `artifact_ids` and output as a registered artifact are **done in N1** (decision 8); what N4 adds is the pack's own schema and `metadata.kind`, not persistence — the shell already auto-persists a result that registers nothing. |
 | **N5. `normalize_flow_map`** | The projector's own Phase 4 action | Prose/Markdown/Mermaid → canonical flow map JSON with a stable `_canonical_flow_map_hash`. An unstated control status becomes `partial` and is flagged, never `implemented` — the rule already recorded in `docs/change_log/2026-09-11-adversary-path-projector-phase-3.md`. This is what makes `component_bound` routinely reachable. |
 | **G1…** | Grounding, generation, workbook — designer plan stages 2–5, unchanged except that they consume a pack | As in the designer plan, with the node-count constants replaced by pack inventory. |
@@ -796,8 +876,12 @@ Beyond the designer plan's list, and all runnable without a provider:
   operator flag. `192507` and `022646` carry it; assert they join on `run_id`
   without the flag. Pairing one legacy document with one verified document is
   refused outright (§4.2).
-- **Flow map hash mismatch** blocks enrichment; a flow map with no hash in the
-  export marks every derived field `asserted_by_operator`.
+- **Flow map lineage** (decision 9). The repository maps reproduce each
+  fixture's `flow_map_sha256` and read `same_map`; an edited copy reads
+  `edited_map` with an advisory warning and is **not** refused; an export
+  stripped of its hash reads `unhashed` without any operator flag. A map for a
+  different application raises `FLOW_MAP_APPLICATION_MISMATCH`, and a
+  component missing from the map raises `FLOW_MAP_COMPONENT_UNRESOLVED`.
 - **All three transition shapes**, including both readings of `null`: a
   same-component step becomes `movement: in_place`, and a component change with
   no declared flow becomes `movement: undeclared` and raises a review flag.
@@ -914,7 +998,8 @@ Decisions taken, 2026-09-16 (operator):
    of N2 landed the same day — see
    `docs/change_log/2026-09-16-projector-export-provenance.md`. Both exports
    now carry the `provenance` block of §4.1, sharing one `run_id` with the run
-   record. The designer-side legacy handling of §4.2 remains N2 work, and
+   record. The designer-side legacy handling of §4.2 was N2 work — it shipped
+   with N1's pair gating, and N2 closed 2026-09-19 under decision 9 — and
    remains necessary: the two fixtures existing at that date, `165537` and
    `204815`, predate the change and always will. The two added since carry the
    block.
@@ -1077,6 +1162,73 @@ Decision taken, 2026-09-17 (operator), after N1 was built:
    the bucket would need the storage resolver, which plugins do not receive.
    Change log `docs/change_log/2026-09-17-artifact-input-route.md`.
 
+Decision taken, 2026-09-19 (operator):
+
+9. **A flow map's hash is lineage, not an integrity gate.** The map is not a
+   forensic copy. An analyst with inside information is expected to copy a
+   generated map and correct it; git is the recommended way to track those
+   edits; and a tampered map passed around is not a meaningful risk in this
+   workflow. The 2026-09-16 rows of §4.2 — a mismatched hash refuses
+   enrichment, a missing hash needs an operator assertion — would have
+   penalised exactly that workflow, and §5 made a hash match a condition of
+   `component_bound`.
+
+   **What replaced them.** The lineage (`same_map` / `edited_map` /
+   `unhashed`) is recorded and warned on, never refused. The check the hash
+   had been standing in for — does this map fit this projection — is made
+   directly: the map's application against the export's, and every node's
+   `component_id` against the map's components. Both are advisory at the level
+   of the whole map; an unresolved component withholds enrichment from its own
+   nodes only. §4.3 rule 4 already keeps an edited map from overwriting an
+   export value.
+
+   **What it does not change.** The pair rows of §4.2. The `run_id` join
+   protects against merging two runs into one context, not against tampering,
+   and stays strict.
+
+   **Deliberately left out.** Recording the map's git commit or blob id when it
+   lives in a working tree would say *which* edit a draft rests on, not only
+   that it was edited. Not built; reopen when a reviewer needs to trace a draft
+   to a specific revision of the map.
+
+   Change log `docs/change_log/2026-09-19-n2-flow-map-lineage.md`.
+
+Decisions taken, 2026-09-19 (operator), when N3 was planned:
+
+10. **A control catalogue entry attaches to a node by component, and by name
+    plus component id when there is no map.** §1.4 assumes the seed's
+    `security_controls[]` can be read per node; nothing in the documents
+    supports that directly. A catalogue entry carries `control_id`, `name`,
+    `detection_capability` and a *description* — `"Protects CDN (cdn)."` — and
+    the graph's `controls_in_play` carries a name and no id. So:
+
+    - **With a flow map**, the join is structural and needs no matching: the
+      map's component owns its controls, with `detection_capability`,
+      `bypass_difficulty` and `mitre_mitigation_id` on each. Origin
+      `flow_map`, carrying the lineage of §4.2.
+    - **Without one**, a `controls_in_play` name is matched against catalogue
+      entries whose description names that node's `component_id` in
+      parentheses. The match is recorded `evidence: text` and may never
+      outrank the map — the same treatment §3 gives the seed's transition
+      prose. A name that matches no entry, or matches one written for another
+      component, is left unattached rather than guessed.
+
+    Name matching alone was rejected: control names repeat across components
+    (`WAF` protects two in Claims Portal), so it would attach one component's
+    `detection_capability` to another's node.
+
+11. **`mitigation_coverage.tag_caveat` is computed from the supplied flow map,
+    or is null.** §1.4b says it reproduces the projector's `control_tagging`
+    counts. **Neither export carries them** — they exist in the tool result and
+    the run record only, and one of the four pairs has no run record, so it can
+    never be a required input. The projector derives them from the map
+    (`tool.py:1824`), which the designer can do identically: controls on the
+    targeted components, and how many carry a `mitre_mitigation_id`. With no
+    map, `tag_caveat` is `null` with a stated reason; a null caveat must never
+    read as "every control is tagged". The counts are stamped with the map's
+    lineage, so an edited map yields the caveat for the estate the analyst
+    corrected.
+
 ## 9. Review status
 
 Parsed both export pairs and diffed their per-node fields; read
@@ -1145,3 +1297,29 @@ them). Cross-plugin imports were checked for and do not exist: plugins import
 shared code only from `framework.*`. The projector's own manifest was read for
 the precedent. §2 and §6 were then corrected and decision 7 recorded. **N1 is
 now unblocked.** Still no code changed, no test run, no LLM call made.
+
+**N2, 2026-09-19.** Decision 9 came from the operator; everything built on it
+was checked first. The projector's `_canonical_flow_map_hash`
+(`adversary_path_projector/tool.py:467`) was read and its serialisation
+compared with the designer's `canonical_json`; the three repository maps were
+then hashed and matched the `flow_map_sha256` recorded in all eight fixture
+documents, which is now a test. The application names and component ids of
+the three maps were read against the four exports before the fit checks were
+written. The §4.4 catalogue was taken from every code the module actually
+emitted, not written first. `framework/cli/shell.py` `_plugin_input_schema`
+was read to confirm the shell takes its flags from the input schema. Suite
+1597 → 1635. No shell run and no LLM call.
+
+**N3a and N3b, 2026-09-19.** The §5 gate was recomputed from the four fixtures
+and the three repository maps before the grading code existed — 38 / 5 with the
+map, 43 `asset_named` without, 43 `asset_text_only` seed-only — and the five
+partial components identified (`users`, `front_door`, `claims_db`,
+`doc_store`). Decisions 10 and 11 came from reading the documents rather than
+the spec: the seed's `security_controls[]` entries were checked for a component
+key and have none but the parenthesised id in their description, the graph's
+`controls_in_play` for an id and has none, the Claims Portal map for a repeated
+control name (`WAF`, on two components), and both exports for `control_tagging`,
+which is absent from each. `mitre_attack.py` was checked for the taxonomy
+helpers N3d will use, and the corpus's mitigation coverage recomputed at 6 of
+169 with no unresolvable M-ID. Suite 1635 → 1652. No shell run and no LLM
+call; the operator will test N2 and N3a/N3b against uploaded artifacts.

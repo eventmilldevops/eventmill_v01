@@ -472,14 +472,32 @@ def test_union_merge_keeps_what_each_document_alone_carries():
         assert node.provenance_by_field[name]["role"] == "seed"
 
 
-def test_every_field_carries_an_origin_and_a_pointer():
-    result = nz.normalize(*_pair("20260917_123525"))
+@pytest.mark.parametrize("with_map", [False, True])
+def test_every_field_carries_an_origin_and_a_pointer(with_map):
+    """Enriched fields are held to the same rule as the exports' own.
+
+    A derived field has no document to point at, so it names the fields it was
+    computed from instead — the question every field must answer is where its
+    value came from, not which file it was copied out of.
+    """
+    flow_map = _map(MAP_FOR_STAMP["20260917_123525"]) if with_map else None
+    result = nz.normalize(*_pair("20260917_123525"), flow_map=flow_map)
     for node in result.nodes:
         assert set(node.provenance_by_field) >= set(node.fields)
         for name, entry in node.provenance_by_field.items():
-            assert entry["origin"] in {"graph", "seed", "pair_agreed", "derived"}
+            assert entry["origin"] in {
+                "graph", "seed", "pair_agreed", "derived", "flow_map",
+            }
+            if entry["origin"] == "derived":
+                assert entry["basis"]
+                continue
+            if entry["origin"] == "seed" and not entry["pointer"]:
+                assert name == "control_catalogue"  # no per-node pointer exists
+                continue
             assert entry["pointer"].startswith("/")
             assert entry["document"]
+            if entry["origin"] == "flow_map":
+                assert entry["flow_map_lineage"] == result.flow_map["lineage"]
 
 
 def test_a_shared_field_that_agrees_is_recorded_pair_agreed():
@@ -564,3 +582,435 @@ def test_normalizing_is_deterministic():
 def test_an_unrecognized_document_is_refused():
     with pytest.raises(nz.NormalizationError):
         nz.load_document({"source_tool": "something_else"}, "x.json")
+
+
+# ---------------------------------------------------------------------------
+# Flow map lineage, stage N2 (section 4.2, decision 9)
+# ---------------------------------------------------------------------------
+
+FLOW_MAPS = FIXTURES / "flow_maps"
+
+# Which repository map each run was projected against, per its provenance.
+MAP_FOR_STAMP = {
+    "20260917_022646": "telemetry_saas_flow_map.json",
+    "20260917_122549": "telemetry_saas_flow_map.json",
+    "20260917_123525": "application_b_flow_map.json",
+    "20260917_124121": "claims_portal_flow_map.json",
+}
+
+FLOW_MAP_CODES = {
+    "FLOW_MAP_EDITED",
+    "FLOW_MAP_UNHASHED",
+    "FLOW_MAP_APPLICATION_MISMATCH",
+    "FLOW_MAP_COMPONENT_UNRESOLVED",
+}
+
+
+def _read_map(filename: str) -> dict:
+    with open(FLOW_MAPS / filename, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _map(filename: str, document: dict | None = None):
+    return nz.load_flow_map(
+        document if document is not None else _read_map(filename), filename
+    )
+
+
+def _codes(result) -> list[str]:
+    return [w["code"] for w in result.warnings]
+
+
+@pytest.mark.parametrize("stamp", sorted(MAP_FOR_STAMP))
+@pytest.mark.parametrize("role", ["graph", "seed"])
+def test_the_projector_hash_is_reproduced_from_the_repository_maps(stamp, role):
+    """Plugins cannot share code, so this is the check that the two agree."""
+    recorded = _read(stamp, role)["provenance"]["flow_map_sha256"]
+    assert nz.flow_map_hash(_read_map(MAP_FOR_STAMP[stamp])) == recorded
+
+
+@pytest.mark.parametrize("stamp", sorted(MAP_FOR_STAMP))
+def test_the_projected_map_reads_same_map_and_fits(stamp):
+    result = nz.normalize(*_pair(stamp), flow_map=_map(MAP_FOR_STAMP[stamp]))
+    record = result.flow_map
+    assert record["supplied"] is True
+    assert record["lineage"] == nz.LINEAGE_SAME
+    assert record["application_matches"] is True
+    assert record["components_unresolved"] == []
+    assert record["components_resolved"]
+    assert not FLOW_MAP_CODES & set(_codes(result))
+
+
+def test_an_edited_map_is_recorded_and_used_not_refused():
+    """The analyst's corrected copy is the expected case, not a conflict."""
+    stamp = "20260917_124121"
+    edited = copy.deepcopy(_read_map(MAP_FOR_STAMP[stamp]))
+    edited["components"][0]["controls"].append(
+        {"name": "WAF rule added from inside knowledge", "control_type": "perimeter"}
+    )
+    baseline = nz.normalize(*_pair(stamp))
+    result = nz.normalize(*_pair(stamp), flow_map=_map("edited.json", edited))
+
+    assert result.flow_map["lineage"] == nz.LINEAGE_EDITED
+    edited_warnings = [w for w in result.warnings if w["code"] == "FLOW_MAP_EDITED"]
+    assert len(edited_warnings) == 1
+    assert edited_warnings[0]["severity"] == nz.SEVERITY_ADVISORY
+    assert result.flow_map["components_unresolved"] == []
+    # Nothing downstream moves because the map was edited.
+    assert result.pair["verified"] is True
+    assert [n.draft_id for n in result.nodes] == [n.draft_id for n in baseline.nodes]
+
+
+def test_reordering_or_reformatting_a_map_is_not_an_edit():
+    stamp = "20260917_123525"
+    original = _read_map(MAP_FOR_STAMP[stamp])
+    reordered = dict(reversed(list(original.items())))
+    reparsed = json.loads(json.dumps(reordered, indent=4))
+    result = nz.normalize(_doc(stamp, "graph"), flow_map=_map("copy.json", reparsed))
+    assert result.flow_map["lineage"] == nz.LINEAGE_SAME
+
+
+def test_an_export_without_a_hash_needs_no_operator_flag():
+    stamp = "20260917_122549"
+    graph_document = copy.deepcopy(_read(stamp, "graph"))
+    seed_document = copy.deepcopy(_read(stamp, "seed"))
+    for document in (graph_document, seed_document):
+        del document["provenance"]["flow_map_sha256"]
+    graph = _doc(stamp, "graph", graph_document)
+    seed = _doc(stamp, "seed", seed_document)
+
+    result = nz.normalize(graph, seed, flow_map=_map(MAP_FOR_STAMP[stamp]))
+    assert result.flow_map["lineage"] == nz.LINEAGE_UNHASHED
+    assert result.flow_map["export_sha256"] is None
+    assert "FLOW_MAP_UNHASHED" in _codes(result)
+    assert result.pair["verified"] is True  # the run_id join is untouched
+
+
+def test_the_wrong_map_is_told_apart_by_fit_not_by_hash():
+    """Hash alone reads a foreign map as edited; application and components
+    are what say it is the wrong estate."""
+    result = nz.normalize(
+        *_pair("20260917_122549"), flow_map=_map("claims_portal_flow_map.json")
+    )
+    record = result.flow_map
+    assert record["lineage"] == nz.LINEAGE_EDITED
+    assert record["application_matches"] is False
+    assert record["components_resolved"] == []
+    assert record["components_unresolved"]
+    codes = _codes(result)
+    assert "FLOW_MAP_APPLICATION_MISMATCH" in codes
+    assert codes.count("FLOW_MAP_COMPONENT_UNRESOLVED") == len(
+        record["components_unresolved"]
+    )
+
+
+def test_a_removed_component_is_reported_per_component_with_its_node_count():
+    stamp = "20260917_124121"
+    trimmed = copy.deepcopy(_read_map(MAP_FOR_STAMP[stamp]))
+    trimmed["components"] = [
+        c for c in trimmed["components"] if c["id"] != "doc_store"
+    ]
+    result = nz.normalize(*_pair(stamp), flow_map=_map("trimmed.json", trimmed))
+
+    expected_nodes = sum(
+        1 for n in result.nodes if n.fields.get("component_id") == "doc_store"
+    )
+    assert expected_nodes > 0
+    assert result.flow_map["components_unresolved"] == ["doc_store"]
+    unresolved = [
+        w for w in result.warnings if w["code"] == "FLOW_MAP_COMPONENT_UNRESOLVED"
+    ]
+    assert len(unresolved) == 1
+    assert unresolved[0]["severity"] == nz.SEVERITY_BLOCKING
+    assert unresolved[0]["location"] == "doc_store"
+    assert f"{expected_nodes} node(s)" in unresolved[0]["message"]
+    assert result.flow_map["application_matches"] is True
+
+
+def test_without_a_map_the_record_still_says_which_map_would_bind():
+    stamp = "20260917_022646"
+    result = nz.normalize(*_pair(stamp))
+    record = result.flow_map
+    assert record["supplied"] is False
+    assert record["export_sha256"] == _read(stamp, "graph")["provenance"][
+        "flow_map_sha256"
+    ]
+    assert "lineage" not in record
+    assert not FLOW_MAP_CODES & set(_codes(result))
+
+
+def test_seed_only_input_has_no_components_to_resolve():
+    stamp = "20260917_124121"
+    result = nz.normalize(_doc(stamp, "seed"), flow_map=_map(MAP_FOR_STAMP[stamp]))
+    assert result.flow_map["lineage"] == nz.LINEAGE_SAME
+    assert result.flow_map["components_resolved"] == []
+    assert result.flow_map["components_unresolved"] == []
+
+
+@pytest.mark.parametrize(
+    "document",
+    [[], "flow map", {"application": "Claims Portal"}, {"components": "none"}],
+)
+def test_something_that_is_not_a_flow_map_is_refused(document):
+    with pytest.raises(nz.FlowMapError):
+        nz.load_flow_map(document, "not_a_map.json")
+
+
+# ---------------------------------------------------------------------------
+# The closed code catalogue, section 4.4
+# ---------------------------------------------------------------------------
+
+SPEC = PLUGIN_DIR.parents[2] / "docs" / "specs" / "attack_path_detection_normalization.md"
+
+
+def test_every_warning_carries_its_catalogue_severity():
+    graph = _doc("20260917_122549", "graph")
+    seed = _doc("20260917_124121", "seed")
+    results = [
+        nz.normalize(graph, seed),
+        nz.normalize(
+            *_pair("20260917_122549"), flow_map=_map("claims_portal_flow_map.json")
+        ),
+    ]
+    warnings = [w for result in results for w in result.warnings]
+    assert warnings
+    for warning in warnings:
+        assert warning["severity"] == nz.WARNING_CODES[warning["code"]]
+
+
+def test_an_undeclared_code_cannot_be_emitted():
+    with pytest.raises(KeyError):
+        nz._warning("SOMETHING_NEW", "x", "y")
+    with pytest.raises(KeyError):
+        nz._review_flag("SOMETHING_NEW", "y")
+
+
+# ---------------------------------------------------------------------------
+# Flow-map join and grading, stage N3a (sections 4.3 rule 4 and 5)
+# ---------------------------------------------------------------------------
+
+# Section 5, restated over the 2026-09-17 corpus.
+PARTIAL_COMPONENTS = {"users", "front_door", "claims_db", "doc_store"}
+
+
+def _joined(stamp: str):
+    return nz.normalize(*_pair(stamp), flow_map=_map(MAP_FOR_STAMP[stamp]))
+
+
+def test_the_grade_gate_across_the_whole_corpus():
+    """38 component_bound + 5 partial with the map; 43 asset_named without."""
+    with_map: dict[str, int] = {}
+    without_map: dict[str, int] = {}
+    seed_only: dict[str, int] = {}
+    for stamp in CORPUS:
+        for source, sink in (
+            (_joined(stamp), with_map),
+            (nz.normalize(*_pair(stamp)), without_map),
+            (nz.normalize(_doc(stamp, "seed")), seed_only),
+        ):
+            for grade, count in source.inventory["completeness"].items():
+                sink[grade] = sink.get(grade, 0) + count
+
+    assert with_map == {"component_bound": 38, "component_bound_partial": 5}
+    assert without_map == {"asset_named": TOTAL_NODES}
+    assert seed_only == {"asset_text_only": TOTAL_NODES}
+
+
+def test_the_partial_grade_names_what_is_missing():
+    partial = [
+        node
+        for stamp in CORPUS
+        for node in _joined(stamp).nodes
+        if node.fields["context_completeness"] == "component_bound_partial"
+    ]
+    assert len(partial) == 5
+    assert {n.fields["component_id"] for n in partial} == PARTIAL_COMPONENTS
+    for node in partial:
+        assert node.fields["telemetry_requirements"]
+        assert all(
+            "logsource.product stays unset" in requirement
+            for requirement in node.fields["telemetry_requirements"]
+        )
+    # authentication 'none' is a declared absence, not a product to name.
+    front_door = next(n for n in partial if n.fields["component_id"] == "front_door")
+    assert front_door.fields["authentication"] == "none"
+    assert front_door.fields["technologies"]
+
+
+def test_a_bound_node_carries_the_estate_fields_the_exports_lack():
+    node = next(
+        n for n in _joined("20260917_124121").nodes if n.fields["component_id"] == "portal"
+    )
+    assert node.fields["zone"]
+    assert node.fields["technologies"] == ["nginx", "django"]
+    assert node.fields["authentication"] == "saml_sso"
+    assert node.fields["data_classification"] == "pii"
+    assert node.fields["crown_jewel"] is False
+    assert node.provenance_by_field["zone"]["origin"] == "flow_map"
+    assert node.provenance_by_field["zone"]["flow_map_lineage"] == "same_map"
+
+
+def test_a_crown_jewel_is_read_from_the_map_not_guessed():
+    nodes = _joined("20260917_124121").nodes
+    jewels = {n.fields["component_id"] for n in nodes if n.fields["crown_jewel"]}
+    assert jewels <= {"claims_db", "doc_store"}
+    assert jewels
+
+
+def test_an_unresolved_component_is_not_enriched_and_stays_asset_named():
+    stamp = "20260917_124121"
+    trimmed = copy.deepcopy(_read_map(MAP_FOR_STAMP[stamp]))
+    trimmed["components"] = [c for c in trimmed["components"] if c["id"] != "doc_store"]
+    result = nz.normalize(*_pair(stamp), flow_map=_map("trimmed.json", trimmed))
+
+    orphans = [n for n in result.nodes if n.fields["component_id"] == "doc_store"]
+    assert orphans
+    for node in orphans:
+        assert node.fields["context_completeness"] == "asset_named"
+        # Absent, not null: the existing convention for a field that does not
+        # apply, as with component_id on a seed-only node.
+        assert "zone" not in node.fields
+        assert "technologies" not in node.fields
+        assert node.fields["control_catalogue"] == []
+    # The rest of the map is still used.
+    assert result.inventory["completeness"]["component_bound"] > 0
+
+
+def test_the_map_never_overwrites_an_export_value():
+    stamp = "20260917_124121"
+    renamed = copy.deepcopy(_read_map(MAP_FOR_STAMP[stamp]))
+    component = next(c for c in renamed["components"] if c["id"] == "portal")
+    component["name"] = "Renamed in the analyst's copy"
+    result = nz.normalize(*_pair(stamp), flow_map=_map("renamed.json", renamed))
+
+    node = next(n for n in result.nodes if n.fields["component_id"] == "portal")
+    assert node.fields["asset_name"] != "Renamed in the analyst's copy"
+    conflict = next(
+        c for c in result.input_conflicts if c["draft_field"] == "asset_name"
+    )
+    assert conflict["rejected"] == "Renamed in the analyst's copy"
+    assert conflict["kept"] == node.fields["asset_name"]
+    # A map disagreeing with an export is not the two documents disagreeing.
+    assert result.pair["verified"] is True
+
+
+def test_a_port_comes_only_from_the_map():
+    stamp = "20260917_122549"
+    unmapped = nz.normalize(*_pair(stamp))
+    assert all("port" not in n.fields for n in unmapped.nodes)
+    flowing = [
+        n
+        for n in _joined(stamp).nodes
+        if (n.fields["transition"] or {}).get("flow_id")
+    ]
+    assert flowing
+    assert all("port" in n.fields for n in flowing)
+
+
+# ---------------------------------------------------------------------------
+# Controls, stage N3b (section 1.4, decision 10)
+# ---------------------------------------------------------------------------
+
+def test_controls_come_from_the_component_when_a_map_is_supplied():
+    node = next(
+        n for n in _joined("20260917_124121").nodes if n.fields["component_id"] == "portal"
+    )
+    controls = node.fields["control_catalogue"]
+    assert controls
+    assert {c["name"] for c in controls} == {"WAF"}
+    assert all(c["evidence"] == "structured" for c in controls)
+    assert controls[0]["detection_capability"] == "medium"
+    assert controls[0]["mitre_mitigation_id"] == "M1050"
+    assert node.provenance_by_field["control_catalogue"]["origin"] == "flow_map"
+
+
+def test_without_a_map_a_control_attaches_by_name_and_component_id():
+    """Decision 10: the name alone is not a key."""
+    result = nz.normalize(*_pair("20260917_124121"))
+    attached = [n for n in result.nodes if n.fields["control_catalogue"]]
+    assert attached
+    for node in attached:
+        component_id = node.fields["component_id"]
+        for control in node.fields["control_catalogue"]:
+            assert control["evidence"] == "text"
+            assert control["control_id"]
+            assert control["name"] in {
+                c["name"] for c in node.fields["controls_in_play"]
+            }
+        assert component_id
+        assert node.provenance_by_field["control_catalogue"]["origin"] == "seed"
+
+
+def test_a_repeated_control_name_does_not_cross_components():
+    """'WAF' protects two Claims Portal components; the ids keep them apart."""
+    seed = _read("20260917_124121", "seed")
+    names = [
+        control["name"]
+        for scenario in seed["scenarios"]
+        for control in scenario["security_controls"]
+    ]
+    repeated = {name for name in names if names.count(name) > 1}
+    assert repeated  # the corpus really does repeat a control name
+
+    result = nz.normalize(*_pair("20260917_124121"))
+    for node in result.nodes:
+        component_id = node.fields["component_id"]
+        for control in node.fields["control_catalogue"]:
+            entry = next(
+                c
+                for scenario in seed["scenarios"]
+                for c in scenario["security_controls"]
+                if c["control_id"] == control["control_id"]
+            )
+            assert f"({component_id})" in entry["description"]
+
+
+def test_a_control_written_for_another_component_is_not_attached():
+    stamp = "20260917_124121"
+    document = copy.deepcopy(_read(stamp, "seed"))
+    for scenario in document["scenarios"]:
+        for control in scenario["security_controls"]:
+            control["description"] = "Protects something else (not_a_component)."
+    graph = _doc(stamp, "graph")
+    seed = _doc(stamp, "seed", document)
+    result = nz.normalize(graph, seed)
+    assert all(n.fields["control_catalogue"] == [] for n in result.nodes)
+
+
+def test_monitoring_claim_is_derived_and_never_coverage():
+    joined = _joined("20260917_124121")
+    claims = {n.fields["monitoring_claim"] for n in joined.nodes}
+    assert claims <= {"none", "partial", "claimed"}
+    for node in joined.nodes:
+        detecting = node.fields.get("detecting_controls") or []
+        capable = any(
+            (c.get("detection_capability") or "") in ("medium", "high")
+            for c in node.fields["control_catalogue"]
+        )
+        expected = "claimed" if detecting else ("partial" if capable else "none")
+        assert node.fields["monitoring_claim"] == expected
+        assert node.provenance_by_field["monitoring_claim"]["origin"] == "derived"
+        assert node.provenance_by_field["monitoring_claim"]["basis"]
+
+
+def test_enrichment_does_not_move_node_identity():
+    stamp = "20260917_123525"
+    plain = nz.normalize(*_pair(stamp))
+    enriched = _joined(stamp)
+    assert [n.draft_id for n in plain.nodes] == [n.draft_id for n in enriched.nodes]
+    assert plain.node_keys == enriched.node_keys
+
+
+def test_enrichment_is_deterministic():
+    first = _joined("20260917_022646").as_dict()
+    second = _joined("20260917_022646").as_dict()
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+
+def test_the_spec_catalogue_lists_every_code():
+    text = SPEC.read_text(encoding="utf-8")
+    section = text.split("### 4.4", 1)[1].split("\n## ", 1)[0]
+    for code in [*nz.WARNING_CODES, *nz.REVIEW_FLAG_CODES]:
+        assert f"`{code}`" in section, f"{code} is not in spec section 4.4"
+    for code, severity in nz.WARNING_CODES.items():
+        assert f"| `{code}` | {severity} |" in section

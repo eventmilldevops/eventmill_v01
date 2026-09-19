@@ -1,13 +1,14 @@
 """Attack Path Detection Designer.
 
 Turns adversary_path_projector exports into a normalized per-node detection
-context. Stage N1 of `docs/specs/attack_path_detection_normalization.md`.
+context. Stages N1 and N2 of `docs/specs/attack_path_detection_normalization.md`.
 
 Actions:
     validate_input   Deterministic. Normalizes the supplied sources and reports
-                     the node inventory, the identities, the pair decision and
-                     every field-level conflict, without writing an artifact
-                     and without calling a model.
+                     the node inventory, the identities, the pair decision,
+                     every field-level conflict and, when a flow map is
+                     supplied, its lineage and fit - without writing an
+                     artifact and without calling a model.
 
 Planned:
     normalize_paths       stage N4 - the same normalization, persisted as a
@@ -56,6 +57,18 @@ ACTIONS = ("validate_input",)
 
 # Named so validate_inputs can say so rather than failing obscurely.
 PLANNED_ACTIONS = ("normalize_paths", "generate_detections")
+
+# Section 4.4 of the spec. Every failing result carries one of these.
+ERROR_CODES = (
+    "NO_INPUT",
+    "ARTIFACT_NOT_FOUND",
+    "ARTIFACT_UNAVAILABLE",
+    "INPUT_UNREADABLE",
+    "INPUT_UNRECOGNIZED",
+    "FLOW_MAP_UNREADABLE",
+    "FLOW_MAP_NOT_OBJECT",
+    "NORMALIZATION_FAILED",
+)
 
 
 @dataclass
@@ -145,6 +158,54 @@ def _resolve_artifact(artifact_id: Any, context: Any) -> tuple[Any, ToolResult |
     return (Path(artifact.file_path).name, path), None
 
 
+def _read_json(path: Path) -> Any:
+    # Always explicit: the default encoding on Windows is cp1252, and these
+    # documents contain a U+2014 that a mojibake read turns into a spurious
+    # conflict on every gap node.
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _load_flow_map(payload: dict[str, Any], context: Any) -> tuple[Any, ToolResult | None]:
+    """The supplied flow map, if any, by artifact id or by local path.
+
+    Never refused for its lineage: an edited map is an expected input (spec
+    decision 9). Only a file that is not a flow map at all fails the call.
+    """
+    artifact_id = payload.get("flow_map_artifact_id")
+    path_value = payload.get("flow_map_path")
+    if artifact_id:
+        resolved, failure = _resolve_artifact(artifact_id, context)
+        if failure is not None:
+            return None, failure
+        name, path = resolved
+    elif path_value:
+        name, path = Path(path_value).name, Path(path_value)
+    else:
+        return None, None
+
+    try:
+        parsed = _read_json(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, ToolResult(
+            ok=False,
+            error_code="FLOW_MAP_UNREADABLE",
+            message=(
+                f"Could not read flow map {name} as JSON: {exc}. A prose, Markdown "
+                "or Mermaid map needs converting first (stage N5)."
+            ),
+        )
+    try:
+        return nz.load_flow_map(parsed, name), None
+    except nz.FlowMapError as exc:
+        return None, ToolResult(
+            ok=False,
+            error_code="FLOW_MAP_NOT_OBJECT",
+            message=str(exc),
+            details={"file": name},
+        )
+
+
 class AttackPathDetectionDesigner:
     """Normalize projected attack paths into reviewable node contexts."""
 
@@ -196,6 +257,20 @@ class AttackPathDetectionDesigner:
                 # execution context, which validation does not receive.
                 errors.append(f"source not found: {entry}")
 
+        flow_map_id = payload.get("flow_map_artifact_id")
+        flow_map_path = payload.get("flow_map_path")
+        if flow_map_id and flow_map_path:
+            errors.append(
+                "Supply the flow map once: 'flow_map_artifact_id' or 'flow_map_path'"
+            )
+        if flow_map_id is not None and not isinstance(flow_map_id, str):
+            errors.append("'flow_map_artifact_id' must be an artifact id string")
+        if flow_map_path is not None:
+            if not isinstance(flow_map_path, str):
+                errors.append("'flow_map_path' must be a file path string")
+            elif not Path(flow_map_path).exists():
+                errors.append(f"flow map not found: {flow_map_path}")
+
         if errors:
             return ValidationResult(ok=False, errors=errors)
         return ValidationResult(ok=True)
@@ -219,14 +294,14 @@ class AttackPathDetectionDesigner:
                 message="No artifact id or source path supplied.",
             )
 
+        flow_map, failure = _load_flow_map(payload, context)
+        if failure is not None:
+            return failure
+
         documents = []
         for name, path in inputs:
             try:
-                # Always explicit: the default encoding on Windows is cp1252,
-                # and these documents contain a U+2014 that a mojibake read
-                # turns into a spurious conflict on every gap node.
-                with open(path, encoding="utf-8") as handle:
-                    parsed = json.load(handle)
+                parsed = _read_json(path)
             except (OSError, json.JSONDecodeError) as exc:
                 return ToolResult(
                     ok=False,
@@ -247,7 +322,10 @@ class AttackPathDetectionDesigner:
         secondary = documents[1] if len(documents) > 1 else None
         try:
             normalized = nz.normalize(
-                primary, secondary, accept_unverified_pair=accept_unverified
+                primary,
+                secondary,
+                accept_unverified_pair=accept_unverified,
+                flow_map=flow_map,
             )
         except nz.NormalizationError as exc:
             return ToolResult(
@@ -258,6 +336,8 @@ class AttackPathDetectionDesigner:
         result["node_count"] = len(normalized.nodes)
         result["pair_status"] = normalized.pair["provenance_status"]
         result["conflict_count"] = len(normalized.input_conflicts)
+        result["flow_map_lineage"] = normalized.flow_map.get("lineage")
+        result["completeness"] = normalized.inventory["completeness"]
         return ToolResult(ok=True, result=result)
 
     def summarize_for_llm(self, result: ToolResult) -> str:
@@ -283,6 +363,13 @@ class AttackPathDetectionDesigner:
             f"(provenance {pair.get('provenance_status', 'n/a')}, "
             f"verified={pair.get('verified', False)}).",
             f"Field conflicts: {conflicts}.",
+            _flow_map_line(data.get("flow_map") or {}),
+            "Context grades: "
+            + ", ".join(
+                f"{grade} {count}"
+                for grade, count in (data.get("completeness") or {}).items()
+            )
+            + ".",
             f"Actor {engagement.get('actor_label')} against "
             f"{engagement.get('application')}, "
             f"ATT&CK {engagement.get('attack_version')}.",
@@ -295,21 +382,38 @@ class AttackPathDetectionDesigner:
             else "Model: no attribution in the export."
         )
 
-        if warnings:
+        for severity in (nz.SEVERITY_BLOCKING, nz.SEVERITY_ADVISORY):
             counts: dict[str, int] = {}
             for warning in warnings:
-                counts[warning["code"]] = counts.get(warning["code"], 0) + 1
-            lines.append(
-                "Warnings: "
-                + ", ".join(f"{code} x{n}" for code, n in sorted(counts.items()))
-            )
+                if warning.get("severity") == severity:
+                    counts[warning["code"]] = counts.get(warning["code"], 0) + 1
+            if counts:
+                lines.append(
+                    f"Warnings ({severity}): "
+                    + ", ".join(f"{code} x{n}" for code, n in sorted(counts.items()))
+                )
 
         flagged = sum(1 for node in data.get("nodes", []) if node.get("review_flags"))
         if flagged:
             lines.append(f"{flagged} node(s) carry a review flag.")
 
         lines.append(
-            "Context is unenriched: no flow map joined, no completeness grade assigned "
-            "(stage N3)."
+            "Mitigation focus and taxonomy reconciliation are not applied "
+            "(stages N3c, N3d)."
         )
         return "\n".join(lines)
+
+
+def _flow_map_line(flow_map: dict[str, Any]) -> str:
+    """One line on the flow map. Lineage is reported, never a verdict."""
+    if not flow_map.get("supplied"):
+        return "Flow map: none supplied."
+    resolved = len(flow_map.get("components_resolved") or [])
+    total = resolved + len(flow_map.get("components_unresolved") or [])
+    line = (
+        f"Flow map: {flow_map.get('lineage')} ({flow_map.get('filename')}), "
+        f"{resolved} of {total} node components resolve"
+    )
+    if not flow_map.get("application_matches", True):
+        line += f", application {flow_map.get('application')!r} differs"
+    return line + "."
