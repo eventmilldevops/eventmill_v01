@@ -106,7 +106,24 @@ the two export documents disagreeing with each other.
   coverage were computed directly from the fixtures and the three repository
   maps before any of this was written; the gate test recomputes all three
   distributions.
-- **Not run in the shell or on Cloud Run.** The operator will test N2 and
-  N3a/N3b against uploaded artifacts.
+- **Live-confirmed on Cloud Run, 2026-09-20.** A fresh Scattered Spider
+  projection against the telemetry map, then the designer by `artifact_ids`
+  with and without `--flow_map_artifact_id`: 11 nodes over **three** paths,
+  pair `verified`, 0 conflicts, `asset_named 11` without the map and
+  `component_bound 11` with it, `same_map` with 8 of 8 components resolving.
+  The exported artifact was checked field by field against the map and the
+  ATT&CK lookup: component pointers resolve to the right components, ports
+  match their flows (443, 8200, 9093, 5432), `crown_jewel` is true for exactly
+  `vault` and `telemetry_db`, `ci_runner`'s empty control list is the map's own
+  (it declares none), and the covered mitigations are the tagged ones — M1027
+  on `partner_api`, M1032 on both `web_console` nodes. `Defense Impairment` on
+  `T1556.006` is a real v19.2 tactic, so N3d has nothing to correct there.
+- **Two live findings recorded elsewhere.** `artifact.file_path` *is* readable
+  inside the container for same-session artifacts, which closes the question
+  decision 8 left open and means no storage-resolver change is needed for that
+  case. And a live projection returned three paths, where §7a records the
+  three-path shape as having no subject in the fixture corpus.
+- Still untested: an artifact registered in an earlier session, and the
+  edited-map, wrong-map and error paths (test steps 7-10).
 - `ruff`, `black` and `mypy` are not installed in this environment and have not
   run.

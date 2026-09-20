@@ -58,6 +58,21 @@
       "description": "Spec section 5: how many nodes reached each context grade, from component_bound down to unbound.",
       "additionalProperties": { "type": "integer" }
     },
+    "mitigation_coverage": {
+      "type": "object",
+      "description": "Stage N3c totals across every node: covered, total, how many nodes have a focus cut, and any M-ID the reference data does not carry.",
+      "properties": {
+        "covered": { "type": "integer" },
+        "total": { "type": "integer" },
+        "nodes_with_focus": { "type": "integer" },
+        "unresolved": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "taxonomy": {
+      "type": "object",
+      "description": "Stage N3d: counts of technique: and tactic: statuses against ATT&CK v19.2.",
+      "additionalProperties": { "type": "integer" }
+    },
     "engagement": { "type": "object", "description": "Actor, application, ATT&CK version and model attribution read from provenance.model." },
     "inventory": { "type": "object", "description": "Paths, node count and the ordered node keys." },
     "nodes": {
@@ -81,6 +96,46 @@
             "description": "Stage N3b, decision 10. Controls attached to this node: structurally from the flow map's component, or by control name plus the component id named in a catalogue entry's description, marked evidence 'text'.",
             "items": { "type": "object" }
           },
+          "mitigations_covered": {
+            "type": "array",
+            "description": "Stage N3c. mitigations minus uncovered_mitigations, each with its resolved name and technique breadth. A tagged control exists on this component, so a draft here is a tuning case.",
+            "items": { "type": "object" }
+          },
+          "mitigation_focus": {
+            "type": "array",
+            "description": "Stage N3c, section 1.4b. The one or two narrowest uncovered mitigations by technique breadth, ties broken by M-ID. Narrows what generation reasons about; never an argument that a detection should exist. Empty is ordinary.",
+            "maxItems": 2,
+            "items": { "type": "object" }
+          },
+          "mitigation_names": {
+            "type": "object",
+            "description": "M-ID to name, resolved locally from mitre_relationships.json. An id absent from the reference data is reported in mitigation_coverage.unresolved, never named.",
+            "additionalProperties": { "type": "string" }
+          },
+          "mitigation_coverage": {
+            "type": "object",
+            "description": "covered, total, unresolved, and tag_caveat: the control-tagging counts recomputed from the supplied flow map (decision 11), or null with tag_caveat_reason when no map was supplied. A null caveat never means every control is tagged.",
+            "properties": {
+              "covered": { "type": "integer" },
+              "total": { "type": "integer" },
+              "unresolved": { "type": "array", "items": { "type": "string" } },
+              "tag_caveat": { "type": ["object", "null"] },
+              "tag_caveat_reason": { "type": "string" }
+            }
+          },
+          "technique_status": {
+            "type": "string",
+            "enum": ["current", "retired_remapped", "unresolved"],
+            "description": "Stage N3d against v19.2. A remap adds technique_id_current and technique_remap_basis; the export's technique_id is never rewritten."
+          },
+          "technique_id_current": { "type": "string" },
+          "technique_remap_basis": { "type": "string", "enum": ["curated", "name"] },
+          "tactic_status": {
+            "type": "string",
+            "enum": ["as_supplied", "reconciled", "unresolved"],
+            "description": "Stage N3d. 'reconciled' carries tactic_as_supplied; 'unresolved' keeps the export value untouched."
+          },
+          "tactic_as_supplied": { "type": "string" },
           "monitoring_claim": {
             "type": "string",
             "enum": ["none", "partial", "claimed"],

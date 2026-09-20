@@ -53,10 +53,15 @@ def _load_sibling(module_file: str, alias: str):
 
 nz = _load_sibling("normalization.py", "attack_path_detection_designer_normalization")
 
-ACTIONS = ("validate_input",)
+ACTIONS = ("validate_input", "digest", "generate_detections")
 
 # Named so validate_inputs can say so rather than failing obscurely.
-PLANNED_ACTIONS = ("normalize_paths", "generate_detections")
+PLANNED_ACTIONS = ("normalize_paths",)
+
+gen = _load_sibling("generation.py", "attack_path_detection_designer_generation")
+
+# Sized against the provider's content budget, not a guaranteed node limit.
+GENERATION_MAX_TOKENS = 32000
 
 # Section 4.4 of the spec. Every failing result carries one of these.
 ERROR_CODES = (
@@ -68,6 +73,8 @@ ERROR_CODES = (
     "FLOW_MAP_UNREADABLE",
     "FLOW_MAP_NOT_OBJECT",
     "NORMALIZATION_FAILED",
+    "LLM_UNAVAILABLE",
+    "GENERATION_INCOMPLETE",
 )
 
 
@@ -156,6 +163,19 @@ def _resolve_artifact(artifact_id: Any, context: Any) -> tuple[Any, ToolResult |
             details={"artifact_id": artifact_id, "storage_uri": storage_uri},
         )
     return (Path(artifact.file_path).name, path), None
+
+
+def nz_hints():
+    """Heavy tier and structured output; the provider stays the operator's choice.
+
+    QueryHints carries no provider field by design - vendor selection belongs
+    to `use`, not to plugin code.
+    """
+    try:
+        from framework.plugins.protocol import QueryHints
+    except ImportError:  # pragma: no cover - framework always present at runtime
+        return None
+    return QueryHints(tier="heavy", needs_reasoning=True, needs_structured_output=True)
 
 
 def _read_json(path: Path) -> Any:
@@ -332,12 +352,134 @@ class AttackPathDetectionDesigner:
                 ok=False, error_code="NORMALIZATION_FAILED", message=str(exc)
             )
 
+        if payload.get("action") == "generate_detections":
+            return self._generate(normalized, context, payload)
+
+        if payload.get("action") == "digest":
+            # A reading of the same pack, three lines per node. The pack
+            # itself is machine-facing and is not repeated here.
+            return ToolResult(
+                ok=True,
+                result={
+                    "digest": nz.digest_lines(normalized),
+                    "node_count": len(normalized.nodes),
+                    "pair_status": normalized.pair["provenance_status"],
+                    "conflict_count": len(normalized.input_conflicts),
+                    "flow_map_lineage": normalized.flow_map.get("lineage"),
+                    "completeness": normalized.inventory["completeness"],
+                    "warnings": normalized.warnings,
+                },
+            )
+
         result = normalized.as_dict()
         result["node_count"] = len(normalized.nodes)
         result["pair_status"] = normalized.pair["provenance_status"]
         result["conflict_count"] = len(normalized.input_conflicts)
         result["flow_map_lineage"] = normalized.flow_map.get("lineage")
         result["completeness"] = normalized.inventory["completeness"]
+        result["mitigation_coverage"] = normalized.inventory["mitigation_coverage"]
+        result["taxonomy"] = normalized.inventory["taxonomy"]
+        return ToolResult(ok=True, result=result)
+
+    def _generate(
+        self, normalized: Any, context: Any, payload: dict[str, Any]
+    ) -> ToolResult:
+        """Stage G1b. One heavy-tier call per batch, then a coverage ledger.
+
+        A node is never dropped for weak evidence: `actor_evidence: false`
+        lowers confidence and is recorded, because an attacker can change
+        tactics and a path the projector produced is still a path.
+        """
+        if not getattr(context, "llm_query", None):
+            return ToolResult(
+                ok=False,
+                error_code="LLM_UNAVAILABLE",
+                message=(
+                    "generate_detections needs a connected provider. Run 'connect', "
+                    "and 'use threat_modeling <provider>' to choose one."
+                ),
+            )
+
+        nodes = [node.as_dict() for node in normalized.nodes]
+        engagement = normalized.engagement
+        drafts: list[dict[str, Any]] = []
+        problems: list[dict[str, Any]] = []
+        calls: list[dict[str, Any]] = []
+
+        for batch in gen.batches(nodes, int(payload.get("max_nodes_per_call", 6))):
+            outline = gen.path_outline(nodes, batch[0]["path_id"])
+            response = context.llm_query.query_text(
+                prompt=gen.build_prompt(batch, engagement, outline),
+                system_context=gen.SYSTEM_CONTEXT,
+                max_tokens=GENERATION_MAX_TOKENS,
+                hints=nz_hints(),
+            )
+            calls.append(
+                {
+                    "path_id": batch[0]["path_id"],
+                    "nodes": len(batch),
+                    "ok": bool(getattr(response, "ok", False)),
+                    "model_used": getattr(response, "model_used", None),
+                    "truncated": bool(getattr(response, "truncated", False)),
+                    "finish_reason": getattr(response, "finish_reason", None),
+                }
+            )
+            if not getattr(response, "ok", False):
+                problems.append(
+                    {
+                        "path_id": batch[0]["path_id"],
+                        "problem": getattr(response, "error", None) or "provider call failed",
+                    }
+                )
+                continue
+            if getattr(response, "truncated", False):
+                # A truncated reply is rejected even though transport says ok.
+                problems.append(
+                    {"path_id": batch[0]["path_id"], "problem": "reply hit the output cap"}
+                )
+                continue
+
+            batch_drafts, failure = gen.parse_response(getattr(response, "text", None))
+            if failure:
+                problems.append({"path_id": batch[0]["path_id"], "problem": failure})
+                continue
+            drafts.extend(batch_drafts)
+
+        by_id = {n["draft_id"]: n for n in nodes}
+        valid: list[dict[str, Any]] = []
+        for draft in drafts:
+            node = by_id.get((draft.get("x_eventmill") or {}).get("draft_id"))
+            if node is None:
+                problems.append({"problem": "draft does not match any node", "draft": draft.get("title")})
+                continue
+            findings = gen.validate_draft(draft, node) + gen.validate_logsource(draft, node)
+            if findings:
+                problems.append({"draft_id": node["draft_id"], "problems": findings})
+                continue
+            valid.append(draft)
+
+        ledger = gen.coverage(nodes, valid)
+        result = {
+            "drafts": valid,
+            "coverage": ledger,
+            "rejected": problems,
+            "calls": calls,
+            "engagement": engagement,
+            "prompt_version": gen.PROMPT_VERSION,
+            "telemetry_library_version": nodes[0].get("telemetry_library_version") if nodes else None,
+        }
+        if ledger["generation_status"] != "complete":
+            # Never report drafts that do not exist: a partial result is an
+            # error with its partial output attached, not a success.
+            return ToolResult(
+                ok=False,
+                error_code="GENERATION_INCOMPLETE",
+                message=(
+                    f"{ledger['generated_drafts']} of {ledger['expected_nodes']} nodes "
+                    f"produced a valid draft ({ledger['generation_status']})."
+                ),
+                result=result,
+            )
         return ToolResult(ok=True, result=result)
 
     def summarize_for_llm(self, result: ToolResult) -> str:
@@ -350,6 +492,11 @@ class AttackPathDetectionDesigner:
             return f"Normalization failed: {result.error_code} - {result.message}"
 
         data = result.result or {}
+        if "coverage" in data:
+            return _generation_summary(data, result)
+        if "digest" in data:
+            return _bounded_digest(data)
+
         pair = data.get("pair", {})
         engagement = data.get("engagement", {})
         inventory = data.get("inventory", {})
@@ -397,11 +544,79 @@ class AttackPathDetectionDesigner:
         if flagged:
             lines.append(f"{flagged} node(s) carry a review flag.")
 
+        coverage = data.get("mitigation_coverage") or {}
+        taxonomy = data.get("taxonomy") or {}
         lines.append(
-            "Mitigation focus and taxonomy reconciliation are not applied "
-            "(stages N3c, N3d)."
+            f"Mitigations: {coverage.get('covered', 0)} covered of "
+            f"{coverage.get('total', 0)}, focus on "
+            f"{coverage.get('nodes_with_focus', 0)} node(s)"
+            + (
+                f", {len(coverage.get('unresolved') or [])} id(s) unresolved."
+                if coverage.get("unresolved")
+                else "."
+            )
         )
+        if taxonomy:
+            counts = ", ".join(f"{name} {count}" for name, count in taxonomy.items())
+            lines.append(f"Taxonomy v19.2: {counts}.")
         return "\n".join(lines)
+
+
+def _generation_summary(data: dict[str, Any], result: ToolResult) -> str:
+    """Coverage first, then why anything is missing. Never the drafts."""
+    ledger = data.get("coverage") or {}
+    lines = [
+        f"Generation {ledger.get('generation_status')}: "
+        f"{ledger.get('generated_drafts', 0)} of {ledger.get('expected_nodes', 0)} "
+        "nodes have a valid draft.",
+        f"Validation status: {ledger.get('validation_status')} "
+        "(schema validity is not operational validation).",
+    ]
+    for name in ("missing_draft_ids", "unexpected_draft_ids", "duplicate_draft_ids"):
+        values = ledger.get(name) or []
+        if values:
+            lines.append(f"{name.replace('_', ' ')}: {len(values)} - {', '.join(values[:5])}")
+    rejected = data.get("rejected") or []
+    if rejected:
+        lines.append(f"Rejected: {len(rejected)}; first: {str(rejected[0])[:180]}")
+    calls = data.get("calls") or []
+    if calls:
+        models = {c.get("model_used") for c in calls if c.get("model_used")}
+        lines.append(
+            f"{len(calls)} call(s), model {', '.join(sorted(m for m in models if m)) or 'unknown'}."
+        )
+    lines.append(
+        "Drafts are unvalidated against telemetry; a person still judges detection quality."
+    )
+    return "\n".join(lines)
+
+
+def _bounded_digest(data: dict[str, Any], budget: int = 3600) -> str:
+    """The digest, cut at whole nodes and saying what it cut.
+
+    summarize_for_llm truncates from the end, so a long corpus must lose whole
+    nodes with a stated count rather than stop mid-line.
+    """
+    header = (
+        f"{data.get('node_count', 0)} nodes, pair {data.get('pair_status')}, "
+        f"{data.get('conflict_count', 0)} conflict(s), flow map "
+        f"{data.get('flow_map_lineage') or 'none'}. "
+        + ", ".join(f"{g} {n}" for g, n in (data.get("completeness") or {}).items())
+        + "."
+    )
+    lines = data.get("digest") or []
+    out = [header]
+    used = len(header)
+    for start in range(0, len(lines), 3):
+        node_lines = lines[start : start + 3]
+        cost = sum(len(line) + 1 for line in node_lines)
+        if used + cost > budget:
+            remaining = (len(lines) - start) // 3
+            out.append(f"... {remaining} more node(s); 'show <artifact_id>' for all.")
+            break
+        out.extend(node_lines)
+        used += cost
+    return "\n".join(out)
 
 
 def _flow_map_line(flow_map: dict[str, Any]) -> str:

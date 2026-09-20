@@ -21,10 +21,49 @@ under a flat module name and there is no package to import from.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import re
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+# The one framework import: reference data is cross-cutting infrastructure and
+# is how every plugin reaches ATT&CK. Nothing detection-specific lives there.
+from framework.reference_data.mitre_attack import (
+    canonical_tactic,
+    enrich_technique,
+    get_mitre_relationships,
+    is_legacy_tactic,
+    resolve_legacy_tactic,
+    resolve_retired_technique,
+)
+
+
+def _load_plugin_module(filename: str, alias: str):
+    """Load the sibling module by file location.
+
+    Same reason as `tool.py`'s `_load_sibling`: the loader gives a plugin a
+    flat module name and no package, so `import grounding` cannot find it.
+    """
+    if alias in sys.modules:
+        return sys.modules[alias]
+    spec = importlib.util.spec_from_file_location(
+        alias, Path(__file__).resolve().parent / filename
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[alias] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+grounding = _load_plugin_module(
+    "grounding.py", "attack_path_detection_designer_grounding"
+)
+telemetry = _load_plugin_module(
+    "telemetry.py", "attack_path_detection_designer_telemetry"
+)
 
 # U+2014 EM DASH with one space either side. The seed joins state_check and
 # state_note with exactly this; a hyphen or en dash is a different string and
@@ -41,6 +80,16 @@ ORIGIN_SEED = "seed"
 ORIGIN_PAIR_AGREED = "pair_agreed"
 ORIGIN_DERIVED = "derived"
 ORIGIN_FLOW_MAP = "flow_map"
+ORIGIN_REFERENCE = "reference_data"
+
+# Local ATT&CK files, named in provenance so a resolved name is never mistaken
+# for something a model supplied.
+RELATIONSHIPS_DOCUMENT = "mitre_relationships.json"
+TECHNIQUES_DOCUMENT = "mitre_techniques.json"
+TELEMETRY_DOCUMENT = "telemetry_library.json"
+
+# Section 1.4b: how many of the narrowest uncovered mitigations generation sees.
+MITIGATION_FOCUS_LIMIT = 2
 
 # Context completeness, section 5. The grade limits what a later draft may
 # claim, so it is a property of the inputs supplied and not of the export.
@@ -108,6 +157,10 @@ WARNING_CODES = {
     "FLOW_MAP_UNHASHED": SEVERITY_ADVISORY,
     "FLOW_MAP_APPLICATION_MISMATCH": SEVERITY_ADVISORY,
     "FLOW_MAP_COMPONENT_UNRESOLVED": SEVERITY_BLOCKING,
+    "MITIGATION_UNRESOLVED": SEVERITY_ADVISORY,
+    "TACTIC_UNRESOLVED": SEVERITY_ADVISORY,
+    "TECHNIQUE_RETIRED": SEVERITY_ADVISORY,
+    "TECHNIQUE_UNRESOLVED": SEVERITY_ADVISORY,
 }
 REVIEW_FLAG_CODES = ("UNDECLARED_TRANSITION", "TRANSITION_UNPARSED")
 
@@ -1130,6 +1183,12 @@ def normalize(
     components = _component_index(flow_map)
     catalogues = _catalogue_by_path(leader, follower)
     catalogue_source = _catalogue_source(leader, follower)
+    lineage = flow_map_record.get("lineage")
+    tag_caveat = flow_map_tag_caveat(flow_map, components, nodes, lineage)
+    caveat_reason = (
+        "no flow map supplied; control tagging cannot be counted, so this is "
+        "not evidence that controls are untagged"
+    )
     for node in nodes:
         component_id = node.fields.get("component_id")
         component, component_index = components.get(component_id, (None, None))
@@ -1139,15 +1198,21 @@ def normalize(
             component,
             component_index,
             flow_map,
-            flow_map_record.get("lineage"),
+            lineage,
             catalogues.get(node.path_id, []),
             catalogue_source,
         )
         # Appended after the pair statistics above: a map disagreeing with an
         # export is not the two documents disagreeing with each other.
         conflicts.extend(node.input_conflicts[before:])
+        warnings.extend(resolve_mitigations(node, tag_caveat, caveat_reason))
+        warnings.extend(reconcile_taxonomy(node))
+        ground_node(node, engagement.get("actor_attack_id") or "")
+        attach_telemetry(node, (component or {}).get("type"))
 
     inventory["completeness"] = _grade_distribution(nodes)
+    inventory["mitigation_coverage"] = _coverage_totals(nodes)
+    inventory["taxonomy"] = _taxonomy_distribution(nodes)
 
     return NormalizationResult(
         nodes=nodes,
@@ -1202,6 +1267,83 @@ def _grade_distribution(nodes: list[NormalizedNode]) -> dict[str, int]:
     for node in nodes:
         grade = node.fields.get("context_completeness")
         distribution[grade] = distribution.get(grade, 0) + 1
+    return dict(sorted(distribution.items()))
+
+
+def digest_lines(result: NormalizationResult) -> list[str]:
+    """A three-line-per-node reading of the pack, for a person.
+
+    A troubleshooting aid, not a deliverable: the pack is machine-facing and
+    58% of it is the per-field audit trail nobody reads in bulk. This says
+    what each node is, what may be claimed about it, and what is doubtful -
+    at a glance, and with no model involved.
+    """
+    lines: list[str] = []
+    for node in result.nodes:
+        fields = node.fields
+        technique = f"{fields.get('technique_id')} {fields.get('technique_name') or ''}"
+        lines.append(
+            f"{node.path_id}  {node.node_index}  {technique.strip()}  "
+            f"{fields.get('component_id') or fields.get('asset_name') or '(unbound)'}"
+        )
+
+        detail = [str(fields.get("context_completeness"))]
+        technologies = fields.get("technologies")
+        if technologies:
+            detail.append("/".join(technologies))
+        if fields.get("crown_jewel"):
+            detail.append("crown jewel")
+        detail.append(f"monitoring {fields.get('monitoring_claim')}")
+        if (fields.get("state_check") or "") == "gap":
+            detail.append("state gap")
+        assessment = (fields.get("assessment") or {}).get("tuple") or {}
+        for name in ("actor_evidence", "multistep_access"):
+            element = assessment.get(name) or {}
+            if element.get("warning"):
+                detail.append(f"{name}={str(element.get('value')).lower()} ?")
+        lines.append("  " + " | ".join(detail))
+
+        focus = fields.get("mitigation_focus") or []
+        lines.append(
+            "  focus: "
+            + (
+                ", ".join(
+                    f"{m['m_id']} {m['name']} ({m['technique_breadth']})" for m in focus
+                )
+                or "none narrow enough"
+            )
+        )
+    return lines
+
+
+def _coverage_totals(nodes: list[NormalizedNode]) -> dict[str, Any]:
+    """Estate-level mitigation counts, for the summary and the N4 pack."""
+    unresolved: list[str] = []
+    covered = total = with_focus = 0
+    for node in nodes:
+        coverage = node.fields.get("mitigation_coverage") or {}
+        covered += coverage.get("covered", 0)
+        total += coverage.get("total", 0)
+        with_focus += 1 if node.fields.get("mitigation_focus") else 0
+        for m_id in coverage.get("unresolved") or []:
+            if m_id not in unresolved:
+                unresolved.append(m_id)
+    return {
+        "covered": covered,
+        "total": total,
+        "nodes_with_focus": with_focus,
+        "unresolved": sorted(unresolved),
+    }
+
+
+def _taxonomy_distribution(nodes: list[NormalizedNode]) -> dict[str, int]:
+    distribution: dict[str, int] = {}
+    for node in nodes:
+        for name in ("technique_status", "tactic_status"):
+            value = node.fields.get(name)
+            if value:
+                key = f"{name.split('_')[0]}:{value}"
+                distribution[key] = distribution.get(key, 0) + 1
     return dict(sorted(distribution.items()))
 
 
@@ -1528,6 +1670,279 @@ def enrich_node(
     grade_basis = ["component_id", "technologies", "authentication"]
     record("context_completeness", grade, ORIGIN_DERIVED, "", basis=grade_basis)
     record("telemetry_requirements", requirements, ORIGIN_DERIVED, "", basis=grade_basis)
+
+
+def resolve_mitigations(
+    node: NormalizedNode, tag_caveat: dict[str, Any] | None, caveat_reason: str
+) -> list[dict[str, str]]:
+    """Stage N3c, section 1.4b. Names are looked up locally, never asserted.
+
+    The export's own ``mitigations`` and ``uncovered_mitigations`` are left
+    exactly as they arrived — they are the provenance. What is added is the
+    covered half, the narrow focus cut generation actually reads, and the
+    ratio with the tagging caveat that keeps "uncovered" from being read as
+    "no control exists".
+    """
+    warnings: list[dict[str, str]] = []
+    mitigations = list(node.fields.get("mitigations") or [])
+    uncovered = list(node.fields.get("uncovered_mitigations") or [])
+    uncovered_set = set(uncovered)
+
+    names: dict[str, str] = {}
+    unresolved: list[str] = []
+    for m_id in mitigations:
+        entry = _mitigation_entry(m_id)
+        if entry is None:
+            unresolved.append(m_id)
+            continue
+        names[m_id] = entry.get("name", "")
+
+    for m_id in unresolved:
+        warnings.append(
+            _warning(
+                "MITIGATION_UNRESOLVED",
+                m_id,
+                "mitigation id is not in the local ATT&CK reference data; "
+                "it is reported rather than named or ranked",
+            )
+        )
+
+    def record(name: str, value: Any, pointer: str) -> None:
+        node.fields[name] = value
+        node.provenance_by_field[name] = {
+            "origin": ORIGIN_REFERENCE,
+            "document": RELATIONSHIPS_DOCUMENT,
+            "role": ORIGIN_REFERENCE,
+            "pointer": pointer,
+        }
+
+    record("mitigation_names", names, "/mitigations")
+    record(
+        "mitigations_covered",
+        [_mitigation_view(m, names) for m in mitigations if m not in uncovered_set],
+        "/mitigations",
+    )
+    record(
+        "mitigation_focus",
+        _focus_cut([m for m in uncovered if m in names], names),
+        "/mitigations",
+    )
+    coverage = {
+        "covered": len([m for m in mitigations if m not in uncovered_set]),
+        "total": len(mitigations),
+        "unresolved": unresolved,
+        "tag_caveat": dict(tag_caveat) if tag_caveat else None,
+    }
+    if tag_caveat is None:
+        # Never silently null: an absent caveat must not read as "every
+        # control is tagged".
+        coverage["tag_caveat_reason"] = caveat_reason
+    record("mitigation_coverage", coverage, "/mitigations")
+    return warnings
+
+
+def _mitigation_entry(m_id: str) -> dict[str, Any] | None:
+    entry = get_mitre_relationships().get("mitigations", {}).get(m_id)
+    return entry if isinstance(entry, dict) else None
+
+
+def _technique_breadth(m_id: str) -> int:
+    entry = _mitigation_entry(m_id)
+    return len(entry.get("techniques") or []) if entry else 0
+
+
+def _mitigation_view(m_id: str, names: dict[str, str]) -> dict[str, Any]:
+    return {
+        "m_id": m_id,
+        "name": names.get(m_id),
+        "technique_breadth": _technique_breadth(m_id),
+    }
+
+
+def _focus_cut(candidates: list[str], names: dict[str, str]) -> list[dict[str, Any]]:
+    """The one or two narrowest uncovered mitigations, ties broken by M-ID.
+
+    Breadth is a proxy for specificity, not for detectability: this narrows
+    what generation is asked to reason about and never argues that a
+    detection should exist. An empty cut is an ordinary outcome.
+    """
+    ranked = sorted(set(candidates), key=lambda m: (_technique_breadth(m), m))
+    return [_mitigation_view(m, names) for m in ranked[:MITIGATION_FOCUS_LIMIT]]
+
+
+def flow_map_tag_caveat(
+    flow_map: FlowMapSource | None,
+    components: dict[Any, tuple[dict[str, Any], int]],
+    nodes: list[NormalizedNode],
+    lineage: str | None,
+) -> dict[str, Any] | None:
+    """Decision 11: the projector's control_tagging, recomputed from the map.
+
+    Neither export carries those counts — they live in the tool result and the
+    run record, and not every run has a record — so they are derived from the
+    map the operator supplied, and carry its lineage.
+    """
+    if flow_map is None:
+        return None
+    targeted = sorted(
+        {
+            node.fields.get("component_id")
+            for node in nodes
+            if node.fields.get("component_id") in components
+        }
+    )
+    controls = [
+        control
+        for component_id in targeted
+        for control in components[component_id][0].get("controls") or []
+        if isinstance(control, dict)
+    ]
+    return {
+        "targeted_components": targeted,
+        "control_count": len(controls),
+        "tagged_control_count": sum(
+            1 for control in controls if control.get("mitre_mitigation_id")
+        ),
+        "components_without_controls": [
+            component_id
+            for component_id in targeted
+            if not (components[component_id][0].get("controls") or [])
+        ],
+        "flow_map_lineage": lineage,
+    }
+
+
+def reconcile_taxonomy(node: NormalizedNode) -> list[dict[str, str]]:
+    """Stage N3d, section 1.6. Record the outcome; never re-decide the export.
+
+    The projector already reconciled these against v19.2, so agreement is the
+    expected result. Nothing here rewrites an export value: a retired id gains
+    ``technique_id_current`` beside it, the way the seed's raw forms are kept
+    beside the graph's, so a remap can always be audited or reversed.
+    """
+    warnings: list[dict[str, str]] = []
+    technique_id = node.fields.get("technique_id") or ""
+    technique_name = node.fields.get("technique_name") or ""
+
+    def record(name: str, value: Any, pointer: str) -> None:
+        node.fields[name] = value
+        node.provenance_by_field[name] = {
+            "origin": ORIGIN_REFERENCE,
+            "document": TECHNIQUES_DOCUMENT,
+            "role": ORIGIN_REFERENCE,
+            "pointer": pointer,
+        }
+
+    entry = enrich_technique(technique_id)
+    if entry:
+        record("technique_status", "current", f"/{technique_id}")
+    else:
+        remap = resolve_retired_technique(technique_id, technique_name)
+        if remap is None:
+            record("technique_status", "unresolved", f"/{technique_id}")
+            warnings.append(
+                _warning(
+                    "TECHNIQUE_UNRESOLVED",
+                    technique_id,
+                    "technique id is not in the v19.2 lookup and no unambiguous "
+                    "successor exists; it is flagged, never guessed",
+                )
+            )
+        else:
+            current_id, basis = remap
+            record("technique_status", "retired_remapped", f"/{current_id}")
+            record("technique_id_current", current_id, f"/{current_id}")
+            record("technique_remap_basis", basis, f"/{current_id}")
+            entry = enrich_technique(current_id)
+            warnings.append(
+                _warning(
+                    "TECHNIQUE_RETIRED",
+                    technique_id,
+                    f"retired id maps to {current_id} by {basis} match; both are "
+                    "kept and the export value is not rewritten",
+                )
+            )
+
+    warnings.extend(_reconcile_tactic(node, entry, record))
+    return warnings
+
+
+def _reconcile_tactic(node: NormalizedNode, entry: dict[str, Any], record) -> list:
+    """Canonical spelling, then a retired tactic's successor, then give up."""
+    supplied = node.fields.get("tactic") or ""
+    allowed = (entry or {}).get("tactics") or []
+    canonical = canonical_tactic(supplied)
+
+    if canonical is not None:
+        if canonical == supplied:
+            record("tactic_status", "as_supplied", "/tactics")
+            return []
+        # Same tactic, different spelling: reconciled, not a correction.
+        record("tactic_status", "reconciled", "/tactics")
+        record("tactic_as_supplied", supplied, "/tactics")
+        node.fields["tactic"] = canonical
+        return []
+
+    successor = resolve_legacy_tactic(supplied, allowed) if supplied else None
+    if successor is not None:
+        record("tactic_status", "reconciled", "/tactics")
+        record("tactic_as_supplied", supplied, "/tactics")
+        node.fields["tactic"] = successor
+        return []
+
+    record("tactic_status", "unresolved", "/tactics")
+    return [
+        _warning(
+            "TACTIC_UNRESOLVED",
+            supplied or "(empty)",
+            "tactic is not current in v19.2"
+            + (
+                " and its retired form has no single successor this technique uses"
+                if is_legacy_tactic(supplied)
+                else ""
+            )
+            + "; the export value is kept",
+        )
+    ]
+
+
+def attach_telemetry(node: NormalizedNode, component_type: str | None) -> None:
+    """Stage G1a. What could observe this node, and how ready that evidence is.
+
+    A separate axis from `context_completeness`: this says what exists to look
+    at, not how well the node is bound to the estate.
+    """
+    for name, value in telemetry.attach(node.fields, component_type).items():
+        node.fields[name] = value
+        node.provenance_by_field[name] = {
+            "origin": ORIGIN_REFERENCE,
+            "document": TELEMETRY_DOCUMENT,
+            "role": ORIGIN_REFERENCE,
+            "pointer": "/sources",
+            "basis": ["technologies", "component_id", "transition"],
+        }
+
+
+def ground_node(node: NormalizedNode, actor_attack_id: str) -> None:
+    """Stage G1: the assessment tuple and the actor's procedure evidence.
+
+    Derived from the local ATT&CK release and this node's own access fields.
+    The export's `actor_support` is left alone - it answers a different
+    question from `actor_evidence` and the two may legitimately disagree.
+    """
+    assessment = grounding.assess_node(node.fields, actor_attack_id)
+    for name, value, basis in (
+        ("assessment", assessment, ["technique_id", "state_check", "transition"]),
+        ("procedure_evidence", assessment.pop("procedure_evidence"), ["technique_id"]),
+    ):
+        node.fields[name] = value
+        node.provenance_by_field[name] = {
+            "origin": ORIGIN_REFERENCE,
+            "document": RELATIONSHIPS_DOCUMENT,
+            "role": ORIGIN_REFERENCE,
+            "pointer": "/procedures",
+            "basis": basis,
+        }
 
 
 def _flow_port(flow_map: FlowMapSource | None, node: NormalizedNode) -> Any:

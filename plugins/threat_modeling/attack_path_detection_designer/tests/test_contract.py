@@ -107,8 +107,8 @@ def test_entry_point_and_class_name_resolve():
 def test_metadata_names_the_implemented_and_planned_actions(tool):
     metadata = tool.metadata()
     assert metadata["tool_name"] == "attack_path_detection_designer"
-    assert metadata["actions"] == ["validate_input"]
-    assert "normalize_paths" in metadata["planned_actions"]
+    assert metadata["actions"] == ["validate_input", "digest", "generate_detections"]
+    assert metadata["planned_actions"] == ["normalize_paths"]
 
 
 def test_a_planned_action_says_so(tool):
@@ -281,7 +281,8 @@ def test_summary_leads_with_status_and_stays_within_budget(tool, graph_path, see
     assert len(summary) < budget
     assert "gcp_gemini" in summary
     assert "Context grades: asset_named 11." in summary
-    assert "stages N3c, N3d" in summary
+    assert "Mitigations: " in summary
+    assert "Taxonomy v19.2: " in summary
 
 
 def test_summary_does_not_paste_node_bodies(tool, graph_path, seed_path):
@@ -324,6 +325,41 @@ FLOW_MAPS = FIXTURES / "flow_maps"
 @pytest.fixture
 def map_path() -> str:
     return str(FLOW_MAPS / "telemetry_saas_flow_map.json")
+
+
+def test_the_digest_is_short_enough_to_read(tool, graph_path, seed_path, map_path):
+    """The pack is machine-facing; this is the troubleshooting view of it."""
+    payload = {
+        "action": "digest",
+        "sources": [graph_path, seed_path],
+        "flow_map_path": map_path,
+    }
+    assert tool.validate_inputs(payload).ok is True
+    result = tool.execute(payload, context=None)
+    assert result.ok is True
+    assert "nodes" not in result.result  # never the pack itself
+    assert len(result.result["digest"]) == 11 * 3
+
+    summary = tool.summarize_for_llm(result)
+    assert len(summary) < 4000
+    assert "component_bound" in summary
+    assert "focus:" in summary
+
+
+def test_a_long_digest_loses_whole_nodes_and_says_how_many(tool):
+    data = {
+        "node_count": 60,
+        "pair_status": "verified",
+        "conflict_count": 0,
+        "completeness": {"asset_named": 60},
+        "digest": [f"line {n} " + "x" * 100 for n in range(180)],
+    }
+    summary = _tool_mod._bounded_digest(data)
+    assert len(summary) < 4000
+    assert "more node(s)" in summary
+    # Cut on a node boundary: never a half-rendered node.
+    body = [line for line in summary.split("\n")[1:] if line.startswith("line ")]
+    assert len(body) % 3 == 0
 
 
 def test_a_flow_map_by_path_reports_its_lineage(tool, graph_path, seed_path, map_path):

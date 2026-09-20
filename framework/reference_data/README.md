@@ -25,6 +25,24 @@ Data is loaded once per process and made available via the `ReferenceDataView` i
   procedure examples attached to `uses` relationships. Built by the same
   script. ~4 MB with procedures; pass `--skip-procedures` for a much smaller
   file. See [Relationships](#relationships) below.
+- **`telemetry_library.json`** — Telemetry reference library: one entry per
+  observation source, describing what it emits, which fields it carries, what
+  collecting it requires, how often the evidence arrives and who owns it.
+  Specified by `docs/specs/telemetry_reference_library.md`. It is an
+  **inventory of what can be observed, not a detection catalogue**, and holds
+  no rule content. The seed covers the five estates in
+  `plugins/threat_modeling/adversary_path_projector/examples/`; every
+  `collection.status` reads `unknown`, because no real estate has been
+  surveyed against it.
+- **`telemetry_library.py`** — Loader and validator: `sources_for_component()`
+  (component first, behaviour second, technique last), `get_source()`,
+  `supporting_sources()`, `unmapped_behaviours()`, `library_version()` and
+  `validate_library()`. Three rules it enforces — an ATT&CK id is never
+  invented (`exact` and `adjacent` mappings are checked against the local
+  release, `unmapped` requires a local `EM-` id); necessity and collection
+  status are independent; and a `decision_support` entry makes another control
+  work rather than detecting anything, so `supports` edges stay distinct from
+  `observes`.
 - `vetted_sources.json` — Curated URLs for threat intel, research, regulatory bodies
 
 ## Usage

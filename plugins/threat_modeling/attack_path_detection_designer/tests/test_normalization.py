@@ -487,6 +487,7 @@ def test_every_field_carries_an_origin_and_a_pointer(with_map):
         for name, entry in node.provenance_by_field.items():
             assert entry["origin"] in {
                 "graph", "seed", "pair_agreed", "derived", "flow_map",
+                "reference_data",
             }
             if entry["origin"] == "derived":
                 assert entry["basis"]
@@ -1005,6 +1006,355 @@ def test_enrichment_is_deterministic():
     first = _joined("20260917_022646").as_dict()
     second = _joined("20260917_022646").as_dict()
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+
+# ---------------------------------------------------------------------------
+# Mitigations, stage N3c (section 1.4b, decision 11)
+# ---------------------------------------------------------------------------
+
+def _mutate_graph(stamp: str, mutate):
+    document = copy.deepcopy(_read(stamp, "graph"))
+    mutate(document)
+    return nz.normalize(_doc(stamp, "graph", document))
+
+
+def test_the_focus_cut_matches_the_spec_worked_example():
+    """022646 / web-exploit-to-db step 1 (T1190): M1016 (5), M1048 (14)."""
+    node = next(
+        n
+        for n in _joined("20260917_022646").nodes
+        if n.path_id == "web-exploit-to-db" and n.node_index == 0
+    )
+    assert node.fields["technique_id"] == "T1190"
+    assert [m["m_id"] for m in node.fields["mitigation_focus"]] == ["M1016", "M1048"]
+    assert [m["technique_breadth"] for m in node.fields["mitigation_focus"]] == [5, 14]
+    assert node.fields["mitigation_focus"][0]["name"] == "Vulnerability Scanning"
+    # The broadest uncovered mitigation is exactly what the cut excludes.
+    assert "M1026" in node.fields["uncovered_mitigations"]
+    assert "M1026" not in [m["m_id"] for m in node.fields["mitigation_focus"]]
+
+
+def test_the_corpus_covers_six_of_one_hundred_and_sixty_nine():
+    covered = total = 0
+    for stamp in CORPUS:
+        coverage = nz.normalize(*_pair(stamp)).inventory["mitigation_coverage"]
+        covered += coverage["covered"]
+        total += coverage["total"]
+    assert (covered, total) == (6, 169)
+
+
+def test_the_export_lists_are_never_rewritten():
+    """They are the provenance; the derived views sit beside them."""
+    stamp = "20260917_124121"
+    raw = _read(stamp, "graph")["attack_graph"]["paths"][0]["steps"][0]
+    node = _joined(stamp).nodes[0]
+    assert node.fields["mitigations"] == raw["mitigations"]
+    assert node.fields["uncovered_mitigations"] == raw["uncovered_mitigations"]
+    covered = {m["m_id"] for m in node.fields["mitigations_covered"]}
+    assert covered == set(raw["mitigations"]) - set(raw["uncovered_mitigations"])
+
+
+def test_a_focus_entry_is_never_a_coverage_claim():
+    """An all-broad node yields an empty cut, and that is not a defect."""
+    result = _mutate_graph(
+        "20260917_122549",
+        lambda d: d["attack_graph"]["paths"][0]["steps"][0].update(
+            mitigations=[], uncovered_mitigations=[]
+        ),
+    )
+    node = result.nodes[0]
+    assert node.fields["mitigation_focus"] == []
+    assert node.fields["mitigation_coverage"]["total"] == 0
+    assert not [w for w in result.warnings if w["code"] == "MITIGATION_UNRESOLVED"]
+
+
+def test_an_unknown_mitigation_id_is_reported_not_ranked():
+    def mutate(document):
+        step = document["attack_graph"]["paths"][0]["steps"][0]
+        step["mitigations"] = ["M9999", "M1016"]
+        step["uncovered_mitigations"] = ["M9999", "M1016"]
+
+    result = _mutate_graph("20260917_122549", mutate)
+    node = result.nodes[0]
+    assert [m["m_id"] for m in node.fields["mitigation_focus"]] == ["M1016"]
+    assert node.fields["mitigation_coverage"]["unresolved"] == ["M9999"]
+    assert "M9999" not in node.fields["mitigation_names"]
+    warning = next(w for w in result.warnings if w["code"] == "MITIGATION_UNRESOLVED")
+    assert warning["location"] == "M9999"
+    assert warning["severity"] == nz.SEVERITY_ADVISORY
+
+
+def test_the_tag_caveat_is_computed_from_the_map():
+    """Decision 11: the counts are in no export, so they come from the map."""
+    node = _joined("20260917_022646").nodes[0]
+    caveat = node.fields["mitigation_coverage"]["tag_caveat"]
+    assert caveat["control_count"] == 8
+    assert caveat["tagged_control_count"] == 7
+    assert caveat["components_without_controls"] == ["ci_runner"]
+    assert caveat["flow_map_lineage"] == "same_map"
+    assert "tag_caveat_reason" not in node.fields["mitigation_coverage"]
+
+
+def test_without_a_map_the_caveat_is_null_and_says_why():
+    coverage = nz.normalize(*_pair("20260917_022646")).nodes[0].fields[
+        "mitigation_coverage"
+    ]
+    assert coverage["tag_caveat"] is None
+    assert "not evidence that controls are untagged" in coverage["tag_caveat_reason"]
+
+
+def test_mitigation_names_are_looked_up_not_asserted():
+    node = _joined("20260917_124121").nodes[0]
+    entry = node.provenance_by_field["mitigation_names"]
+    assert entry["origin"] == "reference_data"
+    assert entry["document"] == "mitre_relationships.json"
+
+
+# ---------------------------------------------------------------------------
+# Taxonomy, stage N3d (section 1.6)
+# ---------------------------------------------------------------------------
+
+def test_the_corpus_needs_no_reconciliation():
+    """The projector already answered to v19.2; agreement is the expectation."""
+    for stamp in CORPUS:
+        taxonomy = nz.normalize(*_pair(stamp)).inventory["taxonomy"]
+        assert set(taxonomy) == {"technique:current", "tactic:as_supplied"}
+
+
+def test_stealth_survives_and_defense_evasion_is_not_restored():
+    stealth = [
+        n
+        for stamp in CORPUS
+        for n in nz.normalize(*_pair(stamp)).nodes
+        if n.fields["tactic"] == "Stealth"
+    ]
+    assert stealth  # the corpus really does carry the v19 name
+    for node in stealth:
+        assert node.fields["tactic_status"] == "as_supplied"
+    assert not [
+        n
+        for stamp in CORPUS
+        for n in nz.normalize(*_pair(stamp)).nodes
+        if n.fields["tactic"] == "Defense Evasion"
+    ]
+
+
+def test_a_retired_tactic_resolves_to_the_successor_the_technique_uses():
+    """Synthetic: no current export carries a retired tactic."""
+
+    def mutate(document):
+        step = document["attack_graph"]["paths"][0]["steps"][0]
+        step["technique_id"] = "T1078"
+        step["tactic"] = "Defense Evasion"
+
+    result = _mutate_graph("20260917_122549", mutate)
+    node = result.nodes[0]
+    assert node.fields["tactic"] == "Stealth"
+    assert node.fields["tactic_status"] == "reconciled"
+    assert node.fields["tactic_as_supplied"] == "Defense Evasion"
+
+
+def test_an_unresolvable_tactic_keeps_the_export_value():
+    result = _mutate_graph(
+        "20260917_122549",
+        lambda d: d["attack_graph"]["paths"][0]["steps"][0].update(
+            tactic="Lateral Thinking"
+        ),
+    )
+    node = result.nodes[0]
+    assert node.fields["tactic"] == "Lateral Thinking"
+    assert node.fields["tactic_status"] == "unresolved"
+    assert any(w["code"] == "TACTIC_UNRESOLVED" for w in result.warnings)
+
+
+def test_a_retired_technique_is_remapped_beside_the_export_value():
+    result = _mutate_graph(
+        "20260917_122549",
+        lambda d: d["attack_graph"]["paths"][0]["steps"][0].update(
+            technique_id="T1562.001",
+            technique_name="Impair Defenses: Disable or Modify Tools",
+        ),
+    )
+    node = result.nodes[0]
+    assert node.fields["technique_id"] == "T1562.001"  # never rewritten
+    assert node.fields["technique_id_current"] == "T1685"
+    assert node.fields["technique_status"] == "retired_remapped"
+    assert node.fields["technique_remap_basis"] == "curated"
+    assert any(w["code"] == "TECHNIQUE_RETIRED" for w in result.warnings)
+
+
+def test_an_unknown_technique_is_flagged_never_guessed():
+    result = _mutate_graph(
+        "20260917_122549",
+        lambda d: d["attack_graph"]["paths"][0]["steps"][0].update(
+            technique_id="T9999", technique_name="Entirely invented"
+        ),
+    )
+    node = result.nodes[0]
+    assert node.fields["technique_status"] == "unresolved"
+    assert "technique_id_current" not in node.fields
+    assert any(w["code"] == "TECHNIQUE_UNRESOLVED" for w in result.warnings)
+
+
+def test_a_case_difference_is_reconciled_not_corrected():
+    result = _mutate_graph(
+        "20260917_122549",
+        lambda d: d["attack_graph"]["paths"][0]["steps"][0].update(
+            tactic="initial access"
+        ),
+    )
+    node = result.nodes[0]
+    assert node.fields["tactic"] == "Initial Access"
+    assert node.fields["tactic_status"] == "reconciled"
+    assert node.fields["tactic_as_supplied"] == "initial access"
+
+
+def test_n3c_and_n3d_do_not_move_node_identity():
+    stamp = "20260917_123525"
+    enriched = _joined(stamp)
+    plain = nz.normalize(*_pair(stamp))
+    assert [n.draft_id for n in plain.nodes] == [n.draft_id for n in enriched.nodes]
+
+
+# ---------------------------------------------------------------------------
+# Grounding and the assessment tuple, stage G1 (designer plan sections 4 and 5)
+# ---------------------------------------------------------------------------
+
+def test_every_node_carries_both_tuple_elements_with_a_basis():
+    for stamp in CORPUS:
+        for node in nz.normalize(*_pair(stamp)).nodes:
+            assessment = node.fields["assessment"]
+            assert assessment["version"]
+            assert assessment["attack_version"] == "19.2"
+            for name in ("actor_evidence", "multistep_access"):
+                element = assessment["tuple"][name]
+                assert isinstance(element["value"], bool)
+                assert element["reason_codes"]
+
+
+def test_actor_evidence_is_the_association_not_the_export_field():
+    """`actor_support: procedure_documented` may coexist with a false tuple."""
+    nodes = [n for stamp in CORPUS for n in nz.normalize(*_pair(stamp)).nodes]
+    documented = [n for n in nodes if n.fields["actor_support"] == "procedure_documented"]
+    assert documented
+    for node in documented:
+        # The export value is never rewritten by the assessment.
+        assert node.fields["actor_support"] == "procedure_documented"
+
+
+def test_an_unmapped_technique_is_not_established_rather_than_denied():
+    result = _mutate_graph(
+        "20260917_122549",
+        lambda d: d["attack_graph"]["paths"][0]["steps"][0].update(
+            technique_id="T1200", technique_name="Hardware Additions"
+        ),
+    )
+    element = result.nodes[0].fields["assessment"]["tuple"]["actor_evidence"]
+    assert element["value"] is False
+    assert element["reason_codes"] == ["not_established_in_local_sources"]
+    assert "does not establish that the actor never uses it" in element["basis"]
+    assert element["warning"] is True
+
+
+def test_a_documented_technique_records_direct_support():
+    node = nz.normalize(*_pair("20260917_122549")).nodes[0]
+    element = node.fields["assessment"]["tuple"]["actor_evidence"]
+    assert element["value"] is True
+    assert element["support"] == "direct"
+
+
+def test_multistep_access_discriminates_across_the_corpus():
+    """A constant is not an assessment.
+
+    `access_source: model` is on every node of every fixture, so triggering on
+    it made this element true 43 of 43. It is a qualifier now, and the value
+    comes from the state gaps and the one undeclared transition.
+    """
+    values = [
+        n.fields["assessment"]["tuple"]["multistep_access"]["value"]
+        for stamp in CORPUS
+        for n in nz.normalize(*_pair(stamp)).nodes
+    ]
+    assert (values.count(True), values.count(False)) == (10, 33)
+
+    node = nz.normalize(*_pair("20260917_122549")).nodes[0]
+    element = node.fields["assessment"]["tuple"]["multistep_access"]
+    assert element["qualifiers"] == ["access_state_modelled_not_declared"]
+    assert "access_state_modelled_not_declared" not in element["reason_codes"]
+
+
+def test_actor_evidence_is_true_by_construction_on_a_projector_pack():
+    """Recorded, not asserted as a virtue: the actor filter is upstream.
+
+    If this ever reads false on an unmutated projector pack, the projector
+    built a path from a technique it had not mapped to the actor.
+    """
+    values = [
+        n.fields["assessment"]["tuple"]["actor_evidence"]["value"]
+        for stamp in CORPUS
+        for n in nz.normalize(*_pair(stamp)).nodes
+    ]
+    assert values == [True] * TOTAL_NODES
+
+
+def test_a_state_gap_always_forces_multistep_access_true():
+    gaps = [
+        n
+        for stamp in CORPUS
+        for n in nz.normalize(*_pair(stamp)).nodes
+        if n.fields["state_check"] == "gap"
+    ]
+    assert len(gaps) == 9  # the corpus's nine gap nodes
+    for node in gaps:
+        element = node.fields["assessment"]["tuple"]["multistep_access"]
+        assert element["value"] is True
+        assert "inherited_state_gap" in element["reason_codes"]
+        assert element["warning"] is True
+
+
+def test_procedure_evidence_carries_its_source_and_a_hash():
+    node = nz.normalize(*_pair("20260917_122549")).nodes[0]
+    evidence = node.fields["procedure_evidence"]
+    assert evidence
+    for entry in evidence:
+        assert entry["source_id"]
+        assert entry["relation"] in {"actor", "software"}
+        assert len(entry["content_sha256"]) == 16
+        assert "index reference" in entry["provenance_limitation"]
+    assert len(evidence) <= 3
+
+
+def test_grounding_does_not_rewrite_the_export_or_move_identity():
+    stamp = "20260917_124121"
+    plain = [n.draft_id for n in nz.normalize(*_pair(stamp)).nodes]
+    assert plain == [n.draft_id for n in _joined(stamp).nodes]
+
+
+# ---------------------------------------------------------------------------
+# The digest, a troubleshooting view of the pack
+# ---------------------------------------------------------------------------
+
+def test_the_digest_is_three_lines_a_node_and_names_what_is_doubtful():
+    result = _joined("20260917_022646")
+    lines = nz.digest_lines(result)
+    assert len(lines) == len(result.nodes) * 3
+
+    gap_node = next(i for i, n in enumerate(result.nodes) if n.fields["state_check"] == "gap")
+    detail = lines[gap_node * 3 + 1]
+    assert "state gap" in detail
+    assert "multistep_access=true ?" in detail
+    assert "component_bound" in detail
+    assert lines[gap_node * 3 + 2].startswith("  focus:")
+
+
+def test_the_digest_says_when_a_focus_cut_is_empty():
+    result = _mutate_graph(
+        "20260917_122549",
+        lambda d: d["attack_graph"]["paths"][0]["steps"][0].update(
+            mitigations=[], uncovered_mitigations=[]
+        ),
+    )
+    assert "none narrow enough" in nz.digest_lines(result)[2]
 
 
 def test_the_spec_catalogue_lists_every_code():

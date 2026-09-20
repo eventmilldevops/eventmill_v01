@@ -8,20 +8,22 @@ of anything the source documents disagree about.
 Plan: `docs/specs/attack_path_detection_normalization.md`.
 Producer shape it reads: `docs/specs/projector_export_shapes.md`.
 
-**Stages N1, N2, N3a and N3b are implemented.** Adapters, the three
-identities, the node occurrence key, a deterministic `draft_id`, the union
-merge and `provenance_by_field` (N1); flow-map lineage and fit, and a closed
-code catalogue (N2); the flow-map join and the five completeness grades (N3a);
-controls per node and `monitoring_claim` (N3b). Mitigation focus (N3c) and
-taxonomy reconciliation (N3d) are outstanding. No LLM, no network.
+**Stages N1, N2 and N3 are implemented.** Adapters, the three identities, the
+node occurrence key, a deterministic `draft_id`, the union merge and
+`provenance_by_field` (N1); flow-map lineage and fit, and a closed code
+catalogue (N2); the flow-map join and the five completeness grades (N3a);
+controls per node and `monitoring_claim` (N3b); mitigation names, the focus
+cut and the coverage ratio (N3c); taxonomy status against ATT&CK v19.2 (N3d).
+The context pack's own schema is N4. No LLM, no network.
 
 ## Actions
 
 | Action | Status | What it does |
 |---|---|---|
 | `validate_input` | implemented | Normalizes the supplied sources and returns the node inventory, identities, pair decision and every field conflict. Writes nothing. |
+| `digest` | implemented | The same run, three readable lines per node. A troubleshooting aid for a person; the pack itself is machine-facing. |
 | `normalize_paths` | planned, stage N4 | The same normalization, persisted as a `detection_context_pack` artifact. |
-| `generate_detections` | planned | Reasons over a pack to draft detection guidance. Heavy tier. |
+| `generate_detections` | implemented, **costs a heavy-tier call per batch** | Drafts one detection per node, batched by path. Returns `ok: false` with `GENERATION_INCOMPLETE` and the partial output whenever fewer valid drafts exist than nodes. |
 
 ## Inputs: artifacts first
 
@@ -129,6 +131,109 @@ still used.
 `monitoring_claim` is a claim about what is watched, never coverage. Every
 draft still starts at `catalogue_status: new_unchecked`.
 
+## Mitigations, and what generation will be allowed to read
+
+The export's `mitigations[]` and `uncovered_mitigations[]` are kept exactly as
+they arrived — they are the provenance. Four derived fields sit beside them:
+
+- `mitigation_names` — M-ID to name, looked up locally. An id the reference
+  data lacks is reported, never named or ranked.
+- `mitigations_covered[]` — the covered half. A tagged control exists on that
+  component, so a draft there is a **tuning** case, not a gap case.
+- `mitigation_focus[]` — the 1–2 **narrowest** uncovered mitigations by
+  technique breadth, ties by M-ID. Breadth is a proxy for specificity, not for
+  detectability: the cut narrows what a model is asked to reason about and
+  never argues that a detection should exist. An empty cut is ordinary.
+- `mitigation_coverage` — `{covered, total, unresolved, tag_caveat}`. Across
+  the fixture corpus that is 6 covered of 169.
+
+`tag_caveat` is the control-tagging count recomputed from the supplied map
+(decision 11), because no export carries the projector's own counts. **With no
+map it is null and carries `tag_caveat_reason`** — a bare null would read as
+"every control is tagged", which is the misreading the caveat exists to stop.
+
+## Taxonomy
+
+`technique_status` and `tactic_status` per node, against ATT&CK v19.2 through
+`framework/reference_data/mitre_attack.py`. Every node of the current corpus
+reads `current` / `as_supplied`: the projector already reconciled, and this
+stage records that rather than re-deciding it. `Stealth` must survive;
+`Defense Evasion` must never come back.
+
+A retired **technique** id is never rewritten — `technique_id_current` and
+`technique_remap_basis` sit beside it, so a remap stays auditable. A **tactic**
+is reconciled in place when the case differs or a retired name has exactly one
+successor the technique uses, with `tactic_as_supplied` retained; anything
+ambiguous keeps the export value and warns.
+
+## Reading a run: `digest`
+
+```bash
+run attack_path_detection_designer --action digest \
+    --artifact_ids art_e2697614,art_2df55952 --flow_map_artifact_id art_5c01ffee
+```
+
+```text
+9 nodes, pair verified, 0 conflict(s), flow map same_map. component_bound 9.
+scm-to-vault  1  T1059 Command and Scripting Interpreter  ci_runner
+  component_bound | ubuntu/docker/github-actions-runner | monitoring none | state gap | multistep_access=true ?
+  focus: M1033 Limit Software Installation (17), M1045 Code Signing (22)
+```
+
+The pack is ~187k characters on a 13-node pair and **58% of it is
+`provenance_by_field`** — the audit trail that makes a draft defensible and
+that nobody reads in bulk. The digest is how a person checks a run; the pack is
+what the next stage consumes. A long corpus is cut on a node boundary with the
+remainder stated, never mid-node.
+
+## Grounding: the assessment tuple
+
+Every node carries `assessment` — a **named** mapping, so adding an element
+later cannot shift the meaning of the existing ones — and up to three
+`procedure_evidence[]` entries with source ids, content hashes, and an explicit
+note that the ATT&CK link is an index reference, not a recovered report
+citation.
+
+| Element | true means | Today's distribution |
+|---|---|---|
+| `actor_evidence` | the local release documents this actor using this technique, directly or via associated software | 43 of 43 — **true by construction**, since the projector only builds paths from techniques already mapped to the actor |
+| `multistep_access` | access depends on something no earlier step establishes | 10 of 43, from nine inherited state gaps and one undeclared transition |
+
+`access_source: model` is a **qualifier, not a trigger**. It is set on every
+node of every fixture, so triggering on it made `multistep_access` true 43 of
+43 — a constant rather than an assessment. A test asserts the 10/33 split so it
+cannot quietly become constant again.
+
+`actor_evidence` establishes the floor, never the ceiling: the judgment that
+bites is technique against *target class*, which the local corpus cannot
+settle, and which generation may set false with its own basis. The export's own
+`actor_support` is never rewritten by either element.
+
+## Telemetry and drafting
+
+```bash
+run attack_path_detection_designer --action generate_detections \
+    --artifact_ids art_graph,art_seed --flow_map_artifact_id art_map
+```
+
+Each node carries `telemetry_candidates[]` from the shared library and a
+`telemetry_readiness` of `stream_available`, `periodic_only` or
+`none_declared` — **a separate axis from `context_completeness`**. A node can
+be bound to the estate with nothing to look at. A `protocol: physical` hop
+draws badge, door-alarm and CCTV sources instead of network ones.
+
+Generation refuses, rather than trusting the model: a telemetry source that was
+not offered for that node, any `DS####` identifier, `logsource.product` below
+`component_bound`, a changed technique id, and any `missing_data_behaviour`
+other than `insufficient_telemetry`. Coverage is a set comparison by
+`draft_id`, so a duplicate plus an omission is incomplete rather than "nine
+drafts".
+
+**Weak evidence is never a filter.** A node whose `actor_evidence` is false, or
+whose telemetry readiness is `none_declared`, is still drafted with the
+weakness stated — attackers change tactics, and a path the projector produced
+is still a path.
+
 ## Codes
 
 Warnings, review flags and errors are closed sets (spec §4.4): `WARNING_CODES`
@@ -183,9 +288,8 @@ should not be read as saying so.
 
 ## What it deliberately does not do
 
-- No mitigation names, focus cut or coverage ratio — **stage N3c**; no
-  taxonomy reconciliation or `tactic_status` / `technique_status` — **stage
-  N3d**.
+- No context pack schema or `metadata.kind` — **stage N4**. The shell already
+  persists and registers a result, so N4 is about the pack's format.
 - No artifact, no CLI `show`/`export` — **stage N4**.
 - No `DS####` data components: no local ATT&CK reference carries them, so any
   that appeared would be invented.

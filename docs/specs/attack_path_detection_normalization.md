@@ -724,6 +724,10 @@ complete and the reader should know why it may need a second look.
 | `FLOW_MAP_UNHASHED` | advisory | The export records no flow map hash (§4.2). |
 | `FLOW_MAP_APPLICATION_MISMATCH` | advisory | The map names a different application from the export. |
 | `FLOW_MAP_COMPONENT_UNRESOLVED` | blocking | A node's `component_id` is not in the supplied map; its nodes are not enriched. |
+| `MITIGATION_UNRESOLVED` | advisory | An M-ID is not in the local reference data; it is reported, never named or ranked (§1.4b). |
+| `TACTIC_UNRESOLVED` | advisory | A tactic is not current in v19.2 and has no single successor this technique uses; the export value is kept (§1.6). |
+| `TECHNIQUE_RETIRED` | advisory | A retired technique id resolved to a current one; both are kept and the export value is not rewritten. |
+| `TECHNIQUE_UNRESOLVED` | advisory | A technique id is unknown to the v19.2 lookup and has no unambiguous successor. |
 
 | Review flag (per node) | Raised when |
 |---|---|
@@ -740,6 +744,8 @@ complete and the reader should know why it may need a second look.
 | `FLOW_MAP_UNREADABLE` | The flow map is not readable JSON. Prose, Markdown and Mermaid maps are N5's job. |
 | `FLOW_MAP_NOT_OBJECT` | The flow map is not an object with a `components` list. |
 | `NORMALIZATION_FAILED` | Normalization raised on inputs that passed the checks above. |
+| `LLM_UNAVAILABLE` | `generate_detections` was asked for with no connected provider. |
+| `GENERATION_INCOMPLETE` | Fewer valid drafts than nodes. The partial output is returned with the coverage ledger; a partial run is never reported as success. |
 
 ---
 
@@ -809,7 +815,7 @@ Normalization first and separately; guidance builds on the pack.
 |---|---|---|
 | **N1. Adapters and identity** | Graph, seed and single-scenario adapters; the three identities of §4.2a; `(projection_identity, path_id, node_index)` keys; deterministic `draft_id`; union merge with the §4.3 precedence table including the 3a `state_check` **and `transition`** canonicalizations; `provenance_by_field` | All four fixtures normalize graph-only and seed-only to identical ordered node keys (9, 11, 10, 13 — **43** in all). All four carry provenance, so the `run_id` join is the normal path and §4.2's derived-identity path has no fixture — it is covered by the §7a synthetic pair. A repeated `(technique, component)` inside one path stays distinct on the §7 synthetic case; the three cross-path repeats in `124121` survive as distinct nodes. `AE-0001` recurring per path never collides. Every field carries an origin and pointer. No pair joins without `verified` or an explicit operator assertion. |
 | **N2. Provenance** — **closed 2026-09-19** | Projector `provenance` block (§4.1) — built 2026-09-16; designer-side pair handling (§4.2) — built in N1; flow-map lineage, application and component-fit checks (§4.2, decision 9); the §4.4 code catalogue | A graph from one run and a seed from another are refused as a pair. A supplied flow map is recorded as `same_map`, `edited_map` or `unhashed` and **never refused**; the four fixture exports reproduce their recorded `flow_map_sha256` from the repository maps. Every field carries an origin and pointer. Every emitted code is in §4.4. |
-| **N3. Enrichment and grading** — built in slices: **N3a** flow-map join and grades and **N3b** controls landed 2026-09-19; N3c mitigations and N3d taxonomy outstanding | Flow-map join, control catalogue, mitigation-name resolution, the §1.4b focus cut and coverage ratio, taxonomy reconciliation, completeness grades | `Stealth` survives against v19.2. `uncovered_mitigations` resolve to names locally. `mitigation_focus[]` is the 1–2 narrowest by technique breadth, deterministic and tie-broken by M-ID. Grades match §5 across all four fixtures with and without the flow map — 38 `component_bound`, 5 `component_bound_partial`, and 43 `asset_named` when the map is withheld. The two `TACTIC_CORRECTED` relabels in `124121` and the one in `022646` survive normalization. |
+| **N3. Enrichment and grading** — **complete**: N3a join and grades, N3b controls (2026-09-19), N3c mitigations, N3d taxonomy (2026-09-20) | Flow-map join, control catalogue, mitigation-name resolution, the §1.4b focus cut and coverage ratio, taxonomy reconciliation, completeness grades | `Stealth` survives against v19.2. `uncovered_mitigations` resolve to names locally. `mitigation_focus[]` is the 1–2 narrowest by technique breadth, deterministic and tie-broken by M-ID. Grades match §5 across all four fixtures with and without the flow map — 38 `component_bound`, 5 `component_bound_partial`, and 43 `asset_named` when the map is withheld. The two `TACTIC_CORRECTED` relabels in `124121` and the one in `022646` survive normalization. |
 | **N4. Context pack artifact** | `normalize_paths` action, pack schema, registration, CLI `show`/`export`, bounded `summarize_for_llm` | Pack round-trips; re-normalizing the same inputs is byte-identical apart from run ID and timestamp; the summary states counts, grades and conflicts without pasting node bodies. Input by `artifact_ids` and output as a registered artifact are **done in N1** (decision 8); what N4 adds is the pack's own schema and `metadata.kind`, not persistence — the shell already auto-persists a result that registers nothing. |
 | **N5. `normalize_flow_map`** | The projector's own Phase 4 action | Prose/Markdown/Mermaid → canonical flow map JSON with a stable `_canonical_flow_map_hash`. An unstated control status becomes `partial` and is flagged, never `implemented` — the rule already recorded in `docs/change_log/2026-09-11-adversary-path-projector-phase-3.md`. This is what makes `component_bound` routinely reachable. |
 | **G1…** | Grounding, generation, workbook — designer plan stages 2–5, unchanged except that they consume a pack | As in the designer plan, with the node-count constants replaced by pack inventory. |
@@ -1321,5 +1327,31 @@ key and have none but the parenthesised id in their description, the graph's
 control name (`WAF`, on two components), and both exports for `control_tagging`,
 which is absent from each. `mitre_attack.py` was checked for the taxonomy
 helpers N3d will use, and the corpus's mitigation coverage recomputed at 6 of
-169 with no unresolvable M-ID. Suite 1635 → 1652. No shell run and no LLM
-call; the operator will test N2 and N3a/N3b against uploaded artifacts.
+169 with no unresolvable M-ID. Suite 1635 → 1652.
+
+**Live run, 2026-09-20 (operator, Cloud Run).** A fresh projection and two
+designer runs confirmed the N2 lineage record and the N3a/N3b join on real
+artifacts: `asset_named 11` without the map, `component_bound 11` with it,
+`same_map`, 8 of 8 components resolving, 0 conflicts. The exported pack was
+verified against the flow map and the v19.2 lookup — component pointers, flow
+ports, crown jewels, an empty control list that is the map's own, and the
+covered mitigations matching the tagged controls. Two findings beyond the
+test: **`artifact.file_path` is readable in the container** for same-session
+artifacts, closing the question decision 8 left open, and a live projection
+produced a **three-path** graph, a shape §7a records as having no fixture.
+Test steps 7-10 — edited map, wrong map, error paths, cross-run refusal — are
+not yet run.
+
+**N3c and N3d, 2026-09-20.** Both of this document's independent mitigation
+figures were reproduced by the code rather than assumed: the §7 focus cut on
+`022646` / `web-exploit-to-db` step 1 is M1016 (breadth 5) then M1048 (14)
+with M1026 (112) excluded, and the corpus reads 6 covered of 169. Every node
+of all four pairs grades `technique:current` and `tactic:as_supplied` against
+v19.2, so §1.6's claim that the exports are already correct holds on the
+current corpus; `Stealth` is present and `Defense Evasion` appears nowhere.
+`control_tagging` was confirmed absent from both export payloads before
+decision 11's recomputation was written, and the recomputed counts on the
+telemetry map are 8 controls, 7 tagged, `ci_runner` with none. Retired-id,
+unknown-id, retired-tactic, unknown-tactic and unknown-M-ID cases are
+synthetic, because the corpus contains none. Suite 1652 → 1668. **N3 is
+complete; N4 is next.** No shell run for this slice.

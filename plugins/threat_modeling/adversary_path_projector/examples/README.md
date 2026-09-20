@@ -9,20 +9,30 @@ Given both halves the projector answers a question nothing else in the repo
 answers: *given this named actor and this architecture, what would they actually
 do?*
 
-This directory holds three worked examples. Read one, copy it, change it into
+This directory holds five worked examples. Read one, copy it, change it into
 your own estate.
 
 ---
 
-## The three examples
+## The five examples
 
 | File | Estate | Why it is here |
 |---|---|---|
 | `claims_portal_flow_map.json` | Internet-facing claims portal, 7 components | The simplest shape: a classic three-tier web app. Start here. |
 | `telemetry_saas_flow_map.json` | Multi-tenant telemetry SaaS with its own build pipeline, 10 components | A **supply-chain** shape — the build path runs parallel to the runtime path and re-enters it at the cluster. |
 | `plant_ot_flow_map.json` | Bottling plant with corporate IT, an IT/OT DMZ and a control network, 10 components | A **segmented** shape — five trust zones, unauthenticated industrial protocols, and a dual-homed workstation that bypasses the DMZ. |
+| `branch_physical_flow_map.json` | Staffed branch office, 10 components | A **physical** shape — the path starts at a meeting-room wall port and leaves over cellular, so it never meets an egress control. Most of what would catch it is not a security tool: an escort procedure, a manual asset audit, CCTV nobody watches. |
+| `loyalty_commerce_flow_map.json` | Small e-commerce estate with a loyalty programme, 10 components | A **business-logic** shape — the asset is value rather than data, and the central control is separation of duties, so the attacker needs two accounts with different roles. The strongest detections are a fraud engine, a finance reconciliation, a partner settlement file and customers complaining. |
 
-All three deliberately contain findings. That is the point: a flow map with no
+The last two were written for `docs/specs/telemetry_reference_library.md`, so
+that its non-ATT&CK cases — physical, human-procedure and fraud indicators —
+are designed against real subjects. **`branch_physical` also carries a new
+convention:** physical movement is modelled as a flow with
+`protocol: physical`. Without it the file server and the domain controller
+validate as unreachable crown jewels, because the entry surface is otherwise
+network-only and a break-in has no vocabulary in the schema.
+
+All five deliberately contain findings. That is the point: a flow map with no
 weaknesses projects nothing interesting. Each file's `description` field says
 what was planted in it.
 
