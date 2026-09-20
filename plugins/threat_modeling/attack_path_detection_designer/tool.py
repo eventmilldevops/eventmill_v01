@@ -63,6 +63,11 @@ gen = _load_sibling("generation.py", "attack_path_detection_designer_generation"
 # Sized against the provider's content budget, not a guaranteed node limit.
 GENERATION_MAX_TOKENS = 32000
 
+# Stated, never left to the client's default of "high": thinking time is what
+# runs a generation call into a transport deadline.
+DEFAULT_THINKING_LEVEL = "medium"
+THINKING_LEVELS = ("minimal", "low", "medium", "high")
+
 # Section 4.4 of the spec. Every failing result carries one of these.
 ERROR_CODES = (
     "NO_INPUT",
@@ -165,8 +170,13 @@ def _resolve_artifact(artifact_id: Any, context: Any) -> tuple[Any, ToolResult |
     return (Path(artifact.file_path).name, path), None
 
 
-def nz_hints():
+def nz_hints(thinking_level: str = DEFAULT_THINKING_LEVEL):
     """Heavy tier and structured output; the provider stays the operator's choice.
+
+    `thinking_level` is stated rather than left unset: a client that sees
+    `needs_reasoning` with no level resolves it to "high", and thinking time
+    dominates latency against a client deadline the plugin timeout cannot
+    extend. The projector states it for the same reason.
 
     QueryHints carries no provider field by design - vendor selection belongs
     to `use`, not to plugin code.
@@ -175,7 +185,12 @@ def nz_hints():
         from framework.plugins.protocol import QueryHints
     except ImportError:  # pragma: no cover - framework always present at runtime
         return None
-    return QueryHints(tier="heavy", needs_reasoning=True, needs_structured_output=True)
+    return QueryHints(
+        tier="heavy",
+        needs_reasoning=True,
+        needs_structured_output=True,
+        thinking_level=thinking_level,
+    )
 
 
 def _read_json(path: Path) -> Any:
@@ -412,7 +427,9 @@ class AttackPathDetectionDesigner:
                 prompt=gen.build_prompt(batch, engagement, outline),
                 system_context=gen.SYSTEM_CONTEXT,
                 max_tokens=GENERATION_MAX_TOKENS,
-                hints=nz_hints(),
+                hints=nz_hints(
+                    str(payload.get("thinking_level") or DEFAULT_THINKING_LEVEL)
+                ),
             )
             calls.append(
                 {
@@ -448,11 +465,26 @@ class AttackPathDetectionDesigner:
         by_id = {n["draft_id"]: n for n in nodes}
         valid: list[dict[str, Any]] = []
         for draft in drafts:
-            node = by_id.get((draft.get("x_eventmill") or {}).get("draft_id"))
+            claimed = gen.draft_id_of(draft)
+            node = by_id.get(claimed)
             if node is None:
-                problems.append({"problem": "draft does not match any node", "draft": draft.get("title")})
+                problems.append(
+                    {
+                        "problem": "draft does not match any node",
+                        "claimed_draft_id": claimed,
+                        "title": gen.as_dict(draft).get("title"),
+                    }
+                )
                 continue
-            findings = gen.validate_draft(draft, node) + gen.validate_logsource(draft, node)
+            try:
+                findings = gen.validate_draft(draft, node) + gen.validate_logsource(
+                    draft, node
+                )
+            except Exception as exc:  # noqa: BLE001 - a bad draft is data, not a crash
+                # A reply is untrusted shape as well as untrusted content. One
+                # malformed draft must cost its own node, never the whole run
+                # and never the money already spent on the other batches.
+                findings = [f"draft could not be validated: {type(exc).__name__}: {exc}"]
             if findings:
                 problems.append({"draft_id": node["draft_id"], "problems": findings})
                 continue

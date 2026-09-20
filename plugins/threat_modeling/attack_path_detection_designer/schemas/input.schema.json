@@ -19,6 +19,12 @@
       "default": 6,
       "description": "Content-budget guard for generate_detections: how many steps go in one call. Batching is by path, and the whole path's outline travels with every batch, so a split never costs predecessor context."
     },
+    "thinking_level": {
+      "type": "string",
+      "enum": ["minimal", "low", "medium", "high"],
+      "default": "medium",
+      "description": "Reasoning depth for generate_detections, stated rather than left to the client, which resolves an unset level to 'high' whenever reasoning is requested. Thinking time is what runs a call into the transport deadline; raise it deliberately."
+    },
     "artifact_ids": {
       "type": "array",
       "minItems": 1,

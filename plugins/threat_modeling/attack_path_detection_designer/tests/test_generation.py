@@ -336,3 +336,105 @@ def test_a_node_with_no_telemetry_still_gets_drafted(tool, nodes):
     produced = {(d["x_eventmill"]["draft_id"]) for d in result.result["drafts"]}
     for node in bare:
         assert node["draft_id"] in produced
+
+
+def test_thinking_level_is_stated_not_left_to_the_client():
+    """An unset level resolves to 'high', and thinking time is the deadline risk."""
+    hints = _tool_mod.nz_hints()
+    assert hints.thinking_level == _tool_mod.DEFAULT_THINKING_LEVEL == "medium"
+    assert hints.tier == "heavy"
+    assert not hasattr(hints, "provider")  # vendor choice belongs to `use`
+
+
+def test_the_operator_can_raise_thinking_level(tool, nodes):
+    seen: list[Any] = []
+
+    def respond(prompt, call_index):
+        return FakeResponse(text=json.dumps({"drafts": []}))
+
+    llm = FakeLLM(respond)
+
+    class Recording(FakeLLM):
+        def query_text(self, prompt, system_context=None, max_tokens=None, hints=None, **kw):
+            seen.append(hints.thinking_level)
+            return respond(prompt, 1)
+
+    tool.execute(
+        {
+            "action": "generate_detections",
+            "sources": [GRAPH, SEED],
+            "flow_map_path": MAP,
+            "thinking_level": "high",
+        },
+        FakeContext(llm_query=Recording(respond)),
+    )
+    assert set(seen) == {"high"}
+
+
+# ---------------------------------------------------------------------------
+# A reply is untrusted shape, not only untrusted content
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "mangle",
+    [
+        pytest.param(lambda d: d.update(x_eventmill="see below"), id="extension_is_a_string"),
+        pytest.param(lambda d: d.update(logsource="windows security log"), id="logsource_is_a_string"),
+        pytest.param(
+            lambda d: d["x_eventmill"].update(telemetry=["pgaudit.object_access"]),
+            id="telemetry_is_a_list_of_strings",
+        ),
+        pytest.param(
+            lambda d: d["x_eventmill"].update(node="scm-ci-vault step 0"),
+            id="node_is_a_string",
+        ),
+        pytest.param(
+            lambda d: d["x_eventmill"].update(detection_logic="pseudocode only"),
+            id="logic_is_a_string",
+        ),
+        pytest.param(
+            lambda d: d["x_eventmill"].update(events_of_interest={"event": "4624"}),
+            id="events_is_an_object",
+        ),
+    ],
+)
+def test_a_malformed_draft_is_rejected_rather_than_crashing(tool, nodes, mangle):
+    """The live run died on `'str' object has no attribute 'get'`."""
+
+    def respond(prompt, call_index):
+        payload = json.loads(prompt[prompt.find("{") :])
+        wanted = [s["draft_id"] for s in payload["steps_to_draft"]]
+        drafts = [_draft_for(n) for n in nodes if n["draft_id"] in wanted]
+        mangle(drafts[0])
+        return FakeResponse(text=json.dumps({"drafts": drafts}))
+
+    result = tool.execute(
+        {"action": "generate_detections", "sources": [GRAPH, SEED], "flow_map_path": MAP},
+        FakeContext(llm_query=FakeLLM(respond)),
+    )
+    assert result.ok is False
+    assert result.error_code == "GENERATION_INCOMPLETE"
+    assert result.result["rejected"]
+    # The other nodes in the batch still produced drafts.
+    assert result.result["drafts"]
+
+
+def test_a_reply_of_strings_instead_of_objects_is_rejected(tool, nodes):
+    def respond(prompt, call_index):
+        return FakeResponse(text=json.dumps({"drafts": ["a draft", "another draft"]}))
+
+    result = tool.execute(
+        {"action": "generate_detections", "sources": [GRAPH, SEED], "flow_map_path": MAP},
+        FakeContext(llm_query=FakeLLM(respond)),
+    )
+    assert result.ok is False
+    assert result.result["coverage"]["generation_status"] == "failed"
+
+
+def test_shape_helpers_never_raise():
+    for value in ("text", 3, None, [], {"a": 1}):
+        assert isinstance(gen.as_dict(value), dict)
+        assert isinstance(gen.as_dicts(value), list)
+    assert gen.draft_id_of("not a draft") is None
+    assert gen.draft_id_of({"x_eventmill": "string"}) is None
+    assert gen.draft_id_of({"x_eventmill": {"draft_id": "drf_x"}}) == "drf_x"

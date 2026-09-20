@@ -196,10 +196,64 @@ def parse_response(text: str | None) -> tuple[list[dict[str, Any]], str | None]:
     return [d for d in drafts if isinstance(d, dict)], None
 
 
+def as_dict(value: Any) -> dict[str, Any]:
+    """A model's reply is untrusted *shape*, not just untrusted content.
+
+    Every nested field can come back as a string, a list or null however
+    firmly the contract asked for an object. Reading one with ``.get`` is how a
+    plugin turns a bad draft into a crashed run, so nothing here assumes a
+    type: a non-object reads as empty and validation reports it as a problem.
+    """
+    return value if isinstance(value, dict) else {}
+
+
+def as_dicts(value: Any) -> list[dict[str, Any]]:
+    """The list form of the same rule, dropping entries that are not objects."""
+    if not isinstance(value, list):
+        return []
+    return [entry for entry in value if isinstance(entry, dict)]
+
+
+def _shape_problems(draft: dict[str, Any]) -> list[str]:
+    """Fields the contract requires as objects or lists, arriving as neither."""
+    problems: list[str] = []
+    if not isinstance(draft.get("x_eventmill"), dict):
+        problems.append(
+            f"x_eventmill is {type(draft.get('x_eventmill')).__name__}, not an object"
+        )
+        return problems
+    extension = draft["x_eventmill"]
+    if not isinstance(draft.get("logsource"), dict):
+        problems.append(f"logsource is {type(draft.get('logsource')).__name__}, not an object")
+    for field in ("node", "detection_logic", "assessment"):
+        value = extension.get(field)
+        if value is not None and not isinstance(value, dict):
+            problems.append(f"x_eventmill.{field} is {type(value).__name__}, not an object")
+    for field in ("telemetry", "events_of_interest"):
+        value = extension.get(field)
+        if value is not None and not isinstance(value, list):
+            problems.append(f"x_eventmill.{field} is {type(value).__name__}, not a list")
+        else:
+            for entry in value or []:
+                if not isinstance(entry, dict):
+                    problems.append(
+                        f"x_eventmill.{field} contains a "
+                        f"{type(entry).__name__} where an object is required"
+                    )
+                    break
+    return problems
+
+
+def draft_id_of(draft: Any) -> str | None:
+    """The id a draft claims, however malformed the draft is around it."""
+    value = as_dict(as_dict(draft).get("x_eventmill")).get("draft_id")
+    return value if isinstance(value, str) else None
+
+
 def validate_draft(draft: dict[str, Any], node: dict[str, Any]) -> list[str]:
     """Everything a draft must satisfy before it counts as produced."""
-    problems: list[str] = []
-    extension = draft.get("x_eventmill") or {}
+    problems: list[str] = _shape_problems(draft)
+    extension = as_dict(draft.get("x_eventmill"))
 
     for field in ("title", "status", "description", "logsource"):
         if not draft.get(field):
@@ -218,7 +272,7 @@ def validate_draft(draft: dict[str, Any], node: dict[str, Any]) -> list[str]:
     if extension.get("catalogue_status") not in (None, "new_unchecked"):
         problems.append("catalogue_status must be new_unchecked")
 
-    node_block = extension.get("node") or {}
+    node_block = as_dict(extension.get("node"))
     for field in ("path_id", "node_index"):
         if node_block.get(field) != node.get(field):
             problems.append(f"x_eventmill.node.{field} does not match the source node")
@@ -243,14 +297,14 @@ def validate_draft(draft: dict[str, Any], node: dict[str, Any]) -> list[str]:
 def _validate_telemetry(extension: dict[str, Any], node: dict[str, Any]) -> list[str]:
     """A draft may only cite sources it was offered."""
     problems: list[str] = []
-    offered = {c["source_id"] for c in node.get("telemetry_candidates") or []}
-    for entry in extension.get("telemetry") or []:
+    offered = {c["source_id"] for c in as_dicts(node.get("telemetry_candidates"))}
+    for entry in as_dicts(extension.get("telemetry")):
         source_id = entry.get("source_id")
         if source_id not in offered:
             problems.append(
                 f"telemetry source {source_id!r} was not offered for this node"
             )
-    for event in extension.get("events_of_interest") or []:
+    for event in as_dicts(extension.get("events_of_interest")):
         if event.get("mapping_status") == "native_identifier" and not event.get("event_ref"):
             problems.append("event claims a native identifier but carries none")
     return problems
@@ -259,7 +313,7 @@ def _validate_telemetry(extension: dict[str, Any], node: dict[str, Any]) -> list
 def _validate_logic(extension: dict[str, Any], node: dict[str, Any]) -> list[str]:
     """Missing data must be a declared state, and product claims need the grade."""
     problems: list[str] = []
-    logic = extension.get("detection_logic") or {}
+    logic = as_dict(extension.get("detection_logic"))
     if logic and logic.get("missing_data_behaviour") != "insufficient_telemetry":
         problems.append(
             "missing_data_behaviour must be insufficient_telemetry; absent data "
@@ -272,7 +326,7 @@ def _validate_logic(extension: dict[str, Any], node: dict[str, Any]) -> list[str
 
 def validate_logsource(draft: dict[str, Any], node: dict[str, Any]) -> list[str]:
     """`logsource.product` is a claim the completeness grade has to support."""
-    logsource = draft.get("logsource") or {}
+    logsource = as_dict(draft.get("logsource"))
     if logsource.get("product") and node.get("context_completeness") != "component_bound":
         return [
             f"logsource.product is set at grade {node.get('context_completeness')!r}; "
@@ -292,11 +346,7 @@ def coverage(
     named separately so a partial result says which of the three happened.
     """
     expected_ids = [node["draft_id"] for node in expected]
-    produced = [
-        (d.get("x_eventmill") or {}).get("draft_id")
-        for d in drafts
-        if isinstance(d, dict)
-    ]
+    produced = [draft_id_of(d) for d in drafts]
     produced_set = {p for p in produced if p}
 
     duplicates = sorted({p for p in produced if produced.count(p) > 1 and p})

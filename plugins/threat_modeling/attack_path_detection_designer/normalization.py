@@ -1294,6 +1294,13 @@ def digest_lines(result: NormalizationResult) -> list[str]:
         if fields.get("crown_jewel"):
             detail.append("crown jewel")
         detail.append(f"monitoring {fields.get('monitoring_claim')}")
+        # The best predictor of whether a draft can say anything concrete.
+        readiness = fields.get("telemetry_readiness")
+        if readiness:
+            detail.append(
+                f"telemetry {readiness}"
+                f" ({len(fields.get('telemetry_candidates') or [])})"
+            )
         if (fields.get("state_check") or "") == "gap":
             detail.append("state gap")
         assessment = (fields.get("assessment") or {}).get("tuple") or {}
