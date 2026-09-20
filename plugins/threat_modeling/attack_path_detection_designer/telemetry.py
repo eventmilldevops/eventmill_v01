@@ -61,8 +61,25 @@ def physical_sources() -> list[dict[str, Any]]:
     ]
 
 
+def estate_key(flow_map_filename: str | None) -> str | None:
+    """The estate a supplied map describes, from its filename.
+
+    Only meaningful for the seed library, which carries five example estates
+    in one file. A real deployment's library holds one estate and this returns
+    None, which keeps every entry in play.
+    """
+    if not flow_map_filename:
+        return None
+    name = flow_map_filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if name.endswith("_flow_map.json"):
+        return name[: -len("_flow_map.json")]
+    return None
+
+
 def candidates_for_node(
-    fields: dict[str, Any], component_type: str | None = None
+    fields: dict[str, Any],
+    component_type: str | None = None,
+    estate: str | None = None,
 ) -> list[dict[str, Any]]:
     """Library entries that could observe this node, with why each matched.
 
@@ -77,7 +94,7 @@ def candidates_for_node(
         return [_candidate(s, MATCH_PHYSICAL) for s in physical_sources()]
 
     technologies = fields.get("technologies") or []
-    matched = sources_for_component(technologies, component_type)
+    matched = sources_for_component(technologies, component_type, estate)
     out: list[dict[str, Any]] = []
     for source in matched:
         declared = {t.lower() for t in (source.get("applies_to") or {}).get("technologies") or []}
@@ -154,9 +171,13 @@ def telemetry_requirements(candidates: list[dict[str, Any]]) -> list[str]:
     return notes
 
 
-def attach(fields: dict[str, Any], component_type: str | None = None) -> dict[str, Any]:
+def attach(
+    fields: dict[str, Any],
+    component_type: str | None = None,
+    flow_map_filename: str | None = None,
+) -> dict[str, Any]:
     """The whole G1a contribution for one node, as fields to record."""
-    candidates = candidates_for_node(fields, component_type)
+    candidates = candidates_for_node(fields, component_type, estate_key(flow_map_filename))
     transition = fields.get("transition") or {}
     protocol = str(transition.get("protocol") or "").lower()
     return {

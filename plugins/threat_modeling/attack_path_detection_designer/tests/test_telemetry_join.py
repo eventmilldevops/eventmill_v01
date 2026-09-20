@@ -84,7 +84,7 @@ def test_readiness_distribution_across_the_corpus():
     for node in _all_nodes():
         value = node.fields["telemetry_readiness"]
         counts[value] = counts.get(value, 0) + 1
-    assert counts == {"stream_available": 38, "periodic_only": 2, "none_declared": 3}
+    assert counts == {"stream_available": 38, "none_declared": 5}
 
 
 def test_without_a_map_nothing_is_observable():
@@ -112,10 +112,50 @@ def test_a_component_declaring_no_technology_has_nothing_to_observe():
         for n in _all_nodes()
         if n.fields["telemetry_readiness"] == "none_declared"
     }
-    assert bare == {"doc_store", "users"}
-    for node in _all_nodes():
-        if node.fields.get("component_id") in bare:
-            assert not node.fields.get("technologies")
+    assert bare == {"claims_db", "doc_store", "oracle_db", "users"}
+
+    # Two distinct reasons, and the difference matters: three declare no
+    # technology at all, so nothing could match. `oracle_db` declares one the
+    # seed library does not cover - a recorded gap in the library, not a
+    # property of the estate.
+    reasons = {
+        node.fields["component_id"]: tuple(node.fields.get("technologies") or ())
+        for node in _all_nodes()
+        if node.fields.get("component_id") in bare
+    }
+    assert reasons["claims_db"] == reasons["doc_store"] == reasons["users"] == ()
+    assert reasons["oracle_db"] == ("oracle",)
+
+
+def test_one_estates_bespoke_systems_never_reach_another(nodes_unused=None):
+    """Found on a live run: a Postgres match alone offered a loyalty ledger's
+    adjustment audit for a telemetry SaaS warehouse."""
+    warehouse = next(
+        n
+        for n in _all_nodes()
+        if n.fields.get("component_id") == "telemetry_db"
+    )
+    offered = {c["source_id"] for c in warehouse.fields["telemetry_candidates"]}
+    assert offered == {"postgres.session", "pgaudit.object_access"}
+    for leaked in ("ledger.adjustment_audit", "finance.points_liability_reconciliation",
+                   "baseline.redemption_velocity"):
+        assert leaked not in offered
+
+
+def test_a_bespoke_source_still_reaches_its_own_estate():
+    fields = {"technologies": ["postgres"], "transition": {}}
+    offered = {
+        c["source_id"]
+        for c in tl.candidates_for_node(fields, "database", estate="loyalty_commerce")
+    }
+    assert "ledger.adjustment_audit" in offered
+
+
+def test_an_unknown_estate_keeps_everything():
+    """A real library holds one estate, so nothing is filtered without a key."""
+    assert tl.estate_key("customer_estate.json") is None
+    fields = {"technologies": ["postgres"], "transition": {}}
+    assert len(tl.candidates_for_node(fields, "database", estate=None)) >= 3
 
 
 def test_every_node_records_the_library_version():

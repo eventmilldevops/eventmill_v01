@@ -7,23 +7,24 @@
 `tests/test_generation.py` (17); `normalization.py`, `tool.py`,
 `schemas/input.schema.json`, `manifest.json`; telemetry library to v0.2.0;
 spec §4.4 gains two error codes.
-**Status:** built, and run live once on `gcp_gemini` - which found a shape
-defect, fixed here. Suite **1705 → 1746**.
+**Status:** built, and run live on `gcp_gemini` — which found two defects, one
+a crash and one silent. Both fixed here. Suite **1705 → 1749**.
 
 ## G1a — the telemetry join
 
 Every node now carries `telemetry_candidates[]`, `telemetry_readiness`,
 `telemetry_notes`, `telemetry_library_version` and `observation_medium`.
 
-Readiness across the four fixture pairs with their maps: **38
-`stream_available`, 2 `periodic_only`, 3 `none_declared`**. Without a map every
-node is `none_declared`, because the library joins on the component.
+Readiness across the four fixture pairs with their maps was **38
+`stream_available`, 2 `periodic_only`, 3 `none_declared`** — corrected to
+38 / 0 / 5 by the contamination fix below, which is where those numbers are
+explained. Without a map every node is `none_declared`, because the library
+joins on the component.
 
-The three bare nodes are `doc_store` and `users` — the components that declare
-no technologies, and which also grade `component_bound_partial`. That
-correspondence is the point: a map that does not say what a component runs
-cannot produce product-specific telemetry, and the pack now says so twice, in
-two independent fields.
+A component that declares no technologies produces no telemetry and also
+grades `component_bound_partial`. That correspondence is the point: a map that
+does not say what a component runs cannot produce product-specific telemetry,
+and the pack now says so twice, in two independent fields.
 
 **Readiness is a separate axis from `context_completeness`,** and a test
 asserts that at least one grade carries more than one readiness. Folding them
@@ -126,9 +127,42 @@ readiness — the field that most predicts whether a draft can name anything
 concrete — was missing from it, because G1a landed after the digest was
 written.
 
+## The second live run found a worse one: cross-estate contamination
+
+With the shape fix in, the digest showed `telemetry stream_available (5)` on
+`telemetry_db`. Five is wrong. Two were right — `postgres.session` and
+`pgaudit.object_access` — and three were the loyalty estate's bespoke systems
+leaking onto a telemetry SaaS warehouse because both happen to run Postgres:
+`ledger.adjustment_audit`, `finance.points_liability_reconciliation` and
+`baseline.redemption_velocity`.
+
+**This is worse than the crash it followed**, because nothing would have
+caught it. The model would have been offered "Loyalty ledger adjustment audit
+log" for a telemetry warehouse, might reasonably have cited it, and validation
+would have **accepted** the draft — the source *was* offered. A plausible,
+confident, wrong detection, produced by the one check meant to prevent exactly
+that.
+
+The cause is the seed: a real library describes one estate, this one describes
+five, and technology matching cannot tell whose Postgres is whose. Entries that
+describe a bespoke system now carry `applies_to.scope: estate_specific` (8 of
+36), the estate is derived from the supplied map's filename, and such entries
+attach only to their own estate. With no estate key nothing is filtered, which
+is the right default for a library holding only the operator's systems.
+Library **v0.3.0**.
+
+Readiness across the corpus moves to **38 `stream_available`, 5
+`none_declared`** — and the two `periodic_only` nodes disappear, because they
+were loyalty reconciliation entries attached to `claims_db` and `oracle_db`.
+The five bare nodes now have two honest reasons: `claims_db`, `doc_store` and
+`users` declare no technologies; **`oracle_db` declares `oracle`, which the
+seed library does not cover at all.** Application B runs Oracle, Mongo and
+Cosmos and the seed has none of them — a recorded gap, and the first thing to
+close if that estate is used in earnest.
+
 ## Verified, and not
 
-- 39 new tests; full suite 1746; 36 schemas valid; manifest validation
+- 42 new tests; full suite 1749; 36 schemas valid; manifest validation
   unchanged at its 15 pre-existing `stability` errors.
 - The catalogue test caught `LLM_UNAVAILABLE` and `GENERATION_INCOMPLETE`
   missing from spec §4.4 before this entry was written.

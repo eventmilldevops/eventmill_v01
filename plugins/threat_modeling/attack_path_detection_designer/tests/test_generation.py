@@ -45,6 +45,8 @@ class FakeResponse:
     model_used: str = "gemini-3.1-pro-preview"
     truncated: bool = False
     finish_reason: str = "STOP"
+    token_usage: dict | None = None
+    error_kind: str | None = None
 
 
 @dataclass
@@ -438,3 +440,37 @@ def test_shape_helpers_never_raise():
     assert gen.draft_id_of("not a draft") is None
     assert gen.draft_id_of({"x_eventmill": "string"}) is None
     assert gen.draft_id_of({"x_eventmill": {"draft_id": "drf_x"}}) == "drf_x"
+
+
+def test_a_failed_run_says_why_in_its_message(tool, nodes):
+    """A failed run prints its message and little else."""
+
+    def respond(prompt, call_index):
+        return FakeResponse(text="I cannot help with that request.")
+
+    result = tool.execute(
+        {"action": "generate_detections", "sources": [GRAPH, SEED], "flow_map_path": MAP},
+        FakeContext(llm_query=FakeLLM(respond)),
+    )
+    assert result.ok is False
+    assert "0 of 9" in result.message
+    assert "no JSON object" in result.message
+    assert "reply began" in result.message
+    assert "ok=True" in result.message  # the call itself succeeded
+
+
+def test_an_empty_reply_is_distinguishable_from_a_refusal(tool, nodes):
+    """Empty text with tokens spent is thinking starvation, not a refusal."""
+
+    def respond(prompt, call_index):
+        return FakeResponse(text="", token_usage={"output_tokens": 0, "thinking_tokens": 31000})
+
+    result = tool.execute(
+        {"action": "generate_detections", "sources": [GRAPH, SEED], "flow_map_path": MAP},
+        FakeContext(llm_query=FakeLLM(respond)),
+    )
+    assert result.ok is False
+    assert "empty response" in result.message
+    call = result.result["calls"][0]
+    assert call["reply_chars"] == 0
+    assert call["token_usage"]["thinking_tokens"] == 31000

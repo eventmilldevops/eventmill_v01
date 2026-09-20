@@ -439,6 +439,10 @@ class AttackPathDetectionDesigner:
                     "model_used": getattr(response, "model_used", None),
                     "truncated": bool(getattr(response, "truncated", False)),
                     "finish_reason": getattr(response, "finish_reason", None),
+                    # An empty reply with tokens spent is thinking starvation,
+                    # not a refusal. Only the usage tells the two apart.
+                    "token_usage": getattr(response, "token_usage", None),
+                    "reply_chars": len(getattr(response, "text", None) or ""),
                 }
             )
             if not getattr(response, "ok", False):
@@ -446,6 +450,7 @@ class AttackPathDetectionDesigner:
                     {
                         "path_id": batch[0]["path_id"],
                         "problem": getattr(response, "error", None) or "provider call failed",
+                        "error_kind": getattr(response, "error_kind", None),
                     }
                 )
                 continue
@@ -458,8 +463,28 @@ class AttackPathDetectionDesigner:
 
             batch_drafts, failure = gen.parse_response(getattr(response, "text", None))
             if failure:
-                problems.append({"path_id": batch[0]["path_id"], "problem": failure})
+                # Without a sample of what actually came back, "no JSON object
+                # in response" sends the next person guessing. Bounded, because
+                # a reply can be tens of thousands of characters.
+                raw = getattr(response, "text", None) or ""
+                problems.append(
+                    {
+                        "path_id": batch[0]["path_id"],
+                        "problem": failure,
+                        "reply_chars": len(raw),
+                        "reply_starts": raw[:300],
+                        "reply_ends": raw[-150:] if len(raw) > 450 else "",
+                    }
+                )
                 continue
+            if not batch_drafts:
+                problems.append(
+                    {
+                        "path_id": batch[0]["path_id"],
+                        "problem": "reply parsed but carried no drafts",
+                        "reply_starts": (getattr(response, "text", None) or "")[:300],
+                    }
+                )
             drafts.extend(batch_drafts)
 
         by_id = {n["draft_id"]: n for n in nodes}
@@ -506,10 +531,7 @@ class AttackPathDetectionDesigner:
             return ToolResult(
                 ok=False,
                 error_code="GENERATION_INCOMPLETE",
-                message=(
-                    f"{ledger['generated_drafts']} of {ledger['expected_nodes']} nodes "
-                    f"produced a valid draft ({ledger['generation_status']})."
-                ),
+                message=_incomplete_message(ledger, problems, calls),
                 result=result,
             )
         return ToolResult(ok=True, result=result)
@@ -592,6 +614,34 @@ class AttackPathDetectionDesigner:
             counts = ", ".join(f"{name} {count}" for name, count in taxonomy.items())
             lines.append(f"Taxonomy v19.2: {counts}.")
         return "\n".join(lines)
+
+
+def _incomplete_message(
+    ledger: dict[str, Any], problems: list[dict[str, Any]], calls: list[dict[str, Any]]
+) -> str:
+    """Say why, not only that.
+
+    A failed run prints its message and little else, so the diagnosis has to
+    travel in the message. Without it, "0 of 8" sends the reader to the code.
+    """
+    lines = [
+        f"{ledger['generated_drafts']} of {ledger['expected_nodes']} nodes produced "
+        f"a valid draft ({ledger['generation_status']})."
+    ]
+    for call in calls:
+        lines.append(
+            f"  call {call['path_id']} ({call['nodes']} nodes): ok={call['ok']}, "
+            f"truncated={call['truncated']}, finish={call['finish_reason']}, "
+            f"model={call['model_used']}"
+        )
+    for problem in problems[:3]:
+        detail = problem.get("problem") or problem.get("problems")
+        lines.append(f"  - {str(detail)[:300]}")
+        if problem.get("reply_starts"):
+            lines.append(f"    reply began: {problem['reply_starts'][:200]!r}")
+    if len(problems) > 3:
+        lines.append(f"  ... {len(problems) - 3} more; 'show' the result for all.")
+    return "\n".join(lines)
 
 
 def _generation_summary(data: dict[str, Any], result: ToolResult) -> str:

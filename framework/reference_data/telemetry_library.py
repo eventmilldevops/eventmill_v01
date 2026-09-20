@@ -107,17 +107,33 @@ def get_source(source_id: str) -> dict[str, Any] | None:
 def sources_for_component(
     technologies: list[str] | None = None,
     component_type: str | None = None,
+    estate: str | None = None,
 ) -> list[dict[str, Any]]:
     """Component first, behaviour second, technique last (spec section 5).
 
     A badge reader is unreachable from a technique, so the technique never
     leads. An entry matches when it names one of the component's technologies,
     or when it names the component type and claims no technologies of its own.
+
+    **`estate` keeps one estate's bespoke systems off another's components.**
+    A real library describes one estate and needs no filter; this seed
+    describes five, so a Postgres match alone offered a loyalty ledger's
+    adjustment audit for a telemetry warehouse - a source the model would
+    reasonably cite and validation would accept, because it was offered.
+    Entries marked `scope: estate_specific` attach only to the estate they
+    belong to. Passing no estate keeps everything, which is the right default
+    for a library that holds only the operator's own systems.
     """
     wanted = {t.lower() for t in (technologies or [])}
     matched: list[dict[str, Any]] = []
     for source in all_sources():
         applies = source.get("applies_to") or {}
+        if (
+            estate
+            and applies.get("scope") == "estate_specific"
+            and estate not in (source.get("estates") or [])
+        ):
+            continue
         declared = {t.lower() for t in (applies.get("technologies") or [])}
         types = applies.get("component_types") or []
         if declared & wanted:

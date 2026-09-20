@@ -1208,7 +1208,9 @@ def normalize(
         warnings.extend(resolve_mitigations(node, tag_caveat, caveat_reason))
         warnings.extend(reconcile_taxonomy(node))
         ground_node(node, engagement.get("actor_attack_id") or "")
-        attach_telemetry(node, (component or {}).get("type"))
+        attach_telemetry(
+            node, (component or {}).get("type"), flow_map_record.get("filename")
+        )
 
     inventory["completeness"] = _grade_distribution(nodes)
     inventory["mitigation_coverage"] = _coverage_totals(nodes)
@@ -1913,13 +1915,18 @@ def _reconcile_tactic(node: NormalizedNode, entry: dict[str, Any], record) -> li
     ]
 
 
-def attach_telemetry(node: NormalizedNode, component_type: str | None) -> None:
+def attach_telemetry(
+    node: NormalizedNode,
+    component_type: str | None,
+    flow_map_filename: str | None = None,
+) -> None:
     """Stage G1a. What could observe this node, and how ready that evidence is.
 
     A separate axis from `context_completeness`: this says what exists to look
     at, not how well the node is bound to the estate.
     """
-    for name, value in telemetry.attach(node.fields, component_type).items():
+    attached = telemetry.attach(node.fields, component_type, flow_map_filename)
+    for name, value in attached.items():
         node.fields[name] = value
         node.provenance_by_field[name] = {
             "origin": ORIGIN_REFERENCE,
