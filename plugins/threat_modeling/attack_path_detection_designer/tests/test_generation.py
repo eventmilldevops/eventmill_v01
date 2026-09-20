@@ -474,3 +474,34 @@ def test_an_empty_reply_is_distinguishable_from_a_refusal(tool, nodes):
     call = result.result["calls"][0]
     assert call["reply_chars"] == 0
     assert call["token_usage"]["thinking_tokens"] == 31000
+
+
+def test_the_prompt_shows_the_shape_rather_than_naming_the_keys(nodes):
+    """The first live run returned `node` as a string and `telemetry` as an
+    object, because the contract listed key names and never their shapes."""
+    prompt = gen.build_prompt(nodes[:1], {"actor_label": "x"}, [])
+    payload = json.loads(prompt[prompt.find("{") :])
+    example = payload["draft_example"]["x_eventmill"]
+    assert isinstance(example["node"], dict)
+    assert isinstance(example["telemetry"], list)
+    assert isinstance(example["telemetry"][0], dict)
+    assert example["detection_logic"]["missing_data_behaviour"] == "insufficient_telemetry"
+    assert payload["draft_contract"]["field_types"]["x_eventmill.node"] == "object"
+    assert "never a string" in gen.SYSTEM_CONTEXT
+
+
+def test_one_wrong_shape_reports_one_problem_not_four(nodes):
+    """A `node` that arrived as a string buried its own cause in symptoms."""
+    node = nodes[0]
+    draft = _draft_for(node)
+    draft["x_eventmill"]["node"] = "scm-to-vault step 0"
+    problems = gen.validate_draft(draft, node)
+    assert problems == ["x_eventmill.node is str, not an object"]
+
+
+def test_a_wrong_logic_shape_does_not_also_report_its_contents(nodes):
+    node = nodes[0]
+    draft = _draft_for(node)
+    draft["x_eventmill"]["detection_logic"] = "just pseudocode"
+    problems = gen.validate_draft(draft, node)
+    assert problems == ["x_eventmill.detection_logic is str, not an object"]

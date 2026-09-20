@@ -52,7 +52,76 @@ and grounded. Everything factual is supplied to you. Follow these rules:
 - Thresholds and windows are proposed starting parameters. State the grouping
   and what a baseline would need; do not assert a universal normal.
 
+Match draft_example's STRUCTURE exactly, field for field. x_eventmill.node is
+an object, never a string. x_eventmill.telemetry is an array of objects, never
+an object or an array of strings. Copy each step's draft_id, path_id and
+node_index verbatim from steps_to_draft.
+
 Reply with a single JSON object: {"drafts": [ ... ]}. No prose outside it."""
+
+
+# One filled draft, shown rather than described. The first live run produced
+# `node` as a string and `telemetry` as an object, because the contract named
+# the required keys without ever showing their shape - a reasonable guess
+# against an under-specified prompt.
+DRAFT_EXAMPLE: dict[str, Any] = {
+    "title": "T#### - <component> - <behaviour being detected>",
+    "status": "experimental",
+    "description": "What this detects and whether it observes an attempt or an outcome.",
+    "logsource": {
+        "product": "<only when context_completeness is component_bound, else omit>",
+        "definition": "<the collection required, when no product may be named>",
+    },
+    "falsepositives": ["<a legitimate lookalike>"],
+    "level": "medium",
+    "tags": ["attack.t####"],
+    "x_eventmill": {
+        "format_version": DRAFT_FORMAT_VERSION,
+        "draft_id": "<copy from the step>",
+        "node": {
+            "path_id": "<copy from the step>",
+            "node_index": 0,
+            "technique_id": "<copy from the step>",
+        },
+        "grounding": {
+            "actor_behaviour": "<what the local evidence documents>",
+            "modelled_placement": "<how the path applies it here>",
+            "detection_inference": "<what would be observable>",
+            "limitations": ["<what the sources cannot show>"],
+        },
+        "assessment": {"version": "1.0", "tuple": "<copy the step's assessment>"},
+        "telemetry": [
+            {
+                "source_id": "<one of the step's telemetry_candidates>",
+                "necessity": "required",
+                "collection_status": "unknown",
+                "required_fields": ["<native field>"],
+                "prerequisites": ["<what must be configured>"],
+            }
+        ],
+        "events_of_interest": [
+            {
+                "source_id": "<same source>",
+                "event_ref": "<native id, or null>",
+                "mapping_status": "description_only",
+                "description": "<the event, when it has no native id>",
+            }
+        ],
+        "detection_logic": {
+            "kind": "single_event",
+            "normalized_fields": [{"name": "<field>", "from": "<native field>"}],
+            "join_keys": [],
+            "window": None,
+            "thresholds": {},
+            "pseudocode": "<the logic, as prose or pseudocode>",
+            "missing_data_behaviour": "insufficient_telemetry",
+        },
+        "assumptions": ["<what this draft assumes>"],
+        "review_flags": [],
+        "catalogue_status": "new_unchecked",
+        "validation_status": "draft_unvalidated",
+    },
+}
 
 
 def node_packet(node: dict[str, Any]) -> dict[str, Any]:
@@ -138,17 +207,23 @@ def build_prompt(
         },
         "path_outline": path_outline,
         "steps_to_draft": [node_packet(node) for node in batch],
+        "draft_example": DRAFT_EXAMPLE,
         "draft_contract": {
-            "required_top_level": ["title", "status", "description", "logsource", "x_eventmill"],
-            "x_eventmill_required": [
-                "format_version", "draft_id", "node", "telemetry",
-                "detection_logic", "assessment", "catalogue_status",
-                "validation_status",
-            ],
-            "status": "experimental",
-            "catalogue_status": "new_unchecked",
-            "validation_status": "draft_unvalidated",
-            "format_version": DRAFT_FORMAT_VERSION,
+            "one_draft_per_step": True,
+            "field_types": {
+                "x_eventmill.node": "object",
+                "x_eventmill.telemetry": "array of objects",
+                "x_eventmill.events_of_interest": "array of objects",
+                "x_eventmill.detection_logic": "object",
+                "logsource": "object",
+            },
+            "fixed_values": {
+                "status": "experimental",
+                "catalogue_status": "new_unchecked",
+                "validation_status": "draft_unvalidated",
+                "format_version": DRAFT_FORMAT_VERSION,
+                "x_eventmill.detection_logic.missing_data_behaviour": "insufficient_telemetry",
+            },
         },
     }
     return (
@@ -272,13 +347,19 @@ def validate_draft(draft: dict[str, Any], node: dict[str, Any]) -> list[str]:
     if extension.get("catalogue_status") not in (None, "new_unchecked"):
         problems.append("catalogue_status must be new_unchecked")
 
-    node_block = as_dict(extension.get("node"))
-    for field in ("path_id", "node_index"):
-        if node_block.get(field) != node.get(field):
-            problems.append(f"x_eventmill.node.{field} does not match the source node")
-    supplied_technique = node_block.get("technique_id")
-    if supplied_technique and supplied_technique != node.get("technique_id"):
-        problems.append("technique_id was changed from the source node")
+    # Only compare fields when the block is the right shape. A `node` that
+    # arrived as a string otherwise reports four problems that are one
+    # problem, and the cause is buried under its own symptoms.
+    if isinstance(extension.get("node"), dict):
+        node_block = extension["node"]
+        for field in ("path_id", "node_index"):
+            if node_block.get(field) != node.get(field):
+                problems.append(
+                    f"x_eventmill.node.{field} does not match the source node"
+                )
+        supplied_technique = node_block.get("technique_id")
+        if supplied_technique and supplied_technique != node.get("technique_id"):
+            problems.append("technique_id was changed from the source node")
 
     title = draft.get("title") or ""
     technique = node.get("technique_id") or ""
@@ -313,8 +394,10 @@ def _validate_telemetry(extension: dict[str, Any], node: dict[str, Any]) -> list
 def _validate_logic(extension: dict[str, Any], node: dict[str, Any]) -> list[str]:
     """Missing data must be a declared state, and product claims need the grade."""
     problems: list[str] = []
-    logic = as_dict(extension.get("detection_logic"))
-    if logic and logic.get("missing_data_behaviour") != "insufficient_telemetry":
+    if not isinstance(extension.get("detection_logic"), dict):
+        return problems  # already reported as a shape problem
+    logic = extension["detection_logic"]
+    if logic.get("missing_data_behaviour") != "insufficient_telemetry":
         problems.append(
             "missing_data_behaviour must be insufficient_telemetry; absent data "
             "may never evaluate as benign"
