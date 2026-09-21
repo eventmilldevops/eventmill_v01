@@ -2860,7 +2860,40 @@ class EventMillShell(cmd.Cmd):
         if len(parts) <= 1 or (len(parts) == 2 and not line.endswith(" ")):
             all_tools = [p.tool_name for p in self.plugin_loader.list_all()]
             return [t for t in sorted(all_tools) if t.startswith(text)]
-        return []
+
+        # Past the tool name: complete this tool's own flags and, for
+        # schema properties with an 'enum', their values — driven entirely
+        # by the tool's input_schema, so a new tool gets this for free.
+        plugin = self.plugin_loader.get(parts[1])
+        if plugin is None:
+            return []
+        schema = self._plugin_input_schema(plugin)
+        if not schema:
+            return []
+
+        # The token immediately before the word being completed tells a
+        # flag name apart from a flag's value — 'run t --mode ' completing
+        # '' has prev '--mode'; 'run t --mo' completing '--mo' has prev
+        # the tool name, so it falls through to flag-name completion.
+        before = line[:begidx].split()
+        prev = before[-1] if before else ""
+        prev_key = prev[2:] if prev.startswith("--") else None
+
+        if prev_key and prev_key in schema:
+            enum = schema[prev_key].get("enum")
+            if not enum:
+                return []  # no declared values to complete for this flag
+            return [str(v) for v in enum if str(v).startswith(text)]
+
+        # Completing a flag name. List-valued flags may legitimately repeat
+        # (do_run appends rather than overwrites), everything else is
+        # dropped from the list once it is already on the line.
+        used = {tok[2:] for tok in parts[2:] if tok.startswith("--")}
+        candidates = [
+            f"--{name}" for name, spec in schema.items()
+            if name not in used or self._declared_type(spec) == "array"
+        ]
+        return [c for c in sorted(candidates) if c.startswith(text)]
 
     def do_run(self, arg: str) -> None:
         """Run a tool on the current session.
