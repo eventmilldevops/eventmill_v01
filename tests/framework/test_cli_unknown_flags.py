@@ -11,10 +11,10 @@ Three things had to line up for that to be silent. The shell reads
 are passed through deliberately, "for the plugin's own validate_inputs() to
 judge". And no plugin's `validate_inputs` rejects unknown keys.
 
-The fix warns and names the arguments the tool does accept. It deliberately
-does **not** correct the flag or guess what was meant: this is a triage tool
-for technologists, and naming the right path is the job. Inferring intent and
-running something the operator did not type is not.
+The fix names the arguments the tool does accept and blocks the run rather
+than continuing with an incomplete guess at what the operator meant. Naming
+the right path is the job; inferring intent, and running the tool anyway once
+the operator's real request could not, is not.
 """
 
 from pathlib import Path
@@ -83,21 +83,18 @@ class TestAnUnknownFlagIsNamed:
         assert "--max_word_count" in out
 
     def test_nothing_is_corrected_or_substituted(self, shell, plugin, capsys):
-        """The warning must not become a guess. `ignore_caps` stays absent, so
-        the run does what the operator actually typed - which is the whole
-        reason the warning exists."""
+        """The message must not become a guess. `ignore_caps` is never inferred
+        from `ignore_cap` - the run is blocked instead of silently retargeted."""
         payload = shell._parse_flag_payload("--ignore_cap", plugin)
-        assert payload == {"ignore_cap": True}
-        assert "ignore_caps" not in payload
+        assert payload is None
 
-    def test_it_warns_but_does_not_block(self, shell, plugin, capsys):
-        """A warning, not a refusal: an undeclared key may still be one the
-        plugin's own validate_inputs() accepts."""
+    def test_it_blocks_rather_than_running_with_a_guess(self, shell, plugin, capsys):
+        """An unknown flag aborts the whole run - even alongside otherwise-valid
+        flags - rather than running the tool on a partial, unintended payload."""
         payload = shell._parse_flag_payload(
             "--action summarize --ignore_cap", plugin,
         )
-        assert payload is not None
-        assert payload["action"] == "summarize"
+        assert payload is None
 
     def test_a_correct_flag_says_nothing(self, shell, plugin, capsys):
         payload = shell._parse_flag_payload(

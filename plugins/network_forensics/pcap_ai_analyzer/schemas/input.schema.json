@@ -17,6 +17,11 @@
       "default": false,
       "description": "Enable Condition Orange (heightened alert, paranoid analysis posture)."
     },
+    "export_type": {
+      "type": "string",
+      "enum": ["pdf"],
+      "description": "Also render the report as a PDF (requires fpdf2). The markdown report is always written regardless of this flag."
+    },
     "hunt_payload": {
       "type": "object",
       "description": "Optional parameters to pass to the underlying hunt tool."
