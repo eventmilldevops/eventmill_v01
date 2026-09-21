@@ -11,5 +11,6 @@ Available plugins:
     pcap_threat_hunter     — 7 threat hunt tools (talkers/ports/beacons/dns/tls/lateral/exfil) with ICS awareness
     pcap_ai_analyzer       — AI-enhanced analysis with 3 prompt tiers and Condition Orange support
     pcap_report_correlator — 3-stage sync_pcap: IOC extraction from reports → PCAP matching → correlated output
+    pcap_enrichment        — BigQuery IP enrichment with configurable --table and --fields
     firewall_log_aggregator — Multi-vendor firewall log parsing, aggregation, deny hotspots, port scan detection
 """

@@ -173,7 +173,7 @@ class PcapThreatHunter:
     # ===================================================================
 
     def _hunt_talkers(self, session: Any, payload: dict) -> ToolResult:
-        from plugins.network_forensics.pcap_metadata_summary.tool import is_internal
+        from plugins.network_forensics.pcap_metadata_summary.tool import is_internal, is_known_org
 
         top_n = payload.get("top_n", 20)
         sort_by = payload.get("sort_by", "bytes")
@@ -208,7 +208,7 @@ class PcapThreatHunter:
         lines = [f"Top {min(top_n, len(sorted_hosts))} talkers by {sort_by}:", "-" * 70]
 
         for i, (host, hs) in enumerate(sorted_hosts[:top_n], 1):
-            loc = "INT" if is_internal(host) else "EXT"
+            loc = "ORG" if is_known_org(host) else ("INT" if is_internal(host) else "EXT")
             total_bytes = hs["bytes_out"] + hs["bytes_in"]
             peer_count = len(hs["peers"])
 
@@ -297,7 +297,8 @@ class PcapThreatHunter:
                 svc = ICS_PORTS[port]
                 lines.append(
                     f"  {port:<6} {svc:<16} flows={stats['count']}  "
-                    f"sources={len(stats['sources'])}"
+                    f"sources={len(stats['sources'])}  "
+                    f"{_format_bytes(stats['bytes'])}"
                 )
                 findings.append({
                     "port": port,
@@ -319,7 +320,8 @@ class PcapThreatHunter:
                 svc = SUSPICIOUS_PORTS[port]
                 lines.append(
                     f"  {port:<6} {svc:<16} flows={stats['count']}  "
-                    f"sources={len(stats['sources'])}"
+                    f"sources={len(stats['sources'])}  "
+                    f"{_format_bytes(stats['bytes'])}"
                 )
                 findings.append({
                     "port": port,

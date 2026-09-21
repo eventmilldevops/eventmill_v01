@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "mode": { "type": "string" },
+    "table": { "type": "string" },
+    "fields": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "total_ips": { "type": "integer" },
+    "matched_ips": { "type": "integer" },
+    "unmatched_ips": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "enrichment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ip": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "formatted_output": { "type": "string" }
+  }
+}

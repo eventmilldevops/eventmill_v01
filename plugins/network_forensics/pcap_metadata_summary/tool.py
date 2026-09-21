@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import tempfile
 import ipaddress
@@ -21,8 +22,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("eventmill.plugins.pcap_metadata_summary")
 
-MAX_PCAP_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
-
 # RFC 1918 private ranges
 PRIVATE_NETWORKS = [
     ipaddress.ip_network("10.0.0.0/8"),
@@ -30,12 +29,35 @@ PRIVATE_NETWORKS = [
     ipaddress.ip_network("192.168.0.0/16"),
 ]
 
+# Organization-owned public IP ranges (populated from investigation context).
+# When a loaded context .md contains a section like
+#   # Known Organization Public IP Ranges
+#   161.141.0.0/16
+# those ranges are registered here so every tool treats them as internal.
+KNOWN_ORG_NETWORKS: list[ipaddress.IPv4Network] = []
 
-def is_internal(ip_str: str) -> bool:
-    """Check if an IP is in RFC1918 private ranges."""
+
+def register_org_networks(networks: list[ipaddress.IPv4Network]) -> None:
+    """Register organization-owned public IP ranges as internal."""
+    KNOWN_ORG_NETWORKS.clear()
+    KNOWN_ORG_NETWORKS.extend(networks)
+
+
+def is_known_org(ip_str: str) -> bool:
+    """Check if IP belongs to a known organization public range (non-RFC1918)."""
     try:
         addr = ipaddress.ip_address(ip_str)
-        return any(addr in net for net in PRIVATE_NETWORKS)
+        return any(addr in net for net in KNOWN_ORG_NETWORKS)
+    except ValueError:
+        return False
+
+
+def is_internal(ip_str: str) -> bool:
+    """Check if an IP is in RFC1918 private ranges or known organization ranges."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        return (any(addr in net for net in PRIVATE_NETWORKS)
+                or any(addr in net for net in KNOWN_ORG_NETWORKS))
     except ValueError:
         return False
 
@@ -80,6 +102,7 @@ class PcapSession:
         self.file_path: str = ""
         self._temp_path: Optional[str] = None
         self.file_size: int = 0
+        self.bytes_transferred: int = 0  # total payload bytes from conn.log (Zeek)
         self.packet_count: int = 0
         self.start_time: Optional[float] = None
         self.end_time: Optional[float] = None
@@ -117,8 +140,33 @@ class PcapSession:
         # OT / ICS protocol transactions
         self.ot_transactions: List[Dict] = []
 
+        # SCADA message-bus tag data (JSON payloads from OASyS / AMQP-like)
+        self.scada_tags: Dict[str, Dict] = {}  # tag_name -> {src, dst, count, values_sample, quality}
+        self.scada_tag_sources: Counter = Counter()  # src_ip -> message count
+
+        # Syslog summary (condensed stats, not raw messages)
+        self.syslog_sources: Counter = Counter()      # src_ip -> message count
+        self.syslog_severity: Counter = Counter()     # severity_int -> count
+        self.syslog_facilities: Counter = Counter()   # facility_int -> count
+        self.syslog_patterns: Counter = Counter()     # pattern keyword -> count
+        self.syslog_total: int = 0
+
+        # IT security protocol activity (port-level detection + basic extraction)
+        self.ssh_sessions: List[Dict] = []            # {src, dst, src_port, ts, banner}
+        self.snmp_communities: Counter = Counter()    # community_string -> count
+        self.snmp_sources: Counter = Counter()        # src_ip -> count
+
+        # AD / Windows protocol activity (Zeek-populated)
+        self.kerberos_tickets: List[Dict] = []        # {client, service, cipher, success, src, dst, ts}
+        self.smb_mappings: List[Dict] = []            # {src, dst, share, path, ts}
+        self.smb_files: List[Dict] = []               # {src, dst, action, name, path, size, ts}
+        self.dce_rpc_calls: List[Dict] = []           # {src, dst, endpoint, operation, ts}
+        self.ldap_operations: List[Dict] = []         # {src, dst, message_type, base_object, result, ts}
+        self.ntlm_auths: List[Dict] = []              # {src, dst, hostname, domain, username, success, ts}
+
         # Cleartext credential detections (values are redacted)
         self.cleartext_creds: List[Dict] = []
+        self.cleartext_creds_total: int = 0
 
         # Unique IPs
         self.src_ips: Counter = Counter()
@@ -159,9 +207,29 @@ class PcapSession:
         self.stp_bpdu_count: int = 0
         self.stp_tcn_count: int = 0
         self.stp_tc_flag_count: int = 0
-        self.stp_root_bridges: Dict[str, List] = defaultdict(list)
+        self.stp_tca_count: int = 0                          # TC Acknowledgment flag
+        self.stp_root_bridges: Dict[str, List] = defaultdict(list)  # root_key -> [timestamps]
         self._stp_timestamps: List[float] = []
-        self.stp_bridges: Counter = Counter()
+        self.stp_bridges: Counter = Counter()                # bridge_key -> BPDU count
+        self.stp_version_counts: Counter = Counter()         # {STP, RSTP, MSTP} -> count
+        self.stp_port_roles: Counter = Counter()             # {Root, Designated, Alternate, Backup, Unknown} -> count
+        self.stp_port_states: Counter = Counter()            # {Learning, Forwarding, Blocking, ...} -> count
+        self.stp_proposal_count: int = 0                     # RSTP proposal flag count
+        self.stp_agreement_count: int = 0                    # RSTP agreement flag count
+        self.stp_tc_events: List[float] = []                 # timestamps when TC flag set
+        self.stp_tcn_events: List[float] = []                # timestamps when TCN BPDU sent
+        self.stp_root_changes: List[tuple] = []              # (timestamp, vlan, old_root, new_root)
+        self._stp_last_root_per_vlan: Dict[int, str] = {}    # PVST+: track root per VLAN
+        self.stp_path_costs: Dict[str, List] = defaultdict(list)   # bridge_key -> [(ts, cost)]
+        self.stp_port_ids: Counter = Counter()               # port_id_hex -> count
+        self.stp_vlans: Counter = Counter()                  # VLAN ID -> count (from System ID Extension)
+        self.stp_timers: Dict[str, Counter] = {              # timer value distribution
+            'hello': Counter(), 'max_age': Counter(), 'fwd_delay': Counter()
+        }
+        self.stp_src_macs: Counter = Counter()               # source MAC -> count (which switches send BPDUs)
+        self._stp_per_port_ts: Dict[str, List[float]] = defaultdict(list)  # src_mac -> [timestamps] for gap detection
+        self.stp_bpdu_gaps: List[tuple] = []                 # (src_mac, gap_start_ts, gap_seconds) gaps > max_age
+        self.stp_mac_mismatches: List[tuple] = []            # (ts, eth_src_mac, bpdu_bridge_mac) spoofing indicator
 
         # Control plane — HSRP
         self.hsrp_hello_count: int = 0
@@ -197,6 +265,21 @@ class PcapSession:
         self.ip_fragment_count: int = 0
         self.ttl_distribution: Counter = Counter()
 
+        # VLAN tracking
+        self.vlan_ids: Counter = Counter()
+        self.vlan_to_ips: Dict[int, set] = defaultdict(set)
+        self.vlan_1_detected: bool = False
+        self.untagged_frame_count: int = 0
+
+        # CDP / LLDP neighbor discovery
+        self.cdp_frame_count: int = 0
+        self.cdp_neighbors: Dict[str, Dict] = {}
+        self.lldp_frame_count: int = 0
+        self.lldp_neighbors: Dict[str, Dict] = {}
+
+        # Network discovery evidence (OSPF, DHCP, ARP, broadcast-inferred)
+        self.network_evidence: List[Dict] = []
+
     @property
     def unique_ips(self) -> set:
         """All unique IPs seen (src + dst)."""
@@ -216,6 +299,231 @@ class PcapSession:
         if secs < 3600:
             return f"{secs / 60:.1f}min"
         return f"{secs / 3600:.1f}hrs"
+
+    def merge_into(self, other: "PcapSession") -> None:
+        """Merge *other* session data into this session (cumulative load)."""
+        # Filename / metadata
+        if other.filename:
+            if self.filename:
+                self.filename += f", {other.filename}"
+            else:
+                self.filename = other.filename
+        if other.file_path:
+            if self.file_path:
+                self.file_path += f", {other.file_path}"
+            else:
+                self.file_path = other.file_path
+        self.file_size += other.file_size
+        self.bytes_transferred += other.bytes_transferred
+        self.packet_count += other.packet_count
+
+        # Time range — take the widest window
+        if other.start_time is not None:
+            if self.start_time is None or other.start_time < self.start_time:
+                self.start_time = other.start_time
+        if other.end_time is not None:
+            if self.end_time is None or other.end_time > self.end_time:
+                self.end_time = other.end_time
+
+        # Conversations — merge per-flow stats
+        for key, oconv in other.conversations.items():
+            sconv = self.conversations[key]
+            sconv["packets"] += oconv["packets"]
+            sconv["bytes_out"] += oconv["bytes_out"]
+            sconv["bytes_in"] += oconv["bytes_in"]
+            # Cap timestamps to avoid OOM on large multi-file merges.
+            # Keep first/last 500 per flow — enough for beacon detection.
+            _TS_CAP = 1000
+            combined = sconv["timestamps"]
+            combined.extend(oconv["timestamps"])
+            if len(combined) > _TS_CAP:
+                combined.sort()
+                sconv["timestamps"] = combined[:500] + combined[-500:]
+            if oconv["first_seen"] is not None:
+                if sconv["first_seen"] is None or oconv["first_seen"] < sconv["first_seen"]:
+                    sconv["first_seen"] = oconv["first_seen"]
+            if oconv["last_seen"] is not None:
+                if sconv["last_seen"] is None or oconv["last_seen"] > sconv["last_seen"]:
+                    sconv["last_seen"] = oconv["last_seen"]
+
+        # Counters — add
+        self.dst_ports += other.dst_ports
+        self.src_ports += other.src_ports
+        self.port_proto.update(other.port_proto)
+        self.protocols += other.protocols
+        self.src_ips += other.src_ips
+        self.dst_ips += other.dst_ips
+
+        # Lists — extend
+        self.dns_queries.extend(other.dns_queries)
+        self.dns_responses.extend(other.dns_responses)
+        self.http_requests.extend(other.http_requests)
+        self.tls_handshakes.extend(other.tls_handshakes)
+        self.ot_transactions.extend(other.ot_transactions)
+        self.cleartext_creds.extend(other.cleartext_creds)
+        self.cleartext_creds_total += other.cleartext_creds_total
+
+        # TCP health
+        self.tcp_retransmissions += other.tcp_retransmissions
+        self.tcp_rst_count += other.tcp_rst_count
+        self.tcp_syn_count += other.tcp_syn_count
+        self.tcp_fin_count += other.tcp_fin_count
+        self.tcp_zero_window_count += other.tcp_zero_window_count
+
+        for key, ohealth in other.conv_health.items():
+            shealth = self.conv_health[key]
+            shealth["rst"] += ohealth["rst"]
+            shealth["retransmit"] += ohealth["retransmit"]
+            shealth["zero_window"] += ohealth["zero_window"]
+
+        # ICMP
+        self.icmp_errors.extend(other.icmp_errors)
+        for dest, entries in other.ttl_exceeded_by_dest.items():
+            self.ttl_exceeded_by_dest[dest].extend(entries)
+        self.suspected_loop_packets.extend(other.suspected_loop_packets)
+
+        # ARP
+        self.arp_request_count += other.arp_request_count
+        self.arp_reply_count += other.arp_reply_count
+        self.arp_gratuitous_count += other.arp_gratuitous_count
+        self._arp_timestamps.extend(other._arp_timestamps)
+        self.arp_requests_by_src += other.arp_requests_by_src
+        for ip, macs in other.arp_ip_to_macs.items():
+            self.arp_ip_to_macs[ip].update(macs)
+        self._arp_request_targets += other._arp_request_targets
+        self._arp_reply_targets += other._arp_reply_targets
+
+        # STP
+        self.stp_bpdu_count += other.stp_bpdu_count
+        self.stp_tcn_count += other.stp_tcn_count
+        self.stp_tc_flag_count += other.stp_tc_flag_count
+        self.stp_tca_count += other.stp_tca_count
+        for bridge, entries in other.stp_root_bridges.items():
+            self.stp_root_bridges[bridge].extend(entries)
+        self._stp_timestamps.extend(other._stp_timestamps)
+        self.stp_bridges += other.stp_bridges
+        self.stp_version_counts += other.stp_version_counts
+        self.stp_port_roles += other.stp_port_roles
+        self.stp_port_states += other.stp_port_states
+        self.stp_proposal_count += other.stp_proposal_count
+        self.stp_agreement_count += other.stp_agreement_count
+        self.stp_tc_events.extend(other.stp_tc_events)
+        self.stp_tcn_events.extend(other.stp_tcn_events)
+        self.stp_root_changes.extend(other.stp_root_changes)
+        for bridge, entries in other.stp_path_costs.items():
+            self.stp_path_costs[bridge].extend(entries)
+        self.stp_port_ids += other.stp_port_ids
+        self.stp_vlans += other.stp_vlans
+        for timer_name in ('hello', 'max_age', 'fwd_delay'):
+            self.stp_timers[timer_name] += other.stp_timers[timer_name]
+        self.stp_src_macs += other.stp_src_macs
+
+        # HSRP
+        self.hsrp_hello_count += other.hsrp_hello_count
+        self.hsrp_events.extend(other.hsrp_events)
+        self.hsrp_state_changes.extend(other.hsrp_state_changes)
+
+        # VRRP
+        self.vrrp_advert_count += other.vrrp_advert_count
+        self.vrrp_events.extend(other.vrrp_events)
+        self.vrrp_priority_changes.extend(other.vrrp_priority_changes)
+
+        # OSPF
+        self.ospf_total_count += other.ospf_total_count
+        self.ospf_hello_count += other.ospf_hello_count
+        self.ospf_dbd_count += other.ospf_dbd_count
+        self.ospf_lsrequest_count += other.ospf_lsrequest_count
+        self.ospf_lsupdate_count += other.ospf_lsupdate_count
+        self.ospf_lsack_count += other.ospf_lsack_count
+        self.ospf_areas.update(other.ospf_areas)
+        self.ospf_router_ids.update(other.ospf_router_ids)
+        for pair, ts_list in other.ospf_neighbor_hellos.items():
+            self.ospf_neighbor_hellos[pair].extend(ts_list)
+        self._ospf_lsupdate_timestamps.extend(other._ospf_lsupdate_timestamps)
+
+        # EIGRP
+        self.eigrp_total_count += other.eigrp_total_count
+        self.eigrp_hello_count += other.eigrp_hello_count
+        self.eigrp_update_count += other.eigrp_update_count
+        self.eigrp_query_count += other.eigrp_query_count
+        self.eigrp_reply_count += other.eigrp_reply_count
+        self.eigrp_as_numbers.update(other.eigrp_as_numbers)
+
+        # IP fragmentation & TTL
+        self.ip_fragment_count += other.ip_fragment_count
+        self.ttl_distribution += other.ttl_distribution
+
+        # VLAN tracking
+        self.vlan_ids += other.vlan_ids
+        for vid, ips in other.vlan_to_ips.items():
+            self.vlan_to_ips[vid].update(ips)
+        if other.vlan_1_detected:
+            self.vlan_1_detected = True
+        self.untagged_frame_count += other.untagged_frame_count
+
+        # CDP / LLDP
+        self.cdp_frame_count += other.cdp_frame_count
+        for mac, info in other.cdp_neighbors.items():
+            if mac not in self.cdp_neighbors:
+                self.cdp_neighbors[mac] = dict(info)
+        self.lldp_frame_count += other.lldp_frame_count
+        for mac, info in other.lldp_neighbors.items():
+            if mac not in self.lldp_neighbors:
+                self.lldp_neighbors[mac] = dict(info)
+
+        # Network discovery evidence
+        self.network_evidence.extend(other.network_evidence)
+
+        # --- New protocol fields ---
+
+        # SCADA tags — merge dicts (add counts, extend samples)
+        for tag, info in other.scada_tags.items():
+            if tag in self.scada_tags:
+                self.scada_tags[tag]["count"] += info["count"]
+                samples = self.scada_tags[tag]["values_sample"]
+                for v in info.get("values_sample", []):
+                    if len(samples) < 10:
+                        samples.append(v)
+                self.scada_tags[tag]["quality"] = info.get("quality", self.scada_tags[tag]["quality"])
+            else:
+                self.scada_tags[tag] = dict(info)  # copy
+        self.scada_tag_sources += other.scada_tag_sources
+
+        # Syslog summary
+        self.syslog_sources += other.syslog_sources
+        self.syslog_severity += other.syslog_severity
+        self.syslog_facilities += other.syslog_facilities
+        self.syslog_patterns += other.syslog_patterns
+        self.syslog_total += other.syslog_total
+
+        # SSH sessions (cap at 500)
+        remaining = max(0, 500 - len(self.ssh_sessions))
+        self.ssh_sessions.extend(other.ssh_sessions[:remaining])
+
+        # SNMP
+        self.snmp_communities += other.snmp_communities
+        self.snmp_sources += other.snmp_sources
+
+        # AD / Windows protocols (cap at 1000 each)
+        for attr, cap in (
+            ("kerberos_tickets", 1000),
+            ("smb_mappings", 1000),
+            ("smb_files", 1000),
+            ("dce_rpc_calls", 1000),
+            ("ldap_operations", 1000),
+            ("ntlm_auths", 1000),
+        ):
+            mine = getattr(self, attr)
+            remaining = max(0, cap - len(mine))
+            mine.extend(getattr(other, attr)[:remaining])
+
+        # Cap unbounded lists accumulated across files
+        _LIST_CAP = 50_000
+        for attr in ("dns_queries", "dns_responses", "http_requests",
+                      "tls_handshakes", "ot_transactions", "icmp_errors"):
+            lst = getattr(self, attr)
+            if len(lst) > _LIST_CAP:
+                setattr(self, attr, lst[:_LIST_CAP])
 
 
 # ---------------------------------------------------------------------------
@@ -297,9 +605,11 @@ try:
 
     from scapy.utils import PcapReader
     from scapy.layers.inet import IP, TCP, UDP, ICMP
-    from scapy.layers.l2 import ARP
+    from scapy.layers.l2 import ARP, SNAP, STP
     from scapy.layers.dns import DNS, DNSQR, DNSRR
     from scapy.layers.http import HTTPRequest, HTTPResponse
+    from scapy.layers.hsrp import HSRP as ScapyHSRP
+    from scapy.layers.vrrp import VRRP as ScapyVRRP
     from scapy.packet import Raw
     SCAPY_AVAILABLE = True
 
@@ -333,6 +643,7 @@ def parse_pcap_file(file_path: str) -> PcapSession:
     session.file_size = os.path.getsize(file_path)
 
     _seen_ip_ids: Dict[Tuple[str, str, int, int], int] = {}  # (src, dst, proto, ip_id) -> ttl
+    _seen_tcp_seqs: Dict[Tuple[str, str, int, int, int], int] = {}  # (src, dst, sport, dport, seq) -> payload_len
 
     with PcapReader(file_path) as reader:
         for pkt in reader:
@@ -371,6 +682,122 @@ def parse_pcap_file(file_path: str) -> PcapSession:
                         session._arp_reply_targets[src_ip_arp] += 1
                     if src_ip_arp and psrc_mac:
                         session.arp_ip_to_macs[src_ip_arp].add(psrc_mac)
+
+            # --- STP / BPDU extraction (L2, before IP check) ---
+            stp = None
+            if pkt.haslayer(STP):
+                stp = pkt[STP]
+            elif pkt.haslayer(SNAP):
+                _snap = pkt[SNAP]
+                if _snap.OUI == 0x00000c and _snap.code == 0x010b:
+                    try:
+                        stp = STP(bytes(_snap.payload))
+                    except Exception:
+                        pass
+            if stp is not None:
+                try:
+                    session.stp_bpdu_count += 1
+                    session._stp_timestamps.append(ts)
+
+                    # Source MAC of the switch sending this BPDU
+                    eth_src = ''
+                    if hasattr(pkt, 'src'):
+                        eth_src = pkt.src
+                        session.stp_src_macs[eth_src] += 1
+                        session._stp_per_port_ts[eth_src].append(ts)
+
+                    # STP version: 0=STP, 2=RSTP, 3=MSTP
+                    version = getattr(stp, 'version', 0) or 0
+                    version_name = {0: 'STP', 2: 'RSTP', 3: 'MSTP'}.get(version, f'v{version}')
+                    session.stp_version_counts[version_name] += 1
+
+                    # Extract bridge ID (priority + MAC)
+                    bridge_mac = getattr(stp, 'bridgemac', '') or ''
+                    bridge_id = getattr(stp, 'bridgeid', 0) or 0
+                    bridge_key = f"{bridge_id}:{bridge_mac}"
+                    if bridge_key:
+                        session.stp_bridges[bridge_key] += 1
+
+                    # MAC mismatch detection (spoofing indicator)
+                    if eth_src and bridge_mac and eth_src.lower() != bridge_mac.lower():
+                        # Different base MACs (ignore port offset in last octet)
+                        eth_base = eth_src.lower().rsplit(':', 1)[0]
+                        bpdu_base = bridge_mac.lower().rsplit(':', 1)[0]
+                        if eth_base != bpdu_base:
+                            if len(session.stp_mac_mismatches) < 50:
+                                session.stp_mac_mismatches.append((ts, eth_src, bridge_mac))
+
+                    # VLAN from System ID Extension (lower 12 bits of bridge priority)
+                    vlan_id = bridge_id & 0x0FFF
+                    if vlan_id > 0:
+                        session.stp_vlans[vlan_id] += 1
+
+                    # Root bridge tracking (PVST+-aware: per-VLAN)
+                    root_mac = getattr(stp, 'rootmac', '') or ''
+                    root_id = getattr(stp, 'rootid', 0) or 0
+                    root_key = f"{root_id}:{root_mac}"
+                    if root_key:
+                        session.stp_root_bridges[root_key].append(ts)
+                    # Detect root bridge changes within same VLAN
+                    root_vlan = root_id & 0x0FFF
+                    prev_root = session._stp_last_root_per_vlan.get(root_vlan)
+                    if prev_root and root_key != prev_root:
+                        session.stp_root_changes.append((ts, root_vlan, prev_root, root_key))
+                    session._stp_last_root_per_vlan[root_vlan] = root_key
+
+                    # Root path cost
+                    path_cost = getattr(stp, 'pathcost', None)
+                    if path_cost is not None and bridge_key:
+                        session.stp_path_costs[bridge_key].append((ts, path_cost))
+
+                    # Port ID
+                    port_id = getattr(stp, 'portid', None)
+                    if port_id is not None:
+                        session.stp_port_ids[f"0x{port_id:04x}"] += 1
+
+                    # Timer values
+                    hello = getattr(stp, 'hellotime', None)
+                    maxage = getattr(stp, 'maxage', None)
+                    fwddelay = getattr(stp, 'fwddelay', None)
+                    if hello is not None:
+                        session.stp_timers['hello'][hello // 256 if hello > 255 else hello] += 1
+                    if maxage is not None:
+                        session.stp_timers['max_age'][maxage // 256 if maxage > 255 else maxage] += 1
+                    if fwddelay is not None:
+                        session.stp_timers['fwd_delay'][fwddelay // 256 if fwddelay > 255 else fwddelay] += 1
+
+                    # BPDU type and flags
+                    bpdu_type = getattr(stp, 'bpdutype', 0)
+                    bpdu_flags = getattr(stp, 'bpduflags', 0) or 0
+                    if bpdu_type == 0x80:  # TCN BPDU
+                        session.stp_tcn_count += 1
+                        session.stp_tcn_events.append(ts)
+                    # Flags parsing (RSTP flags byte)
+                    if bpdu_flags & 0x01:  # Bit 0: Topology Change
+                        session.stp_tc_flag_count += 1
+                        session.stp_tc_events.append(ts)
+                    if bpdu_flags & 0x80:  # Bit 7: TC Acknowledgment
+                        session.stp_tca_count += 1
+                    if bpdu_flags & 0x02:  # Bit 1: Proposal (RSTP)
+                        session.stp_proposal_count += 1
+                    if bpdu_flags & 0x40:  # Bit 6: Agreement (RSTP)
+                        session.stp_agreement_count += 1
+                    # Bits 2-3: Port Role (RSTP)
+                    port_role_bits = (bpdu_flags >> 2) & 0x03
+                    port_role = {0: 'Unknown', 1: 'Alternate/Backup',
+                                 2: 'Root', 3: 'Designated'}.get(port_role_bits, 'Unknown')
+                    session.stp_port_roles[port_role] += 1
+                    # Bits 4-5: Learning/Forwarding state (RSTP)
+                    learning = bool(bpdu_flags & 0x10)
+                    forwarding = bool(bpdu_flags & 0x20)
+                    if forwarding and learning:
+                        session.stp_port_states['Forwarding'] += 1
+                    elif learning:
+                        session.stp_port_states['Learning'] += 1
+                    elif not forwarding and not learning:
+                        session.stp_port_states['Blocking/Discarding'] += 1
+                except Exception:
+                    pass
 
             if not pkt.haslayer(IP):
                 continue
@@ -421,6 +848,18 @@ def parse_pcap_file(file_path: str) -> PcapSession:
                     session.tcp_rst_count += 1
                 if pkt[TCP].window == 0:
                     session.tcp_zero_window_count += 1
+                # Retransmission detection: same (src, dst, sport, dport, seq)
+                # with payload seen before (exclude SYN/FIN-only retransmits)
+                seq = pkt[TCP].seq
+                payload_len = len(pkt[TCP].payload)
+                if payload_len > 0 and not (tcp_flags & 0x02):  # skip SYN
+                    retx_key = (src_ip, dst_ip, sport, dport, seq)
+                    if retx_key in _seen_tcp_seqs:
+                        session.tcp_retransmissions += 1
+                        conv_key_retx = (src_ip, dst_ip, dport, proto)
+                        session.conv_health[conv_key_retx]["retransmit"] += 1
+                    else:
+                        _seen_tcp_seqs[retx_key] = payload_len
             elif pkt.haslayer(UDP):
                 proto = "UDP"
                 sport = pkt[UDP].sport
@@ -445,8 +884,7 @@ def parse_pcap_file(file_path: str) -> PcapSession:
                 conv["first_seen"] = ts
             if conv["last_seen"] is None or ts > conv["last_seen"]:
                 conv["last_seen"] = ts
-            if len(conv["timestamps"]) < 2000:
-                conv["timestamps"].append(ts)
+            conv["timestamps"].append(ts)
 
             # DNS extraction
             if pkt.haslayer(DNS):
@@ -515,6 +953,30 @@ def parse_pcap_file(file_path: str) -> PcapSession:
             _extract_ot_transaction(pkt, session, src_ip, dst_ip, sport, dport, proto, ts)
 
             # ---------------------------------------------------------------
+            # SCADA JSON tag data (port 5672 / OASyS message bus)
+            # ---------------------------------------------------------------
+            if (dport in _SCADA_MQ_PORTS or sport in _SCADA_MQ_PORTS) and pkt.haslayer(Raw):
+                _extract_scada_json(pkt[Raw].load, session, src_ip, dst_ip, ts)
+
+            # ---------------------------------------------------------------
+            # Syslog (UDP 514 summary stats)
+            # ---------------------------------------------------------------
+            if proto == "UDP" and (dport == 514 or sport == 514) and pkt.haslayer(Raw):
+                _extract_syslog(pkt[Raw].load, session, src_ip)
+
+            # ---------------------------------------------------------------
+            # SNMP community strings (UDP 161/162)
+            # ---------------------------------------------------------------
+            if proto == "UDP" and dport in (161, 162) and pkt.haslayer(Raw):
+                _extract_snmp_community(pkt[Raw].load, session, src_ip)
+
+            # ---------------------------------------------------------------
+            # SSH banner (port 22)
+            # ---------------------------------------------------------------
+            if proto == "TCP" and (dport == 22 or sport == 22) and pkt.haslayer(Raw):
+                _extract_ssh_banner(pkt[Raw].load, session, src_ip, dst_ip, sport, ts)
+
+            # ---------------------------------------------------------------
             # Cleartext credential detection (redacted values)
             # ---------------------------------------------------------------
             _extract_cleartext_creds(pkt, session, src_ip, dst_ip, dport, ts)
@@ -563,12 +1025,125 @@ def parse_pcap_file(file_path: str) -> PcapSession:
                         "ts": ts,
                     })
 
+            # ---------------------------------------------------------------
+            # Netops: HSRP extraction (UDP port 1985)
+            # ---------------------------------------------------------------
+            if pkt.haslayer(ScapyHSRP):
+                try:
+                    hsrp = pkt[ScapyHSRP]
+                    state = getattr(hsrp, 'state', 0)
+                    group = getattr(hsrp, 'group', 0)
+                    priority = getattr(hsrp, 'priority', 0)
+                    vip = getattr(hsrp, 'virtualIP', '') or ''
+                    _HSRP_STATES = {0: "Initial", 1: "Learn", 2: "Listen",
+                                    4: "Speak", 8: "Standby", 16: "Active"}
+                    state_name = _HSRP_STATES.get(state, f"Unknown({state})")
+                    if state in (0, 4):  # Hello-like states
+                        session.hsrp_hello_count += 1
+                    session.hsrp_events.append({
+                        "src": src_ip, "group": group, "state": state_name,
+                        "priority": priority, "vip": str(vip), "ts": ts,
+                    })
+                except Exception:
+                    pass
+
+            # ---------------------------------------------------------------
+            # Netops: VRRP extraction (IP protocol 112)
+            # ---------------------------------------------------------------
+            if pkt.haslayer(ScapyVRRP):
+                try:
+                    vrrp = pkt[ScapyVRRP]
+                    vrid = getattr(vrrp, 'vrid', 0)
+                    priority = getattr(vrrp, 'priority', 0)
+                    session.vrrp_advert_count += 1
+                    session.vrrp_events.append({
+                        "src": src_ip, "vrid": vrid,
+                        "priority": priority, "ts": ts,
+                    })
+                except Exception:
+                    pass
+
+            # ---------------------------------------------------------------
+            # Netops: OSPF extraction (IP protocol 89)
+            # ---------------------------------------------------------------
+            if ip_layer.proto == 89:
+                try:
+                    ospf_data = bytes(ip_layer.payload)
+                    if len(ospf_data) >= 24:
+                        ospf_type = ospf_data[1]
+                        router_id = f"{ospf_data[4]}.{ospf_data[5]}.{ospf_data[6]}.{ospf_data[7]}"
+                        area_raw = ospf_data[8:12]
+                        area_id = f"{area_raw[0]}.{area_raw[1]}.{area_raw[2]}.{area_raw[3]}"
+                        session.ospf_total_count += 1
+                        session.ospf_router_ids.add(router_id)
+                        session.ospf_areas.add(area_id)
+                        if ospf_type == 1:  # Hello
+                            session.ospf_hello_count += 1
+                            neighbor_key = (src_ip, dst_ip)
+                            session.ospf_neighbor_hellos[neighbor_key].append(ts)
+                        elif ospf_type == 2:  # DB Description
+                            session.ospf_dbd_count += 1
+                        elif ospf_type == 3:  # LS Request
+                            session.ospf_lsrequest_count += 1
+                        elif ospf_type == 4:  # LS Update
+                            session.ospf_lsupdate_count += 1
+                            session._ospf_lsupdate_timestamps.append(ts)
+                        elif ospf_type == 5:  # LS Ack
+                            session.ospf_lsack_count += 1
+                except Exception:
+                    pass
+
+            # ---------------------------------------------------------------
+            # Netops: EIGRP extraction (IP protocol 88)
+            # ---------------------------------------------------------------
+            if ip_layer.proto == 88:
+                try:
+                    eigrp_data = bytes(ip_layer.payload)
+                    if len(eigrp_data) >= 20:
+                        opcode = eigrp_data[1]
+                        # AS number at bytes 8-11 (big-endian)
+                        as_num = int.from_bytes(eigrp_data[8:12], 'big')
+                        session.eigrp_total_count += 1
+                        if as_num > 0:
+                            session.eigrp_as_numbers.add(as_num)
+                        if opcode == 1:    # Update
+                            session.eigrp_update_count += 1
+                        elif opcode == 3:  # Query
+                            session.eigrp_query_count += 1
+                        elif opcode == 4:  # Reply
+                            session.eigrp_reply_count += 1
+                        elif opcode == 5:  # Hello
+                            session.eigrp_hello_count += 1
+                except Exception:
+                    pass
+
+    # --- Post-process: detect BPDU starvation (gaps > max_age per source port) ---
+    _compute_stp_bpdu_gaps(session)
+
     return session
 
 
-# ---------------------------------------------------------------------------
-# dpkt-based fast parser (--fast mode) — 5-10x faster than scapy
-# ---------------------------------------------------------------------------
+def _compute_stp_bpdu_gaps(session) -> None:
+    """Detect BPDU starvation: gaps in per-port BPDU stream exceeding max_age.
+
+    A switch port that was steadily receiving BPDUs every 2s (hello interval)
+    and then stops for >20s (max_age) is a critical loop risk — the port will
+    transition to Forwarding and may create a bridging loop.
+    """
+    # Determine max_age from captured timers (default 20s)
+    max_age = 20
+    if session.stp_timers.get('max_age'):
+        max_age = session.stp_timers['max_age'].most_common(1)[0][0] or 20
+
+    for src_mac, timestamps in session._stp_per_port_ts.items():
+        if len(timestamps) < 3:
+            continue  # need at least a few BPDUs to establish a stream
+        ts_sorted = sorted(timestamps)
+        for i in range(1, len(ts_sorted)):
+            gap = ts_sorted[i] - ts_sorted[i - 1]
+            if gap > max_age:
+                session.stp_bpdu_gaps.append((src_mac, ts_sorted[i - 1], round(gap, 1)))
+
 
 DPKT_AVAILABLE = False
 try:
@@ -586,6 +1161,8 @@ def parse_pcap_file_dpkt(file_path: str) -> PcapSession:
     Produces an identical PcapSession to ``parse_pcap_file`` but runs
     5-10x faster on large captures (>100 MB / >500K packets).
     """
+    import warnings
+
     if not DPKT_AVAILABLE:
         raise RuntimeError("dpkt is required for --fast mode. Install with: pip install dpkt")
 
@@ -600,6 +1177,10 @@ def parse_pcap_file_dpkt(file_path: str) -> PcapSession:
         return socket.inet_ntoa(packed)
 
     _seen_ip_ids_dpkt: Dict[Tuple[str, str, int, int], int] = {}
+    _seen_tcp_seqs_dpkt: Dict[Tuple[str, str, int, int, int], int] = {}  # retransmission detection
+
+    # Suppress dpkt's internal deprecation warning about IP.off
+    warnings.filterwarnings("ignore", message="IP.off is deprecated", category=UserWarning)
 
     with open(file_path, "rb") as f:
         try:
@@ -645,6 +1226,119 @@ def parse_pcap_file_dpkt(file_path: str) -> PcapSession:
                         session.arp_ip_to_macs[psrc_ip].add(psrc_mac)
                 except Exception:
                     pass
+
+            # --- STP / BPDU extraction (L2, before IP check) ---
+            # STP BPDUs: standard LLC (DSAP=0x42) or Cisco PVST+ (SNAP)
+            try:
+                raw = bytes(eth.data) if not isinstance(eth.data, bytes) else eth.data
+                # STP detection: standard LLC or Cisco PVST+ (SNAP)
+                if len(raw) >= 4 and eth.type <= 1500:  # 802.3 length field
+                    _is_std_stp = raw[0] == 0x42 and raw[1] == 0x42
+                    _is_pvst = (len(raw) >= 12
+                                and raw[0] == 0xAA and raw[1] == 0xAA
+                                and raw[2] == 0x03
+                                and raw[3:6] == b'\x00\x00\x0c'
+                                and raw[6:8] == b'\x01\x0b')
+                    if _is_std_stp or _is_pvst:
+                        stp_data = raw[8:] if _is_pvst else raw[3:]
+                        if len(stp_data) >= 4:
+                            session.stp_bpdu_count += 1
+                            session._stp_timestamps.append(ts)
+
+                            # Source MAC of the switch sending this BPDU
+                            src_mac = ':'.join(f'{b:02x}' for b in eth.src)
+                            session.stp_src_macs[src_mac] += 1
+                            session._stp_per_port_ts[src_mac].append(ts)
+
+                            # STP version byte at offset 1
+                            version = stp_data[1]
+                            version_name = {0: 'STP', 2: 'RSTP', 3: 'MSTP'}.get(version, f'v{version}')
+                            session.stp_version_counts[version_name] += 1
+
+                            bpdu_type = stp_data[3]
+                            if bpdu_type == 0x80:  # TCN BPDU
+                                session.stp_tcn_count += 1
+                                session.stp_tcn_events.append(ts)
+                            elif len(stp_data) >= 35:
+                                # Config/RSTP BPDU — full field extraction
+                                bpdu_flags = stp_data[4]
+                                # TC flag (bit 0)
+                                if bpdu_flags & 0x01:
+                                    session.stp_tc_flag_count += 1
+                                    session.stp_tc_events.append(ts)
+                                # TCA flag (bit 7)
+                                if bpdu_flags & 0x80:
+                                    session.stp_tca_count += 1
+                                # Proposal (bit 1, RSTP)
+                                if bpdu_flags & 0x02:
+                                    session.stp_proposal_count += 1
+                                # Agreement (bit 6, RSTP)
+                                if bpdu_flags & 0x40:
+                                    session.stp_agreement_count += 1
+                                # Port Role (bits 2-3, RSTP)
+                                port_role_bits = (bpdu_flags >> 2) & 0x03
+                                port_role = {0: 'Unknown', 1: 'Alternate/Backup',
+                                             2: 'Root', 3: 'Designated'}.get(port_role_bits, 'Unknown')
+                                session.stp_port_roles[port_role] += 1
+                                # Port State (bits 4-5, RSTP)
+                                learning = bool(bpdu_flags & 0x10)
+                                forwarding = bool(bpdu_flags & 0x20)
+                                if forwarding and learning:
+                                    session.stp_port_states['Forwarding'] += 1
+                                elif learning:
+                                    session.stp_port_states['Learning'] += 1
+                                elif not forwarding and not learning:
+                                    session.stp_port_states['Blocking/Discarding'] += 1
+
+                                # Root bridge: priority (2 bytes) + MAC (6 bytes) at offset 5-12
+                                root_prio = int.from_bytes(stp_data[5:7], 'big')
+                                root_mac = ':'.join(f'{b:02x}' for b in stp_data[7:13])
+                                root_key = f"{root_prio}:{root_mac}"
+                                session.stp_root_bridges[root_key].append(ts)
+                                # Detect root bridge changes (PVST+-aware: per-VLAN)
+                                root_vlan = root_prio & 0x0FFF
+                                prev_root = session._stp_last_root_per_vlan.get(root_vlan)
+                                if prev_root and root_key != prev_root:
+                                    session.stp_root_changes.append((ts, root_vlan, prev_root, root_key))
+                                session._stp_last_root_per_vlan[root_vlan] = root_key
+
+                                # Root path cost: 4 bytes at offset 13-16
+                                path_cost = int.from_bytes(stp_data[13:17], 'big')
+                                # Bridge ID: priority (2 bytes) + MAC (6 bytes) at offset 17-24
+                                bridge_prio = int.from_bytes(stp_data[17:19], 'big')
+                                bridge_mac = ':'.join(f'{b:02x}' for b in stp_data[19:25])
+                                bridge_key = f"{bridge_prio}:{bridge_mac}"
+                                session.stp_bridges[bridge_key] += 1
+                                session.stp_path_costs[bridge_key].append((ts, path_cost))
+
+                                # MAC mismatch detection (spoofing indicator)
+                                if src_mac and bridge_mac and src_mac != bridge_mac:
+                                    eth_base = src_mac.rsplit(':', 1)[0]
+                                    bpdu_base = bridge_mac.rsplit(':', 1)[0]
+                                    if eth_base != bpdu_base:
+                                        if len(session.stp_mac_mismatches) < 50:
+                                            session.stp_mac_mismatches.append((ts, src_mac, bridge_mac))
+
+                                # VLAN from System ID Extension (lower 12 bits of bridge priority)
+                                vlan_id = bridge_prio & 0x0FFF
+                                if vlan_id > 0:
+                                    session.stp_vlans[vlan_id] += 1
+
+                                # Port ID: 2 bytes at offset 25-26
+                                port_id = int.from_bytes(stp_data[25:27], 'big')
+                                session.stp_port_ids[f"0x{port_id:04x}"] += 1
+
+                                # Timers at offsets 27-34 (each 2 bytes, in 1/256s units)
+                                if len(stp_data) >= 35:
+                                    msg_age = int.from_bytes(stp_data[27:29], 'big') // 256
+                                    max_age = int.from_bytes(stp_data[29:31], 'big') // 256
+                                    hello_time = int.from_bytes(stp_data[31:33], 'big') // 256
+                                    fwd_delay = int.from_bytes(stp_data[33:35], 'big') // 256
+                                    session.stp_timers['hello'][hello_time] += 1
+                                    session.stp_timers['max_age'][max_age] += 1
+                                    session.stp_timers['fwd_delay'][fwd_delay] += 1
+            except Exception:
+                pass
 
             # Only process IPv4
             if not isinstance(eth.data, dpkt.ip.IP):
@@ -697,6 +1391,17 @@ def parse_pcap_file_dpkt(file_path: str) -> PcapSession:
                     session.tcp_rst_count += 1
                 if tcp_obj.win == 0:
                     session.tcp_zero_window_count += 1
+                # Retransmission detection: same (src, dst, sport, dport, seq)
+                # with payload seen before (exclude SYN-only)
+                payload_len = len(tcp_data)
+                if payload_len > 0 and not (tcp_obj.flags & dpkt.tcp.TH_SYN):
+                    retx_key = (src_ip, dst_ip, sport, dport, tcp_obj.seq)
+                    if retx_key in _seen_tcp_seqs_dpkt:
+                        session.tcp_retransmissions += 1
+                        conv_key_retx = (src_ip, dst_ip, dport, proto)
+                        session.conv_health[conv_key_retx]["retransmit"] += 1
+                    else:
+                        _seen_tcp_seqs_dpkt[retx_key] = payload_len
             elif isinstance(ip.data, dpkt.udp.UDP):
                 proto = "UDP"
                 udp_obj = ip.data
@@ -723,8 +1428,7 @@ def parse_pcap_file_dpkt(file_path: str) -> PcapSession:
                 conv["first_seen"] = ts
             if conv["last_seen"] is None or ts > conv["last_seen"]:
                 conv["last_seen"] = ts
-            if len(conv["timestamps"]) < 2000:
-                conv["timestamps"].append(ts)
+            conv["timestamps"].append(ts)
 
             # DNS extraction
             if dport == 53 or sport == 53:
@@ -790,6 +1494,22 @@ def parse_pcap_file_dpkt(file_path: str) -> PcapSession:
                 session, src_ip, dst_ip, sport, dport, proto, ts, tcp_data,
             )
 
+            # SCADA JSON tag data (port 5672 / OASyS message bus)
+            if (dport in _SCADA_MQ_PORTS or sport in _SCADA_MQ_PORTS) and tcp_data:
+                _extract_scada_json_dpkt(tcp_data, session, src_ip, dst_ip, ts)
+
+            # Syslog (UDP 514 summary stats)
+            if proto == "UDP" and (dport == 514 or sport == 514) and tcp_data:
+                _extract_syslog(tcp_data, session, src_ip)
+
+            # SNMP community strings (UDP 161/162)
+            if proto == "UDP" and dport in (161, 162) and tcp_data:
+                _extract_snmp_community(tcp_data, session, src_ip)
+
+            # SSH banner (port 22)
+            if proto == "TCP" and (dport == 22 or sport == 22) and tcp_data:
+                _extract_ssh_banner(tcp_data, session, src_ip, dst_ip, sport, ts)
+
             # Cleartext credential detection
             _extract_cleartext_creds_dpkt(
                 session, src_ip, dst_ip, sport, dport, ts, tcp_data,
@@ -836,6 +1556,102 @@ def parse_pcap_file_dpkt(file_path: str) -> PcapSession:
                         "router": src_ip, "original_src": dst_ip,
                         "ts": ts,
                     })
+
+            # ---------------------------------------------------------------
+            # Netops: HSRP extraction (UDP port 1985)
+            # ---------------------------------------------------------------
+            if proto == "UDP" and dport == 1985:
+                try:
+                    hsrp_data = tcp_data  # reused var for UDP payload
+                    if len(hsrp_data) >= 20:
+                        _HSRP_STATES_DPKT = {0: "Initial", 1: "Learn", 2: "Listen",
+                                             4: "Speak", 8: "Standby", 16: "Active"}
+                        state = hsrp_data[2]
+                        group = hsrp_data[5]
+                        priority = hsrp_data[7]
+                        vip = f"{hsrp_data[16]}.{hsrp_data[17]}.{hsrp_data[18]}.{hsrp_data[19]}"
+                        state_name = _HSRP_STATES_DPKT.get(state, f"Unknown({state})")
+                        if state in (0, 4):
+                            session.hsrp_hello_count += 1
+                        session.hsrp_events.append({
+                            "src": src_ip, "group": group, "state": state_name,
+                            "priority": priority, "vip": vip, "ts": ts,
+                        })
+                except Exception:
+                    pass
+
+            # ---------------------------------------------------------------
+            # Netops: VRRP extraction (IP protocol 112)
+            # ---------------------------------------------------------------
+            if ip.p == 112:
+                try:
+                    vrrp_data = bytes(ip.data)
+                    if len(vrrp_data) >= 8:
+                        vrid = vrrp_data[1]
+                        priority = vrrp_data[2]
+                        session.vrrp_advert_count += 1
+                        session.vrrp_events.append({
+                            "src": src_ip, "vrid": vrid,
+                            "priority": priority, "ts": ts,
+                        })
+                except Exception:
+                    pass
+
+            # ---------------------------------------------------------------
+            # Netops: OSPF extraction (IP protocol 89)
+            # ---------------------------------------------------------------
+            if ip.p == 89:
+                try:
+                    ospf_data = bytes(ip.data)
+                    if len(ospf_data) >= 24:
+                        ospf_type = ospf_data[1]
+                        router_id = f"{ospf_data[4]}.{ospf_data[5]}.{ospf_data[6]}.{ospf_data[7]}"
+                        area_raw = ospf_data[8:12]
+                        area_id = f"{area_raw[0]}.{area_raw[1]}.{area_raw[2]}.{area_raw[3]}"
+                        session.ospf_total_count += 1
+                        session.ospf_router_ids.add(router_id)
+                        session.ospf_areas.add(area_id)
+                        if ospf_type == 1:  # Hello
+                            session.ospf_hello_count += 1
+                            neighbor_key = (src_ip, dst_ip)
+                            session.ospf_neighbor_hellos[neighbor_key].append(ts)
+                        elif ospf_type == 2:  # DB Description
+                            session.ospf_dbd_count += 1
+                        elif ospf_type == 3:  # LS Request
+                            session.ospf_lsrequest_count += 1
+                        elif ospf_type == 4:  # LS Update
+                            session.ospf_lsupdate_count += 1
+                            session._ospf_lsupdate_timestamps.append(ts)
+                        elif ospf_type == 5:  # LS Ack
+                            session.ospf_lsack_count += 1
+                except Exception:
+                    pass
+
+            # ---------------------------------------------------------------
+            # Netops: EIGRP extraction (IP protocol 88)
+            # ---------------------------------------------------------------
+            if ip.p == 88:
+                try:
+                    eigrp_data = bytes(ip.data)
+                    if len(eigrp_data) >= 20:
+                        opcode = eigrp_data[1]
+                        as_num = int.from_bytes(eigrp_data[8:12], 'big')
+                        session.eigrp_total_count += 1
+                        if as_num > 0:
+                            session.eigrp_as_numbers.add(as_num)
+                        if opcode == 1:    # Update
+                            session.eigrp_update_count += 1
+                        elif opcode == 3:  # Query
+                            session.eigrp_query_count += 1
+                        elif opcode == 4:  # Reply
+                            session.eigrp_reply_count += 1
+                        elif opcode == 5:  # Hello
+                            session.eigrp_hello_count += 1
+                except Exception:
+                    pass
+
+    # --- Post-process: detect BPDU starvation (gaps > max_age per source port) ---
+    _compute_stp_bpdu_gaps(session)
 
     return session
 
@@ -909,7 +1725,7 @@ def _extract_ot_transaction_dpkt(
 
     entry: Dict[str, Any] = {
         "protocol": ot_proto, "port": ot_port,
-        "src_ip": src_ip, "dst_ip": dst_ip,
+        "src": src_ip, "dst": dst_ip,
         "src_port": sport, "dst_port": dport,
         "ts": ts,
     }
@@ -972,8 +1788,7 @@ def _extract_ot_transaction_dpkt(
         except Exception:
             pass
 
-    if len(session.ot_transactions) < 50000:
-        session.ot_transactions.append(entry)
+    session.ot_transactions.append(entry)
 
 
 def _extract_cleartext_creds_dpkt(
@@ -985,13 +1800,12 @@ def _extract_cleartext_creds_dpkt(
     """Detect cleartext credentials from raw payload bytes (dpkt version)."""
     if not payload or len(payload) < 4:
         return
-    if len(session.cleartext_creds) >= 500:
-        return
 
     for proto_name, ports, pattern, description in _CRED_PATTERNS:
         if ports is not None and dport not in ports and sport not in ports:
             continue
         if pattern is None:
+            session.cleartext_creds_total += 1
             session.cleartext_creds.append({
                 "protocol": proto_name, "description": description,
                 "src": src_ip, "dst": dst_ip,
@@ -1000,6 +1814,7 @@ def _extract_cleartext_creds_dpkt(
             })
             return
         if pattern.search(payload):
+            session.cleartext_creds_total += 1
             session.cleartext_creds.append({
                 "protocol": proto_name, "description": description,
                 "src": src_ip, "dst": dst_ip, "port": dport, "ts": ts,
@@ -1024,6 +1839,33 @@ _OT_PORT_PROTOCOL: Dict[int, str] = {
     9600: "OMRON-FINS",
     18245: "GE-SRTP",
 }
+
+# IT/OT service port labels (for flow enrichment, not deep parsing)
+_SERVICE_PORTS: Dict[int, str] = {
+    22: "SSH", 53: "DNS", 88: "Kerberos", 135: "DCE/RPC",
+    139: "NetBIOS", 161: "SNMP", 162: "SNMP-Trap", 389: "LDAP",
+    445: "SMB", 514: "Syslog", 636: "LDAPS", 3389: "RDP",
+    5432: "PostgreSQL", 5672: "SCADA-MQ", 5985: "WinRM",
+    5986: "WinRM-TLS",
+}
+
+# SCADA message-bus ports (JSON-over-TCP tag data, e.g., OASyS)
+_SCADA_MQ_PORTS = {5672}
+
+# Syslog severity names (RFC 5424)
+_SYSLOG_SEVERITY = {
+    0: "emerg", 1: "alert", 2: "crit", 3: "error",
+    4: "warning", 5: "notice", 6: "info", 7: "debug",
+}
+
+# Syslog security-relevant pattern keywords
+_SYSLOG_PATTERNS = [
+    (re.compile(rb'(?i)fail|denied|invalid|reject|unauthorized'), "auth_failure"),
+    (re.compile(rb'(?i)config|changed|modified|reload'), "config_change"),
+    (re.compile(rb'(?i)up|down|link\s'), "interface_state"),
+    (re.compile(rb'(?i)login|logged\s?in|session\s?open'), "login_event"),
+    (re.compile(rb'(?i)blocked|drop|firewall'), "firewall_event"),
+]
 
 # Modbus function code names
 _MODBUS_FUNC_NAMES: Dict[int, str] = {
@@ -1060,8 +1902,8 @@ def _extract_ot_transaction(
     entry: Dict[str, Any] = {
         "protocol": ot_proto,
         "port": ot_port,
-        "src_ip": src_ip,
-        "dst_ip": dst_ip,
+        "src": src_ip,
+        "dst": dst_ip,
         "src_port": sport,
         "dst_port": dport,
         "ts": ts,
@@ -1139,9 +1981,148 @@ def _extract_ot_transaction(
         except Exception:
             pass
 
-    # Cap stored OT transactions at 50,000 to limit memory
-    if len(session.ot_transactions) < 50000:
-        session.ot_transactions.append(entry)
+    session.ot_transactions.append(entry)
+
+
+# ---------------------------------------------------------------------------
+# SCADA message-bus JSON extraction (OASyS tag data on TCP port 5672 etc.)
+# ---------------------------------------------------------------------------
+
+_SCADA_JSON_RE = re.compile(rb'"ScadaDataSource"\s*:\s*"([^"]*)"')
+_SCADA_TAG_RE = re.compile(rb'"Tag"\s*:\s*"([^"]*)"')
+_SCADA_VAL_RE = re.compile(rb'"Value"\s*:\s*"([^"]*)"')
+_SCADA_QUAL_RE = re.compile(rb'"Quality"\s*:\s*"([^"]*)"')
+_MAX_SCADA_TAGS = 500
+_MAX_VALUE_SAMPLES = 10
+
+
+def _extract_scada_json(payload: bytes, session: Any,
+                        src_ip: str, dst_ip: str, ts: float) -> None:
+    """Extract SCADA tag data from JSON-over-TCP payloads."""
+    if b'"ScadaDataSource"' not in payload:
+        return
+    tag_m = _SCADA_TAG_RE.search(payload)
+    if not tag_m:
+        return
+    tag_name = tag_m.group(1).decode("utf-8", errors="replace")
+    val_m = _SCADA_VAL_RE.search(payload)
+    qual_m = _SCADA_QUAL_RE.search(payload)
+    value = val_m.group(1).decode("utf-8", errors="replace") if val_m else None
+    quality = qual_m.group(1).decode("utf-8", errors="replace") if qual_m else None
+
+    session.scada_tag_sources[src_ip] += 1
+
+    if tag_name in session.scada_tags:
+        entry = session.scada_tags[tag_name]
+        entry["count"] += 1
+        if value and len(entry["values_sample"]) < _MAX_VALUE_SAMPLES:
+            entry["values_sample"].append(value)
+        if quality and quality != entry.get("quality"):
+            entry["quality"] = quality  # track latest
+    elif len(session.scada_tags) < _MAX_SCADA_TAGS:
+        session.scada_tags[tag_name] = {
+            "src": src_ip,
+            "dst": dst_ip,
+            "count": 1,
+            "values_sample": [value] if value else [],
+            "quality": quality or "unknown",
+            "first_ts": ts,
+        }
+
+
+def _extract_scada_json_dpkt(tcp_data: bytes, session: Any,
+                             src_ip: str, dst_ip: str, ts: float) -> None:
+    """dpkt version — identical logic, different caller."""
+    _extract_scada_json(tcp_data, session, src_ip, dst_ip, ts)
+
+
+# ---------------------------------------------------------------------------
+# Syslog extraction (condensed summary only — UDP 514)
+# ---------------------------------------------------------------------------
+
+
+def _extract_syslog(payload: bytes, session: Any, src_ip: str) -> None:
+    """Extract syslog severity/facility and pattern counts from raw message."""
+    session.syslog_total += 1
+    session.syslog_sources[src_ip] += 1
+
+    # RFC 5424 / RFC 3164: message starts with <PRI> where PRI = facility*8+severity
+    if payload and payload[0:1] == b'<':
+        end = payload.find(b'>', 1, 6)
+        if end > 0:
+            try:
+                pri = int(payload[1:end])
+                severity = pri & 0x07
+                facility = pri >> 3
+                session.syslog_severity[severity] += 1
+                session.syslog_facilities[facility] += 1
+            except (ValueError, IndexError):
+                pass
+
+    # Match security-relevant patterns
+    for pattern, label in _SYSLOG_PATTERNS:
+        if pattern.search(payload):
+            session.syslog_patterns[label] += 1
+
+
+# ---------------------------------------------------------------------------
+# SSH banner extraction (port 22)
+# ---------------------------------------------------------------------------
+
+_SSH_BANNER_RE = re.compile(rb'^SSH-\d+\.\d+-\S+')
+
+
+def _extract_ssh_banner(payload: bytes, session: Any,
+                        src_ip: str, dst_ip: str, sport: int,
+                        ts: float) -> None:
+    """Capture SSH version banners from the first packet of a session."""
+    if len(session.ssh_sessions) >= 200:
+        return
+    m = _SSH_BANNER_RE.match(payload)
+    if m:
+        banner = m.group(0).decode("utf-8", errors="replace")
+        session.ssh_sessions.append({
+            "src": src_ip, "dst": dst_ip, "src_port": sport,
+            "ts": ts, "banner": banner,
+        })
+
+
+# ---------------------------------------------------------------------------
+# SNMP community string extraction (UDP 161/162)
+# ---------------------------------------------------------------------------
+
+
+def _extract_snmp_community(payload: bytes, session: Any,
+                            src_ip: str) -> None:
+    """Extract SNMPv1/v2c community strings from raw payload."""
+    session.snmp_sources[src_ip] += 1
+    # SNMPv1/v2c: SEQUENCE → INTEGER(version) → OCTET STRING(community)
+    # Minimal ASN.1 parse: look for version 0 or 1, then next octet-string
+    if len(payload) < 10:
+        return
+    try:
+        # payload[0] should be 0x30 (SEQUENCE)
+        if payload[0] != 0x30:
+            return
+        # Find version field (INTEGER tag = 0x02)
+        idx = 2  # skip SEQUENCE tag + length
+        if payload[1] & 0x80:
+            idx += (payload[1] & 0x7F)
+        if idx >= len(payload) or payload[idx] != 0x02:
+            return
+        ver_len = payload[idx + 1]
+        idx += 2 + ver_len
+        # Next should be OCTET STRING (0x04) = community
+        if idx >= len(payload) or payload[idx] != 0x04:
+            return
+        comm_len = payload[idx + 1]
+        idx += 2
+        if idx + comm_len <= len(payload):
+            community = payload[idx:idx + comm_len].decode("ascii", errors="replace")
+            if community and len(community) < 64:
+                session.snmp_communities[community] += 1
+    except (IndexError, ValueError):
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1197,10 +2178,6 @@ def _extract_cleartext_creds(
     if len(raw_payload) < 4:
         return
 
-    # Cap stored detections at 500
-    if len(session.cleartext_creds) >= 500:
-        return
-
     sport = 0
     if pkt.haslayer(TCP):
         sport = pkt[TCP].sport
@@ -1213,6 +2190,7 @@ def _extract_cleartext_creds(
             continue
         # For SNMP and VNC, any traffic on the port is flagged (no pattern needed)
         if pattern is None:
+            session.cleartext_creds_total += 1
             session.cleartext_creds.append({
                 "protocol": proto_name,
                 "description": description,
@@ -1223,6 +2201,7 @@ def _extract_cleartext_creds(
             })
             return
         if pattern.search(raw_payload):
+            session.cleartext_creds_total += 1
             session.cleartext_creds.append({
                 "protocol": proto_name,
                 "description": description,
@@ -1269,9 +2248,6 @@ def _download_from_gcs(file_path: str, context: Any) -> Optional[str]:
             if not blob.exists():
                 continue
             blob.reload()
-            if blob.size and blob.size > MAX_PCAP_SIZE_BYTES:
-                logger.warning("File %s too large (%s)", filename, _format_bytes(blob.size))
-                return None
             tmp = tempfile.NamedTemporaryFile(suffix=".pcap", delete=False)
             blob.download_to_filename(tmp.name)
             tmp.close()
@@ -1327,7 +2303,7 @@ def _resolve_file(file_path: str, context: Any) -> Optional[str]:
 class PcapMetadataSummary:
     """Load, parse, and summarize PCAP network captures.
 
-    Modes: load, summary, conversations, dns, http, tls, timeline, ioc
+    Modes: load, summary, conversations, dns, http, tls, timeline, ioc, networks
     """
 
     def metadata(self) -> dict[str, Any]:
@@ -1341,7 +2317,7 @@ class PcapMetadataSummary:
     def validate_inputs(self, payload: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []
         mode = payload.get("mode", "load")
-        valid_modes = ("load", "summary", "conversations", "dns", "http", "tls", "timeline", "ioc")
+        valid_modes = ("load", "summary", "conversations", "dns", "http", "tls", "timeline", "ioc", "networks")
         if mode not in valid_modes:
             errors.append(f"Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}")
         if mode == "load" and "file_path" not in payload:
@@ -1372,6 +2348,8 @@ class PcapMetadataSummary:
                 return self._timeline(payload)
             elif mode == "ioc":
                 return self._ioc_search(payload)
+            elif mode == "networks":
+                return self._networks(payload)
             else:
                 return ToolResult(ok=False, error_code="INVALID_MODE", message=f"Unknown mode: {mode}")
         except Exception as e:
@@ -1395,10 +2373,6 @@ class PcapMetadataSummary:
         if not resolved:
             return ToolResult(ok=False, error_code="FILE_NOT_FOUND", message=f"File not found: {file_path}")
 
-        fsize = os.path.getsize(resolved)
-        if fsize > MAX_PCAP_SIZE_BYTES:
-            return ToolResult(ok=False, error_code="FILE_TOO_LARGE", message=f"File ({_format_bytes(fsize)}) exceeds 50 MB limit")
-
         # Clean up previous temp
         old = get_pcap_session()
         if old and getattr(old, "_temp_path", None):
@@ -1415,7 +2389,10 @@ class PcapMetadataSummary:
         lines.append("✅ PCAP Loaded Successfully")
         lines.append("")
         lines.append(f"  File:      {s.filename}")
-        lines.append(f"  Size:      {_format_bytes(s.file_size)}")
+        if s.file_size:
+            lines.append(f"  Size:      {_format_bytes(s.file_size)}")
+        if s.bytes_transferred and s.bytes_transferred != s.file_size:
+            lines.append(f"  Transferred: {_format_bytes(s.bytes_transferred)}")
         lines.append(f"  Packets:   {s.packet_count:,}")
         lines.append(f"  Duration:  {s.duration_str}")
         if s.start_time:
@@ -1451,7 +2428,10 @@ class PcapMetadataSummary:
         lines = []
         lines.append("=== PCAP Summary ===")
         lines.append(f"  File:      {s.filename}")
-        lines.append(f"  Size:      {_format_bytes(s.file_size)}")
+        if s.file_size:
+            lines.append(f"  Size:      {_format_bytes(s.file_size)}")
+        if s.bytes_transferred and s.bytes_transferred != s.file_size:
+            lines.append(f"  Transferred: {_format_bytes(s.bytes_transferred)}")
         lines.append(f"  Packets:   {s.packet_count:,}")
         lines.append(f"  Duration:  {s.duration_str}")
         if s.start_time:
@@ -1656,6 +2636,83 @@ class PcapMetadataSummary:
         return ToolResult(ok=True, result={"text": "\n".join(lines)})
 
     # ----- ioc -----
+    # ----- networks -----
+    def _networks(self, payload: dict[str, Any]) -> ToolResult:
+        """List all /24 networks observed in the PCAP."""
+        s = get_pcap_session()
+        sort_by = payload.get("sort_by", "bytes")  # bytes | hosts | flows
+        filter_type = payload.get("filter", "")     # int | ext | ot | ""
+
+        net_stats: dict[str, dict] = defaultdict(lambda: {
+            "ips": set(), "bytes": 0, "flows": 0,
+        })
+        for (src, dst, dport, proto), stats in s.conversations.items():
+            for ip in (src, dst):
+                parts = ip.rsplit(".", 1)
+                if len(parts) == 2:
+                    sn = f"{parts[0]}.0/24"
+                    net_stats[sn]["ips"].add(ip)
+            src_sn = ".".join(src.split(".")[:3]) + ".0/24"
+            net_stats[src_sn]["bytes"] += stats.get("bytes_out", 0)
+            net_stats[src_sn]["flows"] += 1
+
+        # Filter
+        if filter_type == "int":
+            net_stats = {sn: s for sn, s in net_stats.items()
+                         if is_internal(sn.split("/")[0])}
+        elif filter_type == "ext":
+            net_stats = {sn: s for sn, s in net_stats.items()
+                         if not is_internal(sn.split("/")[0])}
+        elif filter_type == "ot":
+            ot_ips = set()
+            for t in s.ot_transactions:
+                ot_ips.add(t.get("src", ""))
+                ot_ips.add(t.get("dst", ""))
+            ot_nets = set()
+            for ip in ot_ips:
+                parts = ip.rsplit(".", 1)
+                if len(parts) == 2:
+                    ot_nets.add(f"{parts[0]}.0/24")
+            net_stats = {sn: s for sn, s in net_stats.items()
+                         if sn in ot_nets}
+
+        # Sort
+        sort_key = {
+            "bytes": lambda x: x[1]["bytes"],
+            "hosts": lambda x: len(x[1]["ips"]),
+            "flows": lambda x: x[1]["flows"],
+            "subnet": lambda x: tuple(int(o) for o in x[0].split("/")[0].split(".")),
+        }.get(sort_by, lambda x: x[1]["bytes"])
+        sorted_nets = sorted(net_stats.items(), key=sort_key, reverse=(sort_by != "subnet"))
+
+        int_count = sum(1 for sn, _ in sorted_nets if is_internal(sn.split("/")[0]))
+        ext_count = len(sorted_nets) - int_count
+
+        lines = [
+            f"=== Active /24 Networks ({len(sorted_nets)} total) ===",
+            f"  Internal: {int_count}  |  External: {ext_count}",
+            f"  Sorted by: {sort_by}"
+            + (f"  |  Filter: {filter_type}" if filter_type else ""),
+            "",
+            f"  {'Subnet':<20} {'Hosts':<7} {'Flows':<8} {'Bytes':<12} {'Type'}",
+            "  " + "-" * 60,
+        ]
+
+        for sn, st in sorted_nets:
+            ip_base = sn.split("/")[0]
+            if is_known_org(ip_base):
+                loc = "ORG"
+            elif is_internal(ip_base):
+                loc = "INT"
+            else:
+                loc = "EXT"
+            lines.append(
+                f"  {sn:<20} {len(st['ips']):<7} {st['flows']:<8} "
+                f"{_format_bytes(st['bytes']):<12} {loc}"
+            )
+
+        return ToolResult(ok=True, result={"text": "\n".join(lines)})
+
     def _ioc_search(self, payload: dict[str, Any]) -> ToolResult:
         s = get_pcap_session()
         indicator = payload.get("indicator", "")

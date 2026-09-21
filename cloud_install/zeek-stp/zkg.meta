@@ -1,0 +1,5 @@
+[package]
+description = STP/RSTP/MSTP BPDU Packet Analyzer for Zeek — parses Spanning Tree Protocol BPDUs at Layer 2
+tags = stp, rstp, mstp, spanning tree, bpdu, layer2, packet analyzer, OT, ICS, network
+script_dir = scripts
+build_command = mkdir -p build && cd build && cmake .. && cmake --build .

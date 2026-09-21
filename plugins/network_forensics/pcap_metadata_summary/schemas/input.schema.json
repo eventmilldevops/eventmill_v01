@@ -8,7 +8,7 @@
     },
     "mode": {
       "type": "string",
-      "enum": ["load", "summary", "conversations", "dns", "http", "tls"],
+      "enum": ["load", "summary", "conversations", "dns", "http", "tls", "networks"],
       "default": "load",
       "description": "Operation mode: 'load' to parse a new PCAP, others to query the loaded session."
     },

@@ -55,6 +55,11 @@ class PcapIpSearch:
         if mode == "timeline" and not payload.get("ip"):
             errors.append("'ip' is required for timeline mode.")
 
+        for port_field in ("src_port", "dst_port"):
+            val = payload.get(port_field)
+            if val is not None and (not isinstance(val, int) or val < 1 or val > 65535):
+                errors.append(f"'{port_field}' must be an integer between 1 and 65535.")
+
         if errors:
             return ValidationResult(ok=False, errors=errors)
         return ValidationResult(ok=True)
@@ -159,7 +164,7 @@ class PcapIpSearch:
         query_lower = query.lower()
         for q in session.dns_queries:
             if (
-                (is_ip and (q["src"] == query or q["dst"] == query))
+                (is_ip and (q["src"] == query or q.get("dst", "") == query))
                 or (not is_ip and not is_port and query_lower in q["query"].lower())
                 or (is_ip and query in q.get("resolved", []))
             ):
@@ -206,18 +211,39 @@ class PcapIpSearch:
         """Build a chronological timeline of all activity for an IP."""
         ip = payload["ip"].strip()
 
+        # Optional filters
+        filter_src = payload.get("src_ip", "").strip() or None
+        filter_dst = payload.get("dst_ip", "").strip() or None
+        filter_sport = payload.get("src_port")
+        filter_dport = payload.get("dst_port")
+        filter_proto = (payload.get("proto", "") or "").strip().upper() or None
+
         events: list[dict[str, Any]] = []
 
         # Conversations involving this IP
         for (src, dst, dport, proto), stats in session.conversations.items():
             if src == ip or dst == ip:
+                sport = stats.get("sport")
+                if filter_src and src != filter_src:
+                    continue
+                if filter_dst and dst != filter_dst:
+                    continue
+                if filter_dport and dport != filter_dport:
+                    continue
+                if filter_sport and sport != filter_sport:
+                    continue
+                if filter_proto and proto.upper() != filter_proto:
+                    continue
+
                 ts = stats["first_seen"]
                 if ts:
                     events.append({
                         "timestamp": ts,
                         "type": "connection",
                         "direction": "outbound" if src == ip else "inbound",
-                        "peer": dst if src == ip else src,
+                        "src": src,
+                        "dst": dst,
+                        "sport": sport,
                         "dport": dport,
                         "proto": proto,
                         "packets": stats["packets"],
@@ -226,10 +252,21 @@ class PcapIpSearch:
 
         # DNS queries from/to this IP
         for q in session.dns_queries:
-            if q["src"] == ip or q["dst"] == ip:
+            if q["src"] == ip or q.get("dst", "") == ip:
+                if filter_src and q["src"] != filter_src:
+                    continue
+                if filter_dst and q.get("dst", "") != filter_dst:
+                    continue
+                if filter_dport and q.get("dport") != filter_dport:
+                    continue
+                if filter_proto and filter_proto not in ("UDP", "DNS"):
+                    continue
+
                 events.append({
-                    "timestamp": q["timestamp"],
+                    "timestamp": q.get("ts") or q.get("timestamp"),
                     "type": "dns",
+                    "src": q["src"],
+                    "dst": q.get("dst", ""),
                     "query": q["query"],
                     "dns_type": q.get("type", "query"),
                     "resolved": q.get("resolved", []),
@@ -237,10 +274,21 @@ class PcapIpSearch:
 
         # HTTP requests from/to this IP
         for r in session.http_requests:
-            if r["src"] == ip or r["dst"] == ip:
+            if r["src"] == ip or r.get("dst", "") == ip:
+                if filter_src and r["src"] != filter_src:
+                    continue
+                if filter_dst and r.get("dst", "") != filter_dst:
+                    continue
+                if filter_dport and r.get("dport") != filter_dport:
+                    continue
+                if filter_proto and filter_proto not in ("TCP", "HTTP"):
+                    continue
+
                 events.append({
-                    "timestamp": r["timestamp"],
+                    "timestamp": r.get("ts") or r.get("timestamp"),
                     "type": "http",
+                    "src": r["src"],
+                    "dst": r.get("dst", ""),
                     "method": r["method"],
                     "host": r["host"],
                     "path": r["path"],
@@ -248,21 +296,39 @@ class PcapIpSearch:
 
         # TLS handshakes from/to this IP
         for h in session.tls_handshakes:
-            if h["src"] == ip or h["dst"] == ip:
+            if h["src"] == ip or h.get("dst", "") == ip:
+                if filter_src and h["src"] != filter_src:
+                    continue
+                if filter_dst and h.get("dst", "") != filter_dst:
+                    continue
+                if filter_dport and h.get("dport") != filter_dport:
+                    continue
+                if filter_proto and filter_proto not in ("TCP", "TLS"):
+                    continue
+
                 events.append({
-                    "timestamp": h["timestamp"],
+                    "timestamp": h.get("ts") or h.get("timestamp"),
                     "type": "tls",
+                    "src": h["src"],
+                    "dst": h.get("dst", ""),
                     "sni": h.get("sni", ""),
                     "dport": h.get("dport", 443),
                 })
 
         events.sort(key=lambda e: e.get("timestamp", 0))
 
+        applied_filters = {k: v for k, v in {
+            "src_ip": filter_src, "dst_ip": filter_dst,
+            "src_port": filter_sport, "dst_port": filter_dport,
+            "proto": filter_proto,
+        }.items() if v}
+
         return ToolResult(
             ok=True,
             result={
                 "mode": "timeline",
                 "ip": ip,
+                "filters": applied_filters,
                 "total_events": len(events),
                 "timeline": events[:500],
             },

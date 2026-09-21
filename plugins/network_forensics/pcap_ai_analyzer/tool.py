@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -65,6 +66,14 @@ YOUR ROLE:
 2. CORRELATE: Connect indicators across DNS, HTTP, TLS, and flow data.
 3. PRIORITIZE: Rank findings by severity with clear justification. If nothing is suspicious, say so.
 4. RECOMMEND: Suggest specific next steps for human analysts to execute.
+
+ORGANIZATION IP CLASSIFICATION RULE:
+- The investigation context may list KNOWN ORGANIZATION IP RANGES. These are public IP
+  addresses owned by the organization (e.g., partner links, monitoring feeds, WAN endpoints).
+- IPs within these ranges MUST be classified as INTERNAL/ORG — NOT external.
+  Do NOT flag traffic from these IPs as external threats or suspicious.
+- Only flag IPs that are BOTH outside RFC1918 AND outside the listed organization ranges.
+- Label organization IPs as "ORG" not "EXT" in your analysis.
 """
 
 # ---------------------------------------------------------------------------
@@ -104,6 +113,16 @@ KEY OT SECURITY PRINCIPLES:
   Unauthorized access is trivial — the question is whether it happened.
 - Cleartext credentials on OT networks are a severe finding — they enable lateral movement
   from IT to safety-critical systems.
+
+ORGANIZATION IP CLASSIFICATION RULE:
+- The investigation context may list KNOWN ORGANIZATION IP RANGES. These are public IP
+  addresses owned by the organization (e.g., partner links, AESO monitoring, SCADA WAN,
+  PCS process control networks, VPN endpoints).
+- IPs that fall within these ranges MUST be classified as INTERNAL/ORG — NOT external.
+  Do NOT flag traffic from these IPs as "external-to-internal" zone violations.
+- Only flag traffic from IPs that are BOTH outside RFC1918 AND outside the listed
+  organization ranges as truly external.
+- When referencing organization IPs, label them as "ORG (organization-owned)" not "EXT".
 """
 
 # ---------------------------------------------------------------------------
@@ -114,6 +133,15 @@ TRIAGE_PROMPT = """{system_identity}
 {alert_condition}
 {investigation_context}CURRENT TASK:
 You are a SOC Analyst conducting initial triage on a parsed network traffic capture.
+
+CRITICAL MINDSET RULES:
+- Be highly objective. Base conclusions on clear evidence, not speculation.
+- Normal enterprise traffic patterns are NOT findings. Do not flag routine DNS, LDAP, SMB,
+  or Kerberos traffic as suspicious without specific anomaly indicators.
+- A clean report with no findings is a valid and professional outcome.
+- Distinguish between confirmed threats and theoretical risks. Only escalate confirmed threats.
+- Consider benign explanations first: scheduled tasks, software updates, legitimate scans,
+  backup jobs, and monitoring tools all generate traffic that can look suspicious.
 
 SUMMARY DATA:
 {pcap_summary_data}
@@ -167,6 +195,12 @@ REPORTING_PROMPT = """{system_identity}
 {investigation_context}CURRENT TASK:
 You are a Senior Incident Responder preparing documentation for the SOC.
 
+CRITICAL MINDSET RULES:
+- Reports must be factual and evidence-based. Do not speculate or inflate severity.
+- Clearly separate confirmed findings from theoretical risks.
+- If no significant threats were found, state that clearly — a clean report is professional.
+- Only list IoCs that have actual supporting evidence in the PCAP data.
+
 SUMMARY DATA:
 {pcap_summary_data}
 
@@ -192,9 +226,15 @@ End with:
 
 OT_TRIAGE_PROMPT = """{system_identity}
 {alert_condition}
-{investigation_context}CURRENT TASK:
+{investigation_context}
+CURRENT TASK:
 You are an OT Security Analyst conducting initial triage on a network capture from an
 industrial control system (ICS) / SCADA environment.
+
+CRITICAL MINDSET RULES:
+- Be highly objective. Do not assume "compromise", "attack", or "malice" without definitive proof.
+- In OT, misconfigurations, hardware failures, and network loops are overwhelmingly more common than cyberattacks. You must consider these benign operational causes.
+- Separate observable facts in the PCAP from hypotheses.
 
 SUMMARY DATA:
 {pcap_summary_data}
@@ -202,7 +242,8 @@ SUMMARY DATA:
 ANALYSIS TASKS:
 1. OT PROTOCOL BASELINE: Review ICS protocol transactions (Modbus, DNP3, S7, CIP, OPC-UA,
    BACnet, IEC-104). Identify unexpected function codes, write operations from unusual sources,
-   diagnostic/restart commands, and exception responses.
+   diagnostic/restart commands, and exception responses. (Be sure to correctly identify protocol
+   roles, e.g., master vs. slave, based on traffic flow).
 2. ZONE VIOLATION CHECK: Identify any traffic crossing Purdue Model boundaries — IT subnet
    IPs communicating with control network devices, external IPs reaching ICS ports, or
    unexpected internal-to-internal OT lateral movement.
@@ -211,17 +252,20 @@ ANALYSIS TASKS:
    enable IT-to-OT pivot.
 4. DEVICE INVENTORY ANOMALY: Check for rogue devices — IPs that appear as OT protocol
    sources/destinations but seem unusual (e.g., workstation IPs sending Modbus writes).
-5. PRIORITIZATION: Rank the top 3 findings by severity using OT-specific criteria:
+5. PRIORITIZATION: Rank the top 3 findings by severity using OT-specific criteria (Note: You
+   must evaluate whether anomalies are malicious OR benign operational failures/misconfigurations):
    - CRITICAL: Direct process impact risk (unauthorized writes to PLCs, safety system commands)
    - HIGH: Zone violations, credential exposure, unauthorized access to ICS protocols
-   - MEDIUM: Reconnaissance activity, unusual polling patterns
+   - MEDIUM: Reconnaissance activity, unusual polling patterns, malfunctioning devices
    - LOW: Minor anomalies, informational
-6. SAFETY ASSESSMENT: Could any observed activity lead to physical process manipulation?
+6. SAFETY ASSESSMENT: Assess the risk to the physical process. State clearly whether the
+   evidence points to intentional physical process manipulation, or if it is more likely a
+   benign operational issue (e.g., failed device, misconfiguration, network error).
 
 End with:
 ⚡ TL;DR
-- One-line safety/risk verdict
-- Top 1-3 bullet points: most critical OT-specific findings
+- One-line safety/risk verdict (Must be objective: explicitly state if the cause appears malicious or operational/benign)
+- Top 1-3 bullet points: most critical OT-specific findings (Stick strictly to observable facts, not assumptions)
 """
 
 OT_THREAT_HUNT_PROMPT = """{system_identity}
@@ -319,7 +363,12 @@ YOUR ROLE:
 
 KEY NETWORK OPS PRINCIPLES:
 - TCP retransmissions indicate packet loss or network congestion.
-- TCP RST floods suggest connection issues, firewall resets, or application failures.
+- TCP RST directionality matters: If the CLIENT is sending RSTs (RSTs from the
+  ephemeral-port side), do not assume the server is offline. This indicates
+  client-side application aborts — the app is timing out or receiving out-of-
+  sequence data and closing the connection. If the SERVER sends RSTs (from the
+  well-known port side), the service is rejecting connections (port closed,
+  service down, or connection limit reached).
 - TCP zero-window events indicate receiver buffer exhaustion (application or host overload).
 - ICMP Destination Unreachable messages indicate routing problems or blocked services.
 - ICMP Time Exceeded (TTL) indicates routing loops or misconfigured hop counts.
@@ -344,6 +393,9 @@ ROUTING LOOP DETECTION:
 
 ARP HEALTH ANALYSIS:
 - ARP is Layer 2 — it operates below IP and reveals switch/VLAN-level health.
+- DHCP exception: Source IP 0.0.0.0 in ARP is normal DHCP initialization (DHCP
+  DISCOVER/Request before an IP is assigned). Ignore 0.0.0.0 when evaluating
+  IP address conflicts or ARP anomalies — multiple MACs using 0.0.0.0 is expected.
 - ARP storms (>100 ARP/s sustained) typically indicate a Layer 2 loop (spanning-tree
   failure) or broadcast storm. This is a CRITICAL finding.
 - IP address conflicts (same IP, multiple MACs) cause intermittent connectivity loss
@@ -357,14 +409,55 @@ ARP HEALTH ANALYSIS:
 CONTROL PLANE & TOPOLOGY ANALYSIS:
 - STP (Spanning Tree Protocol):
   - BPDUs are normal L2 control frames; their RATE matters, not mere presence.
-  - TCN (Topology Change Notification) BPDUs signal that the L2 topology changed —
-    a port went up/down, a device joined/left. Occasional TCNs are normal; sustained
-    floods (>10/min) indicate port flapping, cable issues, or misconfiguration.
-  - TC flag set in Config BPDUs triggers MAC table aging acceleration across bridges.
+  - PVST+ (Per-VLAN Spanning Tree Plus): Cisco switches run a separate STP instance
+    per VLAN. Each VLAN has its own root bridge ID = (priority + VLAN ID) : MAC.
+    Multiple root bridge IDs with the SAME MAC but different priorities are NOT root
+    instability — they are per-VLAN STP instances (normal PVST+ behavior).
+    True root instability requires different MACs competing within the SAME VLAN.
+  - If the display says "stable, PVST+" it means one switch is root for all VLANs.
+  - Root Change Events are PVST+-aware: only flagged when the root MAC changes
+    within a single VLAN, not when switching between VLAN instances.
+  - RSTP vs Legacy STP: In RSTP (802.1w) and MSTP (802.1s), topology changes
+    are signaled via the TC flag (bit 0) in standard Rapid BPDUs (Type 0x02),
+    NOT via dedicated TCN BPDUs (Type 0x80). Look at TC flag count, not just TCN
+    count, to assess topology change activity in modern networks.
+  - MSTP awareness: If MSTP is running (version=3), the CIST (Common Internal
+    Spanning Tree) root is shared, with per-MSTI (instance) parameters.
+    Different MSTI parameters do NOT mean the switch is flapping.
+  - BPDU STARVATION is the most critical STP failure mode. If a port was
+    receiving BPDUs every 2s (hello) and suddenly stops receiving for >max_age
+    (default 20s), the port ages out STP info and transitions to Forwarding.
+    This causes a BRIDGING LOOP. The display flags gaps exceeding max_age with
+    exact timestamps and affected source MACs. Treat any BPDU starvation as
+    CRITICAL — investigate the upstream switch (CPU spike, link failure,
+    unidirectional fiber, software hang).
+  - MAC MISMATCH: If the Ethernet source MAC differs from the BPDU bridge MAC
+    (beyond last-octet port offsets), this indicates potential BPDU spoofing
+    (e.g. Yersinia), a misconfigured transparent bridge, or packet crafting.
+    Flag as a SECURITY concern.
+  - TCN BPDUs signal L2 topology changed — port up/down, device joined/left.
+    Occasional TCNs are normal; floods (>10/min) = port flapping or cable issues.
+  - TC flag in Config BPDUs triggers MAC table aging acceleration across bridges.
     Many TC flags = many topology changes = network instability.
-  - Multiple root bridges seen means root bridge election occurred during the capture.
-    This is a CRITICAL event that causes seconds-long traffic blackout.
-  - BPDU rate >5/s on a single bridge is elevated; standard STP sends every 2s.
+  - TCA (Topology Change Acknowledgment) = root bridge acknowledging TCN receipt.
+  - BPDU rate context: Use the per-port-per-VLAN rate, NOT the aggregate rate,
+    when evaluating STP storms. In PVST+, each port sends 1 BPDU per VLAN per
+    hello interval (2s). An aggregate 11.5 BPDU/s across 23 ports × 5 VLANs =
+    0.1 BPDU/s per port/VLAN, which is perfectly normal. Only flag STP storms
+    if the per-port-per-VLAN rate exceeds 1.0 BPDU/s.
+  - RSTP Proposal/Agreement counts show port negotiation — high counts = flapping.
+  - Port Roles (Root/Designated/Alternate/Backup) reveal the topology structure.
+  - Port States (Forwarding/Learning/Blocking) — many Blocking = redundant paths,
+    many Learning = topology converging, Forwarding = stable.
+  - Path Cost changes for a bridge over time indicate link speed changes or failover.
+  - VLANs from System ID Extension show which VLANs have STP instances.
+  - Source switch MACs identify which physical switches are participating.
+  - Non-standard timer values (hello ≠ 2s, max_age ≠ 20s, fwd_delay ≠ 15s)
+    indicate custom tuning — may be intentional or misconfiguration.
+  - TC event bursts (clusters of TC flags within seconds) = active instability.
+  - When STP instability IS detected, identify: (1) TRIGGER — which MAC/port
+    initiated the change, (2) BLAST RADIUS — isolated to one VLAN or all,
+    (3) NEXT STEP — specific switch/port to investigate.
 - HSRP (Hot Standby Router Protocol):
   - HSRP state transitions (Standby→Active or Active→Standby) represent gateway
     failover events. Each transition causes brief traffic disruption for hosts
@@ -391,6 +484,12 @@ CONTROL PLANE & TOPOLOGY ANALYSIS:
     resets the neighbor adjacency. Look for high Query counts with low Reply counts.
   - Update packets carry route changes; elevated Update/Hello ratio indicates
     active topology changes rather than steady-state operation.
+
+ORGANIZATION IP CLASSIFICATION RULE:
+- The investigation context may list KNOWN ORGANIZATION IP RANGES. These are public IP
+  addresses owned by the organization (e.g., partner links, AESO monitoring, SCADA WAN).
+- IPs within these ranges MUST be classified as INTERNAL/ORG — NOT external.
+- Label organization IPs as "ORG" not "EXT" in your analysis.
 """
 
 # ---------------------------------------------------------------------------
@@ -402,6 +501,19 @@ NETOPS_TRIAGE_PROMPT = """{system_identity}
 {investigation_context}CURRENT TASK:
 You are a Network Operations analyst performing initial health assessment on a parsed
 network traffic capture.
+
+CRITICAL MINDSET RULES:
+- Be objective. Not every retransmission is a problem — WAN links routinely see 0.5-1%.
+- Consider normal operational causes: scheduled backups, patch windows, legitimate network
+  scans (vulnerability scanners, asset discovery), and monitoring tools.
+- A healthy network report is a valid and professional outcome. Do not manufacture issues.
+- RSTs are normal in enterprise networks — applications close connections, firewalls enforce
+  policy, load balancers health-check. Only flag RST patterns that indicate actual service
+  degradation or failure.
+- ARP patterns vary by network size and architecture. Small broadcast domains with active
+  DHCP will naturally have higher ARP rates.
+- STP topology changes (TCNs) during maintenance windows or device reboots are expected.
+  Only flag sustained or unexplained control plane instability.
 
 SUMMARY DATA:
 {pcap_summary_data}
@@ -439,7 +551,10 @@ ANALYSIS TASKS:
    - Gratuitous ARP anomalies — correlate with VRRP/HSRP failover events
    - Unanswered ARP requests — dead hosts or wrong-subnet devices
 6. CONTROL PLANE CHECK: Review STP, HSRP/VRRP, OSPF, and EIGRP sections:
-   - STP: Are there TCN storms or root bridge changes? Flag root instability as CRITICAL.
+   - STP: Check if root is "stable, PVST+" (normal per-VLAN instances) vs actual
+     root changes (different MACs competing within same VLAN). Only flag root
+     instability if Root Change Events are present — those are already PVST+-aware.
+     TCN storms with zero root changes = port flapping, not root instability.
    - HSRP/VRRP: Any state transitions or priority changes? Each = a gateway failover.
    - OSPF: Any neighbor hello gaps exceeding dead interval? Any LSUpdate bursts?
    - EIGRP: Any queries (routes going ACTIVE)? High query count = convergence event.
@@ -462,6 +577,15 @@ NETOPS_HEALTH_PROMPT = """{system_identity}
 {investigation_context}CURRENT TASK:
 You are a Senior Network Engineer performing deep network health analysis on parsed
 PCAP data to identify root causes of performance issues and infrastructure problems.
+
+CRITICAL MINDSET RULES:
+- Be objective and evidence-based. Quantify issues with actual numbers from the data.
+- Not every anomaly requires action. Prioritize issues with measurable user or service impact.
+- Consider normal operational baselines: enterprise networks have background retransmissions,
+  periodic ARP bursts during DHCP renewals, and routine control plane chatter.
+- Distinguish between transient events (brief convergence, maintenance) and persistent
+  problems. Only persistent patterns warrant remediation recommendations.
+- A healthy network finding is valid. Do not force issues where the data shows normal operation.
 
 SUMMARY DATA:
 {pcap_summary_data}
@@ -514,8 +638,11 @@ ANALYSIS TASKS:
    - Long-lived connections that may indicate stuck sessions.
    - Protocol distribution anomalies (unexpected protocol ratios).
 6. CONTROL PLANE DEEP DIVE: If STP/HSRP/VRRP/OSPF/EIGRP data is present:
-   - STP: Correlate TCN count with ARP storms — both together confirm L2 loop.
-     If root bridge changed, estimate reconvergence time from BPDU timestamps.
+   - STP: The root bridge display is PVST+-aware. "Stable, PVST+" means one
+     switch is root for all VLANs (normal). Only Root Change Events represent
+     actual root instability (different MACs competing within same VLAN).
+     Correlate TCN count with ARP storms — both together confirm L2 loop.
+     If root bridge changed within a VLAN, estimate reconvergence time.
      Check if multiple bridges are contending for root (priority war).
    - HSRP/VRRP: Map state transitions to a timeline. Rapid oscillation (>3
      transitions/minute) indicates peer reachability issues (WAN flap, interface
@@ -551,6 +678,14 @@ NETOPS_REPORT_PROMPT = """{system_identity}
 {investigation_context}CURRENT TASK:
 You are a Network Operations Manager preparing a network health report for the
 infrastructure team and IT management.
+
+CRITICAL MINDSET RULES:
+- Be objective and professional. Management reports must not cry wolf.
+- Only report issues that have measurable impact on service availability or performance.
+- Healthy KPIs should be reported as healthy — do not qualify them with unnecessary caveats.
+- Consider operational context: maintenance windows, growth patterns, and seasonal load
+  variations before flagging capacity concerns.
+- A network health grade of A or B is a positive outcome, not a reason to look harder for problems.
 
 SUMMARY DATA:
 {pcap_summary_data}
@@ -711,9 +846,74 @@ _ZONE_BG_COLORS = {
 
 
 def _classify_ip_zone(ip: str, session: Any) -> str:
-    """Classify an IP into a Purdue zone based on traffic patterns."""
+    """Classify an IP into a Purdue zone based on enrichment data or traffic patterns."""
     from plugins.network_forensics.pcap_metadata_summary.tool import is_internal
 
+    # Priority 1: Use enrichment data if available (authoritative)
+    try:
+        from plugins.network_forensics.pcap_enrichment.tool import (
+            get_enrichment_cache, get_field, get_field_mappings,
+        )
+        cache = get_enrichment_cache()
+        if cache and ip in cache:
+            row = cache[ip]
+            mappings = get_field_mappings()
+
+            # Use explicit purdue mapping if available, else try common column names
+            purdue_val = get_field(ip, "purdue")
+            if not purdue_val:
+                # Fallback: try common column names when no explicit mapping
+                for col in ("purdue_level", "purdue", "purdue_zone"):
+                    v = row.get(col, "")
+                    if v and str(v).strip():
+                        purdue_val = str(v).strip()
+                        break
+
+            if purdue_val:
+                purdue = purdue_val.lower()
+                # Normalize enrichment values to our zone names
+                purdue_map = {
+                    "0": "CONTROL/FIELD", "1": "CONTROL/FIELD",
+                    "2": "SCADA", "3": "SCADA",
+                    "3.5": "DMZ", "dmz": "DMZ",
+                    "4": "Corporate", "5": "External",
+                    "control": "CONTROL/FIELD", "control/field": "CONTROL/FIELD",
+                    "field": "CONTROL/FIELD",
+                    "scada": "SCADA", "supervisory": "SCADA",
+                    "corporate": "Corporate", "enterprise": "Corporate",
+                    "external": "External", "internet": "External",
+                }
+                zone = purdue_map.get(purdue)
+                if zone:
+                    return zone
+                # Try partial match
+                for key, zone_name in purdue_map.items():
+                    if key in purdue:
+                        return zone_name
+
+            # Use explicit zone mapping if available, else try common column names
+            zone_val = get_field(ip, "zone")
+            if not zone_val:
+                for col in ("ot_network", "zone", "network_zone", "segment"):
+                    v = row.get(col, "")
+                    if v and str(v).strip():
+                        zone_val = str(v).strip()
+                        break
+
+            if zone_val:
+                ot_net = zone_val.lower()
+                if "scada" in ot_net or "hmi" in ot_net:
+                    return "SCADA"
+                if "control" in ot_net or "field" in ot_net or "plc" in ot_net:
+                    return "CONTROL/FIELD"
+                if "dmz" in ot_net:
+                    return "DMZ"
+                if "corporate" in ot_net or "it" in ot_net or "enterprise" in ot_net:
+                    return "Corporate"
+    except ImportError:
+        pass  # enrichment module not available — fall through to heuristics
+
+    # Priority 2: Port-based heuristics (fallback)
     if not is_internal(ip):
         return "External"
 
@@ -883,7 +1083,7 @@ def _render_purdue_zone_graph(session: Any) -> bytes | None:
                     fontsize=8, ha="center", va="center",
                     color="#7f8c8d", style="italic")
 
-    # --- Draw /24-to-/24 traffic flow edges (cross-zone only) ---
+    # --- Draw /24-to-/24 traffic flow edges (cross-zone only, top 75) ---
     cross_zone_flows: list[tuple[str, str, int]] = []
     for (net_a, net_b), total_bytes in net_pair_bytes.items():
         zone_a = net_zones.get(net_a, "External")
@@ -891,6 +1091,11 @@ def _render_purdue_zone_graph(session: Any) -> bytes | None:
         if zone_a == zone_b:
             continue
         cross_zone_flows.append((net_a, net_b, total_bytes))
+
+    # Cap to top 75 flows by volume to keep rendering fast
+    cross_zone_flows.sort(key=lambda x: x[2], reverse=True)
+    total_cross = len(cross_zone_flows)
+    cross_zone_flows = cross_zone_flows[:75]
 
     if cross_zone_flows:
         max_flow = max(f[2] for f in cross_zone_flows)
@@ -969,14 +1174,16 @@ def _render_purdue_zone_graph(session: Any) -> bytes | None:
     ax.legend(handles=legend_elements, loc="lower right",
               fontsize=7, framealpha=0.9, ncol=2)
 
-    ax.set_title("Purdue Model - Network Zone Traffic Flow",
+    ax.set_title("Purdue Model - Network Zone Traffic Flow"
+                 + (f" (top {len(cross_zone_flows)} of {total_cross} flows)"
+                    if total_cross > 75 else ""),
                  fontsize=13, fontweight="bold", pad=12)
 
     plt.tight_layout()
 
     # Render to PNG bytes in memory
     buf = BytesIO()
-    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
+    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight",
                 facecolor="white", edgecolor="none")
     plt.close(fig)
     buf.seek(0)
@@ -1123,6 +1330,7 @@ def _export_pdf(
         # PURDUE ZONE TRAFFIC DIAGRAM (OT reports only)
         # ===================================================================
         if mode.startswith("ot_") and session is not None:
+            print("  \U0001f5fa Rendering Purdue zone diagram...", flush=True)
             graph_png = _render_purdue_zone_graph(session)
             if graph_png:
                 import tempfile
@@ -1166,6 +1374,7 @@ def _export_pdf(
         # ===================================================================
         # BODY PAGES — parse content into structured sections
         # ===================================================================
+        print("  \U0001f4dd Rendering PDF body...", flush=True)
 
         # Helper: draw a coloured section header bar
         def _section_header(title_text: str, bg: tuple = CLR_NAVY) -> None:
@@ -1487,6 +1696,26 @@ def _export_pdf(
             is_lateral_section = "LATERAL" in sec_title.upper() or "CROSS-ZONE" in sec_title.upper()
             is_ot_activity = ("OT / ICS PROTOCOL ACTIVITY" in sec_title.upper()
                               or "OT/ICS PROTOCOL ACTIVITY" in sec_title.upper())
+            is_scada_tags = "SCADA MESSAGE BUS" in sec_title.upper()
+
+            # --- SCADA Message Bus Tag Data → compact table ---
+            if is_scada_tags:
+                # Render summary lines (Unique tags, Source hosts)
+                for ln in sec_lines:
+                    stripped = ln.strip()
+                    if not stripped:
+                        continue
+                    if stripped.startswith("─") or stripped.startswith("Tag Name"):
+                        continue  # skip text table markers
+                    if stripped.startswith("Unique tags") or stripped.startswith("Source hosts"):
+                        _body_line(stripped, font_size=9, bold=True)
+                        continue
+                    # Parse tabular tag lines
+                    parts = stripped.split()
+                    if len(parts) >= 3 and not stripped.startswith("─"):
+                        # Render as compact data line with smaller font
+                        _data_line(stripped)
+                continue
 
             # --- OT / ICS Protocol Activity → structured tables ---
             if is_ot_activity:
@@ -1713,28 +1942,38 @@ def _export_pdf(
                     if "LATERAL" in sub_title.upper():
                         _render_lateral_table(sub_lines, max_rows=20)
                     elif "CROSS-ZONE" in sub_title.upper():
-                        # Cross-zone: render as table too
+                        # Cross-zone: render as table with Source / Destination
                         xz_rows: list[list[str]] = []
                         for ln in sub_lines:
                             s = ln.strip()
                             if not s or s.startswith("-"):
                                 continue
-                            if "(INT)" in s and "(EXT)" in s:
+                            if ("(INT)" in s or "(EXT)" in s) and "->" in s:
                                 # "10.70.1.75 (INT) -> 161.141.96.182 (EXT):44818 (EtherNet/IP) -- 2 pkts"
+                                # or "161.141.113.37 (EXT) -> 10.59.244.32 (INT):44818 (...) -- 506 pkts"
                                 parts = s.split("->", 1)
-                                src = parts[0].replace("(INT)", "").strip()
+                                src_part = parts[0].strip()
                                 rest = parts[1].strip() if len(parts) > 1 else ""
-                                # Parse dest, port, proto, pkts
+                                # Parse dest, port/proto, pkts from rest
                                 dst_part = rest.split("--")[0].strip() if "--" in rest else rest
                                 pkts = rest.split("--")[1].strip() if "--" in rest else ""
-                                # "161.141.96.182 (EXT):44818 (EtherNet/IP)"
-                                dst_ip = dst_part.split("(EXT)")[0].strip()
-                                port_proto = dst_part.split("(EXT)")[1].strip(": ") if "(EXT)" in dst_part else ""
-                                xz_rows.append([src, dst_ip, port_proto, pkts])
+                                # Extract port/protocol from destination side
+                                # dst_part is like "161.141.96.182 (EXT):44818 (EtherNet/IP)"
+                                # or "10.59.244.32 (INT):44818 (EtherNet/IP)"
+                                port_proto = ""
+                                for tag in ("(INT)", "(EXT)"):
+                                    if tag in dst_part:
+                                        idx = dst_part.index(tag)
+                                        after = dst_part[idx + len(tag):].strip().lstrip(":")
+                                        if after:
+                                            port_proto = after
+                                        dst_part = dst_part[:idx].strip()
+                                        break
+                                xz_rows.append([src_part, dst_part, port_proto, pkts])
                         if xz_rows:
                             show = xz_rows[:20]
                             _table(
-                                ["Internal IP", "External IP", "Port / Protocol", "Volume"],
+                                ["Source", "Destination", "Port / Protocol", "Volume"],
                                 show,
                                 col_widths=[38, 38, 55, eff_w - 131],
                             )
@@ -1755,6 +1994,100 @@ def _export_pdf(
                             s = ln.strip()
                             if s:
                                 _data_line(s)
+                continue
+
+            # --- External Communications section → render as tables ---
+            is_ext_comms_section = "EXTERNAL COMMUNICATIONS" in sec_title.upper()
+            if is_ext_comms_section:
+                # Split into sub-sections by sub-header keywords
+                ext_subs: list[tuple[str, list[str]]] = []
+                cur_ext_sub = ""
+                cur_ext_lines: list[str] = []
+                for ln in sec_lines:
+                    s = ln.strip()
+                    if s.startswith(("TOP EXTERNAL DESTINATIONS",
+                                     "TOP EXTERNAL SOURCES",
+                                     "INTERNAL HOSTS WITH MOST EXTERNAL")):
+                        if cur_ext_sub or cur_ext_lines:
+                            ext_subs.append((cur_ext_sub, cur_ext_lines))
+                        cur_ext_sub = s
+                        cur_ext_lines = []
+                        continue
+                    cur_ext_lines.append(ln)
+                if cur_ext_sub or cur_ext_lines:
+                    ext_subs.append((cur_ext_sub, cur_ext_lines))
+
+                for ext_sub_title, ext_sub_lines in ext_subs:
+                    if not ext_sub_title:
+                        # Summary lines at top
+                        for ln in ext_sub_lines:
+                            s = ln.strip()
+                            if s and not s.startswith("-"):
+                                _body_line(s, font_size=9,
+                                           bold=("Total" in s or "INT" in s or "EXT" in s or "Unique" in s))
+                        continue
+
+                    _sub_header(ext_sub_title)
+
+                    if "DESTINATIONS" in ext_sub_title.upper() or "SOURCES" in ext_sub_title.upper():
+                        ext_rows: list[list[str]] = []
+                        for ln in ext_sub_lines:
+                            s = ln.strip()
+                            if not s or s.startswith("-"):
+                                continue
+                            # Parse: "203.0.113.5      1.2 MB       flows=12     ports: 443, 80"
+                            tokens = s.split()
+                            if tokens and tokens[0][0].isdigit():
+                                ip = tokens[0]
+                                # Find bytes (contains B/KB/MB/GB)
+                                vol = ""
+                                flows = ""
+                                ports = ""
+                                for i, t in enumerate(tokens[1:], 1):
+                                    if any(u in t for u in ("B", "KB", "MB", "GB", "TB")):
+                                        vol = t if vol else tokens[i-1] + " " + t if not tokens[i-1][0].isdigit() else t
+                                        # Check if previous token is the number part
+                                        if i > 1 and tokens[i-1].replace(".", "").replace(",", "").isdigit():
+                                            vol = tokens[i-1] + " " + t
+                                    elif t.startswith("flows="):
+                                        flows = t.split("=")[1]
+                                    elif t == "ports:":
+                                        ports = " ".join(tokens[i+1:])
+                                        break
+                                ext_rows.append([ip, vol, flows, ports])
+                        if ext_rows:
+                            _table(
+                                ["IP Address", "Volume", "Flows", "Ports"],
+                                ext_rows[:15],
+                                col_widths=[42, 25, 18, eff_w - 85],
+                            )
+                    elif "INTERNAL HOSTS" in ext_sub_title.upper():
+                        int_rows: list[list[str]] = []
+                        for ln in ext_sub_lines:
+                            s = ln.strip()
+                            if not s or s.startswith("-"):
+                                continue
+                            tokens = s.split()
+                            if tokens and tokens[0][0].isdigit():
+                                ip = tokens[0]
+                                vol = ""
+                                peers = ""
+                                for i, t in enumerate(tokens[1:], 1):
+                                    if any(u in t for u in ("B", "KB", "MB", "GB", "TB")):
+                                        if i > 1 and tokens[i-1].replace(".", "").replace(",", "").isdigit():
+                                            vol = tokens[i-1] + " " + t
+                                        else:
+                                            vol = t
+                                    elif t == "peers:":
+                                        peers = " ".join(tokens[i+1:])
+                                        break
+                                int_rows.append([ip, vol, peers])
+                        if int_rows:
+                            _table(
+                                ["Internal IP", "Volume", "External Peers"],
+                                int_rows[:10],
+                                col_widths=[45, 30, eff_w - 75],
+                            )
                 continue
 
             # --- Port Analysis section → render as tables ---
@@ -2047,6 +2380,16 @@ class PcapAiAnalyzer:
             condition_orange = context.config.get("condition_orange", False)
 
         try:
+            # Step 0: If focus_ips specified, create a filtered session view
+            focus_ips_raw = payload.get("focus_ips", "")
+            if focus_ips_raw:
+                focus_ips = set(
+                    ip.strip() for ip in focus_ips_raw.split(",") if ip.strip()
+                )
+                session = self._filter_session_by_ips(session, focus_ips)
+                logger.info("Focus IPs filter: %d IPs → %d conversations",
+                            len(focus_ips), len(session.conversations))
+
             # Step 1: Get static output (OT modes get OT-enriched summary,
             #         NetOps modes get network health summary)
             if is_ot_mode:
@@ -2056,6 +2399,16 @@ class PcapAiAnalyzer:
             else:
                 static_output = self._get_static_output(session, mode, payload)
 
+            # Step 1b: Inject BigQuery IP enrichment if available (for LLM only, not display)
+            enrichment_block = ""
+            try:
+                from plugins.network_forensics.pcap_enrichment.tool import (
+                    PcapEnrichment,
+                )
+                enrichment_block = PcapEnrichment.get_enrichment_for_prompt()
+            except ImportError:
+                pass  # pcap_enrichment not installed — skip silently
+
             # Step 2: Load investigation context from any markdown/text artifact
             investigation_context = self._load_investigation_context(context)
 
@@ -2063,19 +2416,46 @@ class PcapAiAnalyzer:
             prompt_template, _, system_identity_override = MODE_CONFIG[mode]
             system_identity = system_identity_override or PCAP_SYSTEM_IDENTITY
             alert_condition = self._get_alert_condition(condition_orange)
+
+            # Combine static output + enrichment for LLM (enrichment is LLM-only context)
+            llm_data = static_output or ""
+            if enrichment_block:
+                llm_data += "\n\n" + enrichment_block
+
+            # Debug: log None variables to diagnose format errors
+            for _vname, _vval in [("system_identity", system_identity),
+                                   ("alert_condition", alert_condition),
+                                   ("investigation_context", investigation_context),
+                                   ("static_output", static_output)]:
+                if _vval is None:
+                    logger.warning("Prompt variable '%s' is None — using empty string", _vname)
+
             prompt = prompt_template.format(
-                system_identity=system_identity,
-                alert_condition=alert_condition,
-                investigation_context=investigation_context,
-                pcap_summary_data=static_output,
+                system_identity=system_identity or "",
+                alert_condition=alert_condition or "",
+                investigation_context=investigation_context or "",
+                pcap_summary_data=llm_data,
             )
+
+            # Inject focus scope instruction when --focus-ips is active
+            if focus_ips_raw:
+                focus_instruction = (
+                    f"\n\n⚠️ SCOPE RESTRICTION: This analysis is STRICTLY limited to the following "
+                    f"IP addresses: {focus_ips_raw}\n"
+                    f"Do NOT discuss, reference, or analyze any other IPs. "
+                    f"All findings, conclusions, and recommendations must relate ONLY to these "
+                    f"specific hosts. If an IP not in this list appears in the data, ignore it "
+                    f"unless it is a direct communication partner of a focus IP (and even then, "
+                    f"frame the finding from the perspective of the focus IP).\n"
+                )
+                prompt = focus_instruction + prompt
 
             # Pre-call token estimate:
             # PCAP summaries contain dense structured data (IPs, ports, numbers, JSON)
             # which tokenizes at ~3 chars/token vs ~4 for plain English.
             # Split prompt into template prose vs injected PCAP data for a blended estimate,
             # then apply a 1.4x correction factor — empirically calibrated against actual usage.
-            pcap_data_len = len(static_output)
+            pcap_data_len = len(llm_data)
             prose_len = len(prompt) - pcap_data_len
             est_input_tokens = int(((prose_len // 4) + (pcap_data_len // 3)) * 1.4)
             # Output estimate: structured AI analysis responses run ~50% of input tokens
@@ -2088,9 +2468,6 @@ class PcapAiAnalyzer:
             )
 
             # Step 4: Query LLM
-            # Tier comes from the manifest (model_tier: heavy) — the framework
-            # applies it. 16384 is well inside the tier's 65,536 output cap,
-            # so the dispatcher's clamp does not engage.
             response = context.llm_query.query_text(
                 prompt=prompt,
                 system_context=system_identity,
@@ -2154,6 +2531,7 @@ class PcapAiAnalyzer:
             export_type = payload.get("export_type", "").lower()
             pdf_path = None
             if export_type == "pdf":
+                print("  \U0001f4c4 Generating PDF report...", flush=True)
                 pdf_path = _export_pdf(
                     combined, output_dir,
                     f"pcap_ai_analyzer_{mode}_{ts}.pdf",
@@ -2161,6 +2539,8 @@ class PcapAiAnalyzer:
                     condition_orange=condition_orange,
                     session=session,
                 )
+                if pdf_path:
+                    print(f"  \u2705 PDF saved: {pdf_path}", flush=True)
 
             # Register the markdown file as an artifact
             if hasattr(context, "register_artifact"):
@@ -2190,8 +2570,11 @@ class PcapAiAnalyzer:
             )
 
         except Exception as e:
-            logger.error("AI analysis failed: %s", e, exc_info=True)
-            return ToolResult(ok=False, error_code="INTERNAL_ERROR", message=str(e))
+            import traceback as _tb
+            tb_str = _tb.format_exc()
+            logger.error("AI analysis failed: %s\n%s", e, tb_str)
+            # Include traceback in the message so the CLI shows the exact location
+            return ToolResult(ok=False, error_code="INTERNAL_ERROR", message=f"{e}\n{tb_str}")
 
     def summarize_for_llm(self, result: ToolResult) -> str:
         if not result.ok:
@@ -2210,6 +2593,112 @@ class PcapAiAnalyzer:
     # -------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------
+
+    @staticmethod
+    def _filter_session_by_ips(session, focus_ips: set[str]):
+        """Create a filtered copy of the session containing only data involving focus_ips.
+
+        Returns a shallow-copied PcapSession where conversations, DNS, TLS, HTTP,
+        OT transactions, and other per-IP data are filtered to only include entries
+        where at least one of the focus_ips is involved.
+        """
+        import copy
+        from plugins.network_forensics.pcap_metadata_summary.tool import PcapSession
+
+        filtered = copy.copy(session)
+
+        # Conversations: keep only flows where src or dst is in focus_ips
+        filtered.conversations = {}
+        for key, stats in session.conversations.items():
+            src, dst = key[0], key[1]
+            if src in focus_ips or dst in focus_ips:
+                filtered.conversations[key] = stats
+
+        # Recalculate IP counters from filtered conversations
+        from collections import Counter, defaultdict
+        filtered.src_ips = Counter()
+        filtered.dst_ips = Counter()
+        for (src, dst, dport, proto), stats in filtered.conversations.items():
+            filtered.src_ips[src] += stats.get("packets", 1)
+            filtered.dst_ips[dst] += stats.get("packets", 1)
+
+        # DNS queries/responses
+        filtered.dns_queries = [
+            q for q in session.dns_queries
+            if q.get("src") in focus_ips or q.get("dst") in focus_ips
+        ]
+        filtered.dns_responses = [
+            r for r in session.dns_responses
+            if r.get("src") in focus_ips or r.get("dst") in focus_ips
+        ]
+
+        # TLS handshakes
+        filtered.tls_handshakes = [
+            t for t in session.tls_handshakes
+            if t.get("src") in focus_ips or t.get("dst") in focus_ips
+        ]
+
+        # HTTP requests
+        filtered.http_requests = [
+            h for h in session.http_requests
+            if h.get("src") in focus_ips or h.get("dst") in focus_ips
+        ]
+
+        # OT transactions
+        filtered.ot_transactions = [
+            t for t in session.ot_transactions
+            if t.get("src") in focus_ips or t.get("dst") in focus_ips
+        ]
+
+        # Cleartext credentials
+        filtered.cleartext_creds = [
+            c for c in session.cleartext_creds
+            if c.get("src") in focus_ips or c.get("dst") in focus_ips
+        ]
+
+        # ICMP errors
+        filtered.icmp_errors = [
+            e for e in session.icmp_errors
+            if e.get("src") in focus_ips or e.get("dst") in focus_ips
+        ]
+
+        # HSRP / VRRP events
+        filtered.hsrp_events = [
+            e for e in session.hsrp_events if e.get("src") in focus_ips
+        ]
+        filtered.vrrp_events = [
+            e for e in session.vrrp_events if e.get("src") in focus_ips
+        ]
+
+        # SSH sessions
+        filtered.ssh_sessions = [
+            s for s in session.ssh_sessions
+            if s.get("src") in focus_ips or s.get("dst") in focus_ips
+        ]
+
+        # Kerberos / NTLM / SMB / LDAP / DCE-RPC
+        for attr in ("kerberos_tickets", "ntlm_auths", "smb_mappings",
+                      "smb_files", "dce_rpc_calls", "ldap_operations"):
+            filtered_list = [
+                e for e in getattr(session, attr, [])
+                if e.get("src") in focus_ips or e.get("dst") in focus_ips
+            ]
+            setattr(filtered, attr, filtered_list)
+
+        # Conv health
+        filtered.conv_health = defaultdict(lambda: {"rst": 0, "retransmit": 0, "zero_window": 0})
+        for key, health in session.conv_health.items():
+            src, dst = key[0], key[1]
+            if src in focus_ips or dst in focus_ips:
+                filtered.conv_health[key] = health
+
+        # Update filename to indicate filtering
+        ip_list = ", ".join(sorted(focus_ips)[:5])
+        if len(focus_ips) > 5:
+            ip_list += f" (+{len(focus_ips) - 5} more)"
+        filtered.filename = f"{session.filename} [focus: {ip_list}]"
+
+        return filtered
 
     @staticmethod
     def _load_investigation_context(context: Any) -> str:
@@ -2251,10 +2740,68 @@ class PcapAiAnalyzer:
         if not loaded:
             return ""
 
+        # --- Parse for known organization IP ranges ---
+        # If the context file has a section headed with words like
+        # "Known Organization Public IP Ranges", IPs/CIDRs listed
+        # beneath it are registered so is_internal() treats them as
+        # trusted internal assets (suppresses false-positive EXT alerts).
+        import re as _re
+        import ipaddress as _ipa
+        _org_nets: list = []
+        for _fn, _fc in loaded:
+            _in_org = False
+            for _line in _fc.split('\n'):
+                _s = _line.strip()
+                if _s.startswith('#'):
+                    _h = _s.lower()
+                    _in_org = (
+                        any(w in _h for w in
+                            ['public', 'organization', 'corporate'])
+                        and any(w in _h for w in ['ip', 'network', 'range'])
+                    )
+                    continue
+                if not _in_org:
+                    continue
+                if not _s or _s.startswith('|--') or _s.startswith('|-'):
+                    continue
+                _clean = _s.strip('|').strip()
+                _m = _re.search(
+                    r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?)',
+                    _clean)
+                if _m:
+                    _ip = _m.group(1)
+                    try:
+                        if '/' in _ip:
+                            _org_nets.append(
+                                _ipa.ip_network(_ip, strict=False))
+                        else:
+                            _org_nets.append(
+                                _ipa.ip_network(f"{_ip}/32"))
+                    except ValueError:
+                        pass
+
+        if _org_nets:
+            from plugins.network_forensics.pcap_metadata_summary.tool import (
+                register_org_networks,
+            )
+            register_org_networks(_org_nets)
+            _rs = [str(n) for n in _org_nets]
+            print(f"  \U0001f3e2 Registered {len(_org_nets)} organization IP "
+                  f"range(s): {', '.join(_rs[:5])}"
+                  + (f" (+{len(_rs)-5} more)" if len(_rs) > 5 else ""))
+
         parts = ["INVESTIGATION CONTEXT (analyst-provided notes):"]
         for filename, content in loaded:
             parts.append(f"--- {filename} ---")
             parts.append(content)
+        if _org_nets:
+            parts.append(
+                "--- KNOWN ORGANIZATION IP RANGES ---")
+            parts.append(
+                "IMPORTANT: The following IP ranges are OWNED BY THIS ORGANIZATION. "
+                "They are NOT external threats. Classify them as INTERNAL/ORG. "
+                "Do NOT flag them as external-to-internal zone violations.")
+            parts.append(", ".join(str(n) for n in _org_nets))
         parts.append("--- END INVESTIGATION CONTEXT ---\n")
         block = "\n".join(parts) + "\n"
 
@@ -2321,6 +2868,11 @@ class PcapAiAnalyzer:
         header = PcapAiAnalyzer._build_pcap_header(session)
         lines.append(header)
 
+        # Note: Enrichment data (asset names, Purdue levels, OS, zones) is
+        # injected into the LLM prompt separately via get_enrichment_for_prompt()
+        # and used by the Purdue zone classifier. It is NOT rendered in the
+        # static report to keep it concise.
+
         # --- OT Protocol Summary ---
         ot = session.ot_transactions
         if ot:
@@ -2335,8 +2887,8 @@ class PcapAiAnalyzer:
                 lines.append(f"  {proto:<18} {cnt:>6,} transactions")
 
             # Unique OT endpoints
-            ot_sources = set(t["src_ip"] for t in ot)
-            ot_dests = set(t["dst_ip"] for t in ot)
+            ot_sources = set(t["src"] for t in ot)
+            ot_dests = set(t["dst"] for t in ot)
             ot_endpoints = ot_sources | ot_dests
             int_ot = [ip for ip in ot_endpoints if is_internal(ip)]
             ext_ot = [ip for ip in ot_endpoints if not is_internal(ip)]
@@ -2352,9 +2904,9 @@ class PcapAiAnalyzer:
                 lines.append("-" * 60)
                 write_by_src = defaultdict(list)
                 for w in writes:
-                    write_by_src[w["src_ip"]].append(w)
+                    write_by_src[w["src"]].append(w)
                 for src, ws in sorted(write_by_src.items(), key=lambda x: len(x[1]), reverse=True)[:15]:
-                    dsts = sorted(set(w["dst_ip"] for w in ws))
+                    dsts = sorted(set(w["dst"] for w in ws))
                     protos = sorted(set(w["protocol"] for w in ws))
                     func_names = sorted(set(w.get("function_name", "?") for w in ws))
                     lines.append(
@@ -2371,7 +2923,7 @@ class PcapAiAnalyzer:
                 for c in controls[:20]:
                     func = c.get("function_name") or c.get("function", "?")
                     lines.append(
-                        f"  {c['src_ip']} → {c['dst_ip']}:{c['dst_port']} ({c['protocol']}) "
+                        f"  {c['src']} → {c['dst']}:{c.get('port', '?')} ({c['protocol']}) "
                         f"— {func}"
                     )
 
@@ -2395,11 +2947,11 @@ class PcapAiAnalyzer:
                 for d in diags[:10]:
                     func = d.get("function_name", "?")
                     lines.append(
-                        f"  {d['src_ip']} → {d['dst_ip']}:{d['dst_port']} ({d['protocol']}) — {func}"
+                        f"  {d['src']} → {d['dst']}:{d.get('port', '?')} ({d['protocol']}) — {func}"
                     )
 
             # Per-protocol function code distribution (Modbus detail)
-            modbus_txns = [t for t in ot if t["protocol"] == "Modbus" and "function_code" in t]
+            modbus_txns = [t for t in ot if t["protocol"] == "Modbus" and t.get("function_code") is not None]
             if modbus_txns:
                 lines.append(f"\nModbus Function Code Distribution ({len(modbus_txns):,} parsed):")
                 func_dist = Counter(
@@ -2445,6 +2997,83 @@ class PcapAiAnalyzer:
                 if len(src_dst_pairs) > 5:
                     lines.append(f"    ... +{len(src_dst_pairs) - 5} more pairs")
 
+        # --- SCADA Message Bus Tag Data ---
+        if hasattr(session, "scada_tags") and session.scada_tags:
+            lines.append(f"\n{'=' * 60}")
+            lines.append("SCADA MESSAGE BUS TAG DATA (OASyS / AMQP)")
+            lines.append(f"{'=' * 60}")
+            lines.append(f"Unique tags: {len(session.scada_tags):,}")
+            if hasattr(session, "scada_tag_sources") and session.scada_tag_sources:
+                src_hosts = sorted(session.scada_tag_sources.keys())[:10]
+                lines.append(f"Source hosts: {', '.join(src_hosts)}")
+            lines.append("")
+            # Table header
+            lines.append(f"  {'Tag Name':<55s} {'Msgs':>6s}  {'Quality':<8s}  {'Sample Values'}")
+            lines.append(f"  {'─' * 55} {'─' * 6}  {'─' * 8}  {'─' * 40}")
+            for tag_name, info in sorted(session.scada_tags.items(),
+                                         key=lambda x: x[1]["count"], reverse=True)[:30]:
+                vals = info.get("values_sample", [])
+                val_str = ", ".join(str(v) for v in vals[:3]) if vals else "—"
+                quality = info.get("quality", "?")
+                lines.append(
+                    f"  {tag_name:<55s} {info['count']:>6,}  {quality:<8s}  {val_str}"
+                )
+
+        # --- Syslog Summary ---
+        if hasattr(session, "syslog_total") and session.syslog_total:
+            lines.append(f"\n{'=' * 60}")
+            lines.append("SYSLOG SUMMARY")
+            lines.append(f"{'=' * 60}")
+            lines.append(f"Total messages: {session.syslog_total:,}")
+            if session.syslog_sources:
+                lines.append(f"Sources: {', '.join(sorted(session.syslog_sources.keys())[:10])}")
+            if session.syslog_severity:
+                from plugins.network_forensics.pcap_metadata_summary.tool import _SYSLOG_SEVERITY
+                sev_strs = [f"{_SYSLOG_SEVERITY.get(k, str(k))}={v:,}"
+                            for k, v in session.syslog_severity.most_common()]
+                lines.append(f"Severity: {', '.join(sev_strs)}")
+            if session.syslog_patterns:
+                pat_strs = [f"{k}={v:,}" for k, v in session.syslog_patterns.most_common()]
+                lines.append(f"Patterns: {', '.join(pat_strs)}")
+
+        # --- SNMP Activity ---
+        if hasattr(session, "snmp_sources") and session.snmp_sources:
+            lines.append(f"\nSNMP: {sum(session.snmp_sources.values()):,} packets from "
+                         f"{len(session.snmp_sources)} hosts")
+            if session.snmp_communities:
+                lines.append(f"  Communities: {', '.join(session.snmp_communities.keys())}")
+
+        # --- SSH Sessions ---
+        if hasattr(session, "ssh_sessions") and session.ssh_sessions:
+            lines.append(f"\nSSH: {len(session.ssh_sessions)} sessions detected")
+            banners = set(s.get("banner", "") for s in session.ssh_sessions if s.get("banner"))
+            if banners:
+                lines.append(f"  Banners: {', '.join(sorted(banners)[:5])}")
+
+        # --- VLAN Tagging Analysis ---
+        vlan_analysis = PcapAiAnalyzer._analyze_vlan_configuration(session)
+        if vlan_analysis:
+            lines.append(f"\n{'=' * 60}")
+            lines.append("VLAN CONFIGURATION ANALYSIS")
+            lines.append(f"{'=' * 60}")
+            lines.append(vlan_analysis)
+
+        # --- Protocol Security Analysis ---
+        protocol_sec = PcapAiAnalyzer._analyze_protocol_security(session)
+        if protocol_sec:
+            lines.append(f"\n{'=' * 60}")
+            lines.append("PROTOCOL SECURITY ANALYSIS")
+            lines.append(f"{'=' * 60}")
+            lines.append(protocol_sec)
+
+        # --- Cryptographic Weakness Detection ---
+        crypto_weak = PcapAiAnalyzer._analyze_cryptographic_weaknesses(session)
+        if crypto_weak:
+            lines.append(f"\n{'=' * 60}")
+            lines.append("CRYPTOGRAPHIC WEAKNESS DETECTION")
+            lines.append(f"{'=' * 60}")
+            lines.append(crypto_weak)
+
         # --- Standard IT hunts (beacons, lateral, exfil) ---
         hunter = PcapThreatHunter()
 
@@ -2466,6 +3095,122 @@ class PcapAiAnalyzer:
                 lines.append(f"{'=' * 60}")
                 lines.append(lateral_text)
 
+        # --- External Communications Summary ---
+        ext_flows: list[dict] = []
+        for (src, dst, dport, proto), stats in session.conversations.items():
+            src_int = is_internal(src)
+            dst_int = is_internal(dst)
+            if src_int and not dst_int:
+                ext_flows.append({
+                    "src": src, "dst": dst, "dport": dport, "proto": proto,
+                    "direction": "INT->EXT",
+                    "bytes": stats["bytes_out"], "packets": stats["packets"],
+                })
+            elif not src_int and dst_int:
+                ext_flows.append({
+                    "src": src, "dst": dst, "dport": dport, "proto": proto,
+                    "direction": "EXT->INT",
+                    "bytes": stats["bytes_out"], "packets": stats["packets"],
+                })
+
+        if ext_flows:
+            lines.append(f"\n{'=' * 60}")
+            lines.append("External Communications")
+            lines.append(f"{'=' * 60}")
+
+            total_ext_bytes = sum(f["bytes"] for f in ext_flows)
+            int_to_ext = [f for f in ext_flows if f["direction"] == "INT->EXT"]
+            ext_to_int = [f for f in ext_flows if f["direction"] == "EXT->INT"]
+            unique_ext_ips = set()
+            for f in ext_flows:
+                if f["direction"] == "INT->EXT":
+                    unique_ext_ips.add(f["dst"])
+                else:
+                    unique_ext_ips.add(f["src"])
+            unique_int_ips = set()
+            for f in ext_flows:
+                if f["direction"] == "INT->EXT":
+                    unique_int_ips.add(f["src"])
+                else:
+                    unique_int_ips.add(f["dst"])
+
+            lines.append(f"\nTotal external flows: {len(ext_flows):,} "
+                         f"({_format_bytes(total_ext_bytes)})")
+            lines.append(f"  INT -> EXT: {len(int_to_ext):,} flows "
+                         f"({_format_bytes(sum(f['bytes'] for f in int_to_ext))})")
+            lines.append(f"  EXT -> INT: {len(ext_to_int):,} flows "
+                         f"({_format_bytes(sum(f['bytes'] for f in ext_to_int))})")
+            lines.append(f"  Unique external IPs: {len(unique_ext_ips)}")
+            lines.append(f"  Internal hosts with external comms: {len(unique_int_ips)}")
+
+            # Top external destinations by bytes
+            ext_dst_bytes: dict[str, int] = defaultdict(int)
+            ext_dst_flows: dict[str, int] = defaultdict(int)
+            ext_dst_ports: dict[str, set] = defaultdict(set)
+            for f in int_to_ext:
+                ext_dst_bytes[f["dst"]] += f["bytes"]
+                ext_dst_flows[f["dst"]] += 1
+                ext_dst_ports[f["dst"]].add(f["dport"])
+
+            if ext_dst_bytes:
+                lines.append(f"\n🌐 TOP EXTERNAL DESTINATIONS (by bytes) — {len(ext_dst_bytes)} total")
+                lines.append("-" * 70)
+                sorted_ext = sorted(ext_dst_bytes.items(), key=lambda x: x[1], reverse=True)
+                for ip, total in sorted_ext[:15]:
+                    ports = sorted(ext_dst_ports[ip])
+                    port_str = ", ".join(str(p) for p in ports[:5])
+                    if len(ports) > 5:
+                        port_str += f" (+{len(ports)-5})"
+                    lines.append(
+                        f"  {ip:<18} {_format_bytes(total):<12} "
+                        f"flows={ext_dst_flows[ip]:<6} ports: {port_str}"
+                    )
+
+            # Top external sources (EXT→INT)
+            ext_src_bytes: dict[str, int] = defaultdict(int)
+            ext_src_flows: dict[str, int] = defaultdict(int)
+            ext_src_ports: dict[str, set] = defaultdict(set)
+            for f in ext_to_int:
+                ext_src_bytes[f["src"]] += f["bytes"]
+                ext_src_flows[f["src"]] += 1
+                ext_src_ports[f["src"]].add(f["dport"])
+
+            if ext_src_bytes:
+                lines.append(f"\n🌐 TOP EXTERNAL SOURCES (inbound) — {len(ext_src_bytes)} total")
+                lines.append("-" * 70)
+                sorted_src = sorted(ext_src_bytes.items(), key=lambda x: x[1], reverse=True)
+                for ip, total in sorted_src[:15]:
+                    ports = sorted(ext_src_ports[ip])
+                    port_str = ", ".join(str(p) for p in ports[:5])
+                    if len(ports) > 5:
+                        port_str += f" (+{len(ports)-5})"
+                    lines.append(
+                        f"  {ip:<18} {_format_bytes(total):<12} "
+                        f"flows={ext_src_flows[ip]:<6} ports: {port_str}"
+                    )
+
+            # Internal hosts with most external communication
+            int_ext_bytes: dict[str, int] = defaultdict(int)
+            int_ext_peers: dict[str, set] = defaultdict(set)
+            for f in ext_flows:
+                if f["direction"] == "INT->EXT":
+                    int_ext_bytes[f["src"]] += f["bytes"]
+                    int_ext_peers[f["src"]].add(f["dst"])
+                else:
+                    int_ext_bytes[f["dst"]] += f["bytes"]
+                    int_ext_peers[f["dst"]].add(f["src"])
+
+            if int_ext_bytes:
+                lines.append(f"\n🏢 INTERNAL HOSTS WITH MOST EXTERNAL TRAFFIC")
+                lines.append("-" * 70)
+                sorted_int = sorted(int_ext_bytes.items(), key=lambda x: x[1], reverse=True)
+                for ip, total in sorted_int[:10]:
+                    peer_count = len(int_ext_peers[ip])
+                    lines.append(
+                        f"  {ip:<18} {_format_bytes(total):<12} "
+                        f"external peers: {peer_count}"
+                    )
+
         ports_result = hunter.execute({"hunt": "ports"}, None)
         if ports_result.ok and ports_result.result:
             port_text = ports_result.result.get("summary_text", "")
@@ -2476,6 +3221,278 @@ class PcapAiAnalyzer:
                 lines.append(port_text)
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _analyze_protocol_security(session: Any) -> str:
+        """Detect weak and deprecated protocol versions (SMBv1, TLS 1.0, etc.)."""
+        from collections import Counter, defaultdict
+        from plugins.network_forensics.pcap_metadata_summary.tool import (
+            is_internal, _format_bytes,
+        )
+        findings = []
+
+        # --- SMB Protocol Detection ---
+        if hasattr(session, "smb_mappings") and session.smb_mappings:
+            smb_count = len(session.smb_mappings)
+            findings.append(f"\n⚠️  SMB Traffic Detected: {smb_count} SMB operations")
+            findings.append(f"  Risk: Verify SMB protocol version (SMBv1 is DEPRECATED and HIGH RISK)")
+            # Top SMB communication pairs by volume
+            smb_pairs: Counter = Counter()
+            for s in session.smb_mappings:
+                smb_pairs[(s["src"], s["dst"])] += 1
+            findings.append(f"\n  Top SMB Communications (src -> dst):")
+            for (src, dst), cnt in smb_pairs.most_common(10):
+                src_loc = "INT" if is_internal(src) else "EXT"
+                dst_loc = "INT" if is_internal(dst) else "EXT"
+                findings.append(f"    {src} ({src_loc}) -> {dst} ({dst_loc})  [{cnt} ops]")
+            # Unique SMB servers
+            smb_servers = set(s["dst"] for s in session.smb_mappings)
+            findings.append(f"  SMB Servers ({len(smb_servers)}): {', '.join(sorted(smb_servers)[:10])}")
+            # Unique SMB clients
+            smb_clients = set(s["src"] for s in session.smb_mappings)
+            findings.append(f"  SMB Clients ({len(smb_clients)}): {', '.join(sorted(smb_clients)[:10])}")
+
+        # --- TLS/SSL Protocol Version Detection ---
+        if hasattr(session, "tls_handshakes") and session.tls_handshakes:
+            tls_count = len(session.tls_handshakes)
+            findings.append(f"\n🔒 TLS/SSL Handshakes Detected: {tls_count} sessions")
+            findings.append(f"  Note: Verify protocol versions (TLS 1.0/1.1 are DEPRECATED, use TLS 1.2+)")
+            # Top TLS communication pairs
+            tls_pairs: Counter = Counter()
+            for th in session.tls_handshakes:
+                tls_pairs[(th.get("src", "?"), th.get("dst", "?"), th.get("dport", 0))] += 1
+            findings.append(f"\n  Top TLS Communications (src -> dst:port):")
+            for (src, dst, dport), cnt in tls_pairs.most_common(10):
+                src_loc = "INT" if is_internal(src) else "EXT"
+                dst_loc = "INT" if is_internal(dst) else "EXT"
+                sni_list = [th.get("sni", "") for th in session.tls_handshakes
+                            if th.get("src") == src and th.get("dst") == dst and th.get("dport") == dport]
+                sni = next((s for s in sni_list if s), "")
+                sni_str = f" [{sni}]" if sni else ""
+                findings.append(f"    {src} ({src_loc}) -> {dst}:{dport} ({dst_loc})  [{cnt} sessions]{sni_str}")
+
+        # --- RDP Detection (port 3389) ---
+        rdp_flows = []
+        for (src, dst, dport, proto), stats in session.conversations.items():
+            if dport == 3389:
+                rdp_flows.append((src, dst, stats["packets"], stats["bytes_out"]))
+        if rdp_flows:
+            findings.append(f"\n⚠️  RDP (Remote Desktop) Traffic Detected: {len(rdp_flows)} flows")
+            findings.append(f"  Risk: RDP port 3389 should be restricted; verify encryption levels")
+            rdp_flows.sort(key=lambda x: x[3], reverse=True)
+            findings.append(f"\n  Top RDP Communications (src -> dst):")
+            for src, dst, pkts, bytes_out in rdp_flows[:10]:
+                src_loc = "INT" if is_internal(src) else "EXT"
+                dst_loc = "INT" if is_internal(dst) else "EXT"
+                findings.append(
+                    f"    {src} ({src_loc}) -> {dst}:3389 ({dst_loc})  "
+                    f"[{pkts} pkts, {_format_bytes(bytes_out)}]"
+                )
+
+        # --- HTTP (Cleartext) Detection ---
+        if hasattr(session, "http_requests") and session.http_requests:
+            findings.append(f"\n⚠️  Cleartext HTTP Traffic: {len(session.http_requests)} requests")
+            findings.append(f"  Risk: Credentials and sensitive data may be visible in cleartext")
+            # Top HTTP communication pairs
+            http_pairs: Counter = Counter()
+            for r in session.http_requests:
+                http_pairs[(r.get("src", "?"), r.get("host", "?"))] += 1
+            findings.append(f"\n  Top HTTP Communications (src -> host):")
+            for (src, host), cnt in http_pairs.most_common(10):
+                src_loc = "INT" if is_internal(src) else "EXT"
+                findings.append(f"    {src} ({src_loc}) -> {host}  [{cnt} requests]")
+
+        if not findings:
+            return ""
+        return "\n".join(findings)
+
+    @staticmethod
+    def _analyze_cryptographic_weaknesses(session: Any) -> str:
+        """Detect weak ciphers, deprecated algorithms, and crypto risks."""
+        from collections import Counter, defaultdict
+        from plugins.network_forensics.pcap_metadata_summary.tool import is_internal
+        findings = []
+
+        # --- TLS Cipher Analysis ---
+        if hasattr(session, "tls_handshakes") and session.tls_handshakes:
+            findings.append(f"\n🔍 TLS Cipher Suite Analysis (Requires Deep Packet Inspection):")
+            findings.append(f"  {len(session.tls_handshakes)} TLS handshakes detected")
+            # Top TLS servers that should be audited
+            tls_servers: Counter = Counter()
+            for th in session.tls_handshakes:
+                dst = th.get("dst", "?")
+                dport = th.get("dport", 0)
+                tls_servers[(dst, dport)] += 1
+            findings.append(f"\n  Top TLS Servers to Audit for Cipher Strength:")
+            for (dst, dport), cnt in tls_servers.most_common(10):
+                loc = "INT" if is_internal(dst) else "EXT"
+                sni_list = [th.get("sni", "") for th in session.tls_handshakes
+                            if th.get("dst") == dst and th.get("dport") == dport]
+                sni = next((s for s in sni_list if s), "")
+                sni_str = f" [{sni}]" if sni else ""
+                findings.append(f"    {dst}:{dport} ({loc})  [{cnt} sessions]{sni_str}")
+            findings.append(f"\n  ⚠️  RECOMMENDATIONS:")
+            findings.append(f"  • Verify NO weak ciphers: RC4, DES, MD5-based, NULL ciphers, ANON ciphers")
+            findings.append(f"  • Enforce TLS 1.2+ (deprecated: TLS 1.0, 1.1, SSL 3.0)")
+            findings.append(f"  • Prefer modern ciphers: ChaCha20-Poly1305, ECDHE, AES-GCM")
+            findings.append(f"  • Disable: MD5 hashes, DH with <2048 bits, RSA <2048 bits")
+
+        # --- SNMP Community Strings (Cleartext) ---
+        if hasattr(session, "snmp_communities") and session.snmp_communities:
+            findings.append(f"\n⚠️  SNMP Cleartext Community Strings Exposed:")
+            findings.append(f"  {len(session.snmp_communities)} unique communities detected")
+            findings.append(f"  Communities: {', '.join(list(session.snmp_communities.keys())[:5])}")
+            findings.append(f"  Risk: SNMPv1/v2c transmit credentials in CLEARTEXT")
+            # Show SNMP hosts
+            if hasattr(session, "snmp_sources") and session.snmp_sources:
+                findings.append(f"\n  Top SNMP Sources (hosts using cleartext SNMP):")
+                for ip, cnt in session.snmp_sources.most_common(10):
+                    loc = "INT" if is_internal(ip) else "EXT"
+                    findings.append(f"    {ip} ({loc})  [{cnt} packets]")
+            # Show SNMP destinations from conversations
+            snmp_dsts: Counter = Counter()
+            for (src, dst, dport, proto), stats in session.conversations.items():
+                if dport == 161 or dport == 162:
+                    snmp_dsts[dst] += stats["packets"]
+            if snmp_dsts:
+                findings.append(f"\n  Top SNMP Destinations (managed devices):")
+                for ip, cnt in snmp_dsts.most_common(10):
+                    loc = "INT" if is_internal(ip) else "EXT"
+                    findings.append(f"    {ip} ({loc})  [{cnt} packets]")
+            findings.append(f"  Recommendation: Migrate to SNMPv3 with authentication and encryption")
+
+        # --- Kerberos Cipher Detection ---
+        if hasattr(session, "kerberos_tickets") and session.kerberos_tickets:
+            cipher_types = set()
+            for kt in session.kerberos_tickets:
+                if kt.get("cipher"):
+                    cipher_types.add(kt.get("cipher"))
+            if cipher_types:
+                findings.append(f"\n🔐 Kerberos Ciphers Detected: {', '.join(sorted(cipher_types))}")
+                # Weak Kerberos ciphers: RC4, DES, MD5
+                weak_ciphers = [c for c in cipher_types if any(x in c.upper() for x in ["RC4", "DES", "MD5"])]
+                if weak_ciphers:
+                    findings.append(f"  ⚠️  WEAK KERBEROS CIPHERS DETECTED: {', '.join(weak_ciphers)}")
+                    findings.append(f"  Recommendation: Disable weak ciphers; prefer AES-SHA256")
+                # Show Kerberos hosts
+                kerb_pairs: Counter = Counter()
+                for kt in session.kerberos_tickets:
+                    kerb_pairs[(kt.get("src", "?"), kt.get("dst", "?"))] += 1
+                findings.append(f"\n  Top Kerberos Communications (client -> KDC):")
+                for (src, dst), cnt in kerb_pairs.most_common(10):
+                    src_loc = "INT" if is_internal(src) else "EXT"
+                    dst_loc = "INT" if is_internal(dst) else "EXT"
+                    findings.append(f"    {src} ({src_loc}) -> {dst} ({dst_loc})  [{cnt} tickets]")
+
+        # --- Cleartext Credentials Risk ---
+        if hasattr(session, "cleartext_creds") and session.cleartext_creds:
+            findings.append(f"\n🔓 CLEARTEXT CREDENTIALS: {len(session.cleartext_creds)} detections")
+            findings.append(f"  Crypto Risk: Credentials visible in plaintext protocol traffic")
+            # Show which hosts are exposed
+            cred_pairs: Counter = Counter()
+            cred_protos: dict[tuple, set] = defaultdict(set)
+            for c in session.cleartext_creds:
+                pair = (c.get("src", "?"), c.get("dst", "?"))
+                cred_pairs[pair] += 1
+                cred_protos[pair].add(c.get("protocol", "?"))
+            findings.append(f"\n  Top Cleartext Credential Exposures (src -> dst):")
+            for (src, dst), cnt in cred_pairs.most_common(10):
+                src_loc = "INT" if is_internal(src) else "EXT"
+                dst_loc = "INT" if is_internal(dst) else "EXT"
+                protos = ", ".join(sorted(cred_protos[(src, dst)]))
+                findings.append(
+                    f"    {src} ({src_loc}) -> {dst} ({dst_loc})  [{cnt} creds] ({protos})"
+                )
+            findings.append(f"  Recommendation: Enforce encrypted protocols (SSH, HTTPS, TLS)")
+
+        if not findings:
+            findings.append("\nNo obvious cryptographic weaknesses detected in baseline analysis.")
+            findings.append("Recommend performing full TLS handshake inspection with deep packet analysis.")
+
+        return "\n".join(findings)
+
+    @staticmethod
+    def _analyze_vlan_configuration(session: Any) -> str:
+        """Analyze VLAN tagging configuration for OT/ICS security issues."""
+        findings = []
+
+        has_802_1q = hasattr(session, "vlan_ids") and session.vlan_ids
+        has_stp_vlans = hasattr(session, "stp_vlans") and session.stp_vlans
+
+        # Check if any VLAN evidence was detected from either source
+        if not has_802_1q and not has_stp_vlans:
+            findings.append("No 802.1Q VLAN tags detected (untagged network or traffic capture limitation).")
+            return "\n".join(findings)
+
+        # If we have STP VLANs but no 802.1Q tags, the capture is on an access port
+        if not has_802_1q and has_stp_vlans:
+            stp_vlan_list = sorted(session.stp_vlans.keys())
+            findings.append(f"No 802.1Q tagged frames detected (capture likely on an access/untagged port),")
+            findings.append(f"however STP/PVST+ BPDUs reveal {len(stp_vlan_list)} active VLAN(s) on this switch:")
+            findings.append("")
+            findings.append("  VLANs detected via STP System ID Extension:")
+            for vlan_id in stp_vlan_list[:20]:
+                cnt = session.stp_vlans[vlan_id]
+                marker = "⚠️  " if vlan_id == 1 else "    "
+                findings.append(f"  {marker}VLAN {vlan_id}: {cnt:,} BPDUs")
+            if len(stp_vlan_list) > 20:
+                findings.append(f"    ... and {len(stp_vlan_list) - 20} more")
+            if 1 in stp_vlan_list:
+                findings.append("")
+                findings.append("  ⚠️  VLAN 1 (Native VLAN) is active in STP topology")
+                findings.append("  Risk: VLAN 1 should not carry production traffic in OT networks")
+            findings.append("")
+            findings.append("  Note: To see per-VLAN IP assignments, capture on a trunk port (tagged).")
+            return "\n".join(findings)
+
+        # VLAN 1 Detection (Critical in OT environments)
+        if hasattr(session, "vlan_1_detected") and session.vlan_1_detected:
+            findings.append("⚠️  CRITICAL: VLAN 1 (Native VLAN) In Use")
+            findings.append("  Risk: Native VLAN usage on OT networks indicates potential misconfiguration")
+            findings.append("  - VLAN 1 should not carry production traffic in OT networks")
+            findings.append("  - Suggests lack of VLAN segmentation between management/control planes")
+            vlan_1_ips = session.vlan_to_ips.get(1, set())
+            if vlan_1_ips:
+                ips_str = ", ".join(sorted(vlan_1_ips)[:10])
+                findings.append(f"  - IPs on VLAN 1: {ips_str}")
+                if len(vlan_1_ips) > 10:
+                    findings.append(f"    ... and {len(vlan_1_ips) - 10} more")
+
+        # VLAN distribution analysis
+        findings.append(f"\n📊 VLAN Distribution: {len(session.vlan_ids)} VLAN(s) detected")
+        total_tagged = sum(session.vlan_ids.values())
+        untagged_pct = (session.untagged_frame_count / (total_tagged + session.untagged_frame_count) * 100) if (total_tagged + session.untagged_frame_count) > 0 else 0
+
+        findings.append(f"  Tagged frames: {total_tagged:,}")
+        findings.append(f"  Untagged frames: {session.untagged_frame_count:,} ({untagged_pct:.1f}%)")
+
+        # Show top VLANs
+        top_vlans = session.vlan_ids.most_common(10)
+        if top_vlans:
+            findings.append("\n  Top VLANs by traffic volume:")
+            for vlan_id, count in top_vlans:
+                ips_in_vlan = session.vlan_to_ips.get(vlan_id, set())
+                internal_ips = [ip for ip in ips_in_vlan if ip]
+                marker = "⚠️  " if vlan_id == 1 else "ℹ️  "
+                findings.append(f"    {marker}VLAN {vlan_id}: {count:,} frames, {len(internal_ips)} unique IPs")
+                if internal_ips:
+                    ips_sample = ", ".join(sorted(internal_ips)[:5])
+                    findings.append(f"        IPs: {ips_sample}")
+                    if len(internal_ips) > 5:
+                        findings.append(f"        ... and {len(internal_ips) - 5} more")
+
+        # Purdue Model VLAN assessment
+        findings.append("\n  Security Recommendations (Purdue Model):")
+        findings.append("  • Each Purdue zone (L0-L3, L3.5) should use separate VLAN ranges")
+        findings.append("  • Avoid VLAN 1 for production traffic")
+        findings.append("  • Use voice/management VLANs (e.g., 10-99) separate from data")
+        findings.append("  • Implement inter-VLAN routing with firewall policies (no direct bridging)")
+        findings.append("  • Validate VLAN design matches network architecture documentation")
+
+        if not findings:
+            findings.append("No VLAN configuration issues detected.")
+
+        return "\n".join(findings)
 
     @staticmethod
     def _get_netops_static_output(session: Any) -> str:
@@ -2721,7 +3738,8 @@ class PcapAiAnalyzer:
                     lines.append(f"    {mac}: {count:,} requests ({pct_of_arp:.1f}%){marker}")
 
             conflicts = {ip: macs for ip, macs in session.arp_ip_to_macs.items()
-                         if len(macs) > 1}
+                         if len(macs) > 1
+                         and ip not in ('0.0.0.0', '255.255.255.255')}
             if conflicts:
                 lines.append(f"\n  🔴 IP ADDRESS CONFLICTS: {len(conflicts)} IP(s) "
                              f"claimed by multiple MACs")
@@ -2764,6 +3782,49 @@ class PcapAiAnalyzer:
             or session.eigrp_total_count > 0
         )
 
+        # Helper: resolve MAC to switch identity from CDP/LLDP
+        def _resolve_switch(mac: str) -> str:
+            """Look up a MAC in CDP/LLDP neighbors; return annotation string or ''."""
+            # CDP/LLDP store by eth source MAC; bridge IDs use format "prio:mac"
+            lookup_mac = mac.split(':', 1)[1] if ':' in mac and len(mac.split(':')) > 6 else mac
+            # Normalize to lowercase for comparison
+            lookup_mac = lookup_mac.lower()
+            # Check CDP neighbors
+            for cdp_mac, info in session.cdp_neighbors.items():
+                if cdp_mac.lower() == lookup_mac:
+                    parts = []
+                    if info.get('device_id'):
+                        parts.append(info['device_id'])
+                    if info.get('platform'):
+                        parts.append(info['platform'])
+                    if info.get('port_id'):
+                        parts.append(info['port_id'])
+                    if info.get('mgmt_ip'):
+                        parts.append(info['mgmt_ip'])
+                    return f" — {', '.join(parts)}" if parts else ''
+            # Check LLDP neighbors
+            for lldp_mac, info in session.lldp_neighbors.items():
+                if lldp_mac.lower() == lookup_mac:
+                    parts = []
+                    if info.get('system_name'):
+                        parts.append(info['system_name'])
+                    if info.get('system_desc'):
+                        parts.append(info['system_desc'])
+                    if info.get('port_id'):
+                        parts.append(info['port_id'])
+                    if info.get('mgmt_ip'):
+                        parts.append(info['mgmt_ip'])
+                    return f" — {', '.join(parts)}" if parts else ''
+            return ''
+
+        def _resolve_bridge_key(bridge_key: str) -> str:
+            """Resolve a bridge key (prio:mac) to switch name."""
+            # Bridge key format: "32769:00:aa:bb:cc:dd:ee" or "8000:00:aa:bb:cc:dd:ee"
+            parts = bridge_key.split(':', 1)
+            if len(parts) == 2:
+                return _resolve_switch(parts[1])
+            return _resolve_switch(bridge_key)
+
         lines.append(f"\n{'=' * 60}")
         lines.append("CONTROL PLANE & TOPOLOGY")
         lines.append(f"{'=' * 60}")
@@ -2781,35 +3842,276 @@ class PcapAiAnalyzer:
                 lines.append(f"  TCN BPDUs (Topology Change Notifications): "
                              f"{session.stp_tcn_count:,}")
                 lines.append(f"  BPDUs with TC flag set: {session.stp_tc_flag_count:,}")
+                lines.append(f"  TC Acknowledgments: {session.stp_tca_count:,}")
+
+                # Protocol version distribution
+                if session.stp_version_counts:
+                    ver_parts = [f"{v}: {c:,}" for v, c in session.stp_version_counts.most_common()]
+                    lines.append(f"  Versions: {', '.join(ver_parts)}")
+
+                # RSTP negotiation
+                if session.stp_proposal_count or session.stp_agreement_count:
+                    lines.append(f"  RSTP Proposals: {session.stp_proposal_count:,}  "
+                                 f"Agreements: {session.stp_agreement_count:,}")
+
+                # Port roles
+                if session.stp_port_roles:
+                    role_parts = [f"{r}: {c:,}" for r, c in session.stp_port_roles.most_common()]
+                    lines.append(f"  Port Roles: {', '.join(role_parts)}")
+
+                # Port states
+                if session.stp_port_states:
+                    state_parts = [f"{s}: {c:,}" for s, c in session.stp_port_states.most_common()]
+                    lines.append(f"  Port States: {', '.join(state_parts)}")
 
                 root_bridges = list(session.stp_root_bridges.keys())
+                # PVST+ detection: group root bridges by VLAN
+                # If all root bridge IDs share the same MAC but differ only in
+                # the System ID Extension (lower 12 bits), this is PVST+ — one
+                # switch is root for multiple VLANs, NOT root instability.
+                root_macs = set()
+                root_by_vlan: dict = {}  # vlan_id -> set of root_keys
+                for rb in root_bridges:
+                    parts = rb.split(':', 1)
+                    if len(parts) == 2:
+                        try:
+                            prio = int(parts[0])
+                            mac = parts[1]
+                            root_macs.add(mac)
+                            vlan = prio & 0x0FFF
+                            root_by_vlan.setdefault(vlan, set()).add(rb)
+                        except ValueError:
+                            root_macs.add(rb)
+
+                is_pvst = len(root_macs) == 1 and len(root_bridges) > 1
+
                 if len(root_bridges) == 1:
                     lines.append(f"  Root Bridge: {root_bridges[0]} (stable)")
-                elif len(root_bridges) > 1:
-                    lines.append(f"  🔴 ROOT BRIDGE CHANGES DETECTED: "
-                                 f"{len(root_bridges)} different root bridges seen!")
+                elif is_pvst:
+                    mac = next(iter(root_macs))
+                    lines.append(f"  Root Bridge: {mac} (stable, PVST+ — same root for "
+                                 f"{len(root_bridges)} VLAN instances)")
                     for rb in root_bridges:
                         count = len(session.stp_root_bridges[rb])
-                        lines.append(f"    {rb}: {count:,} BPDUs")
-                    lines.append(f"    ⚠️  Root bridge instability indicates "
-                                 f"STP reconvergence — check for priority misconfiguration")
+                        try:
+                            vlan = int(rb.split(':')[0]) & 0x0FFF
+                            lines.append(f"    VLAN {vlan}: {rb} ({count:,} BPDUs)")
+                        except ValueError:
+                            lines.append(f"    {rb}: {count:,} BPDUs")
+                elif len(root_bridges) > 1:
+                    # True root instability — different MACs competing
+                    # Check per-VLAN: only flag VLANs with >1 root MAC
+                    vlan_unstable = {v: roots for v, roots in root_by_vlan.items()
+                                     if len(set(r.split(':', 1)[1] for r in roots)) > 1}
+                    if vlan_unstable:
+                        lines.append(f"  🔴 ROOT BRIDGE CHANGES DETECTED in "
+                                     f"{len(vlan_unstable)} VLAN(s)!")
+                        for vlan in sorted(vlan_unstable):
+                            lines.append(f"    VLAN {vlan}: {len(vlan_unstable[vlan])} "
+                                         f"different roots competing")
+                            for rb in sorted(vlan_unstable[vlan]):
+                                count = len(session.stp_root_bridges[rb])
+                                lines.append(f"      {rb}: {count:,} BPDUs")
+                        lines.append(f"    ⚠️  Root bridge instability — "
+                                     f"check for priority misconfiguration")
+                    else:
+                        lines.append(f"  Root Bridges: {len(root_bridges)} "
+                                     f"(PVST+ — per-VLAN instances, stable)")
+                        for rb in root_bridges:
+                            count = len(session.stp_root_bridges[rb])
+                            lines.append(f"    {rb}: {count:,} BPDUs")
+
+                # Root change timeline (only real changes — same VLAN, different MAC)
+                if session.stp_root_changes:
+                    lines.append(f"  🔴 ROOT CHANGE EVENTS ({len(session.stp_root_changes)}):")
+                    for entry in session.stp_root_changes[:20]:
+                        from datetime import datetime, timezone
+                        if len(entry) == 4:
+                            ts, vlan, old_root, new_root = entry
+                            dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%H:%M:%S.%f')[:-3]
+                            old_id = _resolve_bridge_key(old_root)
+                            new_id = _resolve_bridge_key(new_root)
+                            lines.append(f"    {dt} VLAN {vlan}: {old_root}{old_id} → {new_root}{new_id}")
+                        else:
+                            ts, old_root, new_root = entry
+                            dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%H:%M:%S.%f')[:-3]
+                            old_id = _resolve_bridge_key(old_root)
+                            new_id = _resolve_bridge_key(new_root)
+                            lines.append(f"    {dt}: {old_root}{old_id} → {new_root}{new_id}")
 
                 if session.stp_tcn_count > 10:
                     lines.append(f"  ⚠️  HIGH TCN COUNT: {session.stp_tcn_count} topology "
                                  f"change notifications — indicates L2 flapping")
 
+                # TC event clustering (detect bursts)
+                if session.stp_tc_events and len(session.stp_tc_events) > 5:
+                    tc_sorted = sorted(session.stp_tc_events)
+                    # Find clusters: TC events within 10s of each other
+                    bursts = []
+                    burst_start = tc_sorted[0]
+                    burst_count = 1
+                    for i in range(1, len(tc_sorted)):
+                        if tc_sorted[i] - tc_sorted[i-1] < 10:
+                            burst_count += 1
+                        else:
+                            if burst_count >= 3:
+                                bursts.append((burst_start, burst_count))
+                            burst_start = tc_sorted[i]
+                            burst_count = 1
+                    if burst_count >= 3:
+                        bursts.append((burst_start, burst_count))
+                    if bursts:
+                        lines.append(f"  ⚠️  TC BURSTS ({len(bursts)} clusters):")
+                        for ts, cnt in bursts[:10]:
+                            from datetime import datetime, timezone
+                            dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%H:%M:%S')
+                            lines.append(f"    {dt}: {cnt} TC events in rapid succession")
+
                 if len(session._stp_timestamps) >= 2:
                     stp_duration = max(session._stp_timestamps) - min(session._stp_timestamps)
                     if stp_duration > 0:
                         stp_rate = total_stp / stp_duration
-                        lines.append(f"  STP rate: {stp_rate:.1f} BPDU/s")
-                        if stp_rate > 5:
-                            lines.append(f"  ⚠️  Elevated BPDU rate — possible STP storm")
+                        lines.append(f"  STP rate: {stp_rate:.1f} BPDU/s (aggregate)")
+                        # Per-port-per-VLAN rate: in PVST+, each port sends 1 BPDU
+                        # per VLAN per hello interval. Normal = ports × VLANs / 2s.
+                        num_vlans = max(len(session.stp_vlans), 1)
+                        num_ports = max(len(session.stp_src_macs), 1)
+                        expected_rate = num_ports * num_vlans * 0.5  # 1 per 2s hello
+                        per_port_vlan_rate = stp_rate / (num_ports * num_vlans)
+                        lines.append(f"  Per-port-per-VLAN rate: {per_port_vlan_rate:.2f} BPDU/s "
+                                     f"({num_ports} ports × {num_vlans} VLANs)")
+                        if per_port_vlan_rate > 1.0:
+                            lines.append(f"  ⚠️  Elevated per-port BPDU rate (>{per_port_vlan_rate:.1f}/s) "
+                                         f"— possible STP storm")
+                        elif stp_rate > expected_rate * 2:
+                            lines.append(f"  ⚠️  Aggregate rate exceeds 2x expected ({expected_rate:.1f}/s) "
+                                         f"— investigate")
 
                 if session.stp_bridges:
                     lines.append(f"  Bridges seen: {len(session.stp_bridges)}")
                     for bridge, count in session.stp_bridges.most_common(10):
-                        lines.append(f"    {bridge}: {count:,} BPDUs")
+                        identity = _resolve_bridge_key(bridge)
+                        lines.append(f"    {bridge}: {count:,} BPDUs{identity}")
+
+                # Source MACs (which switches send BPDUs)
+                if session.stp_src_macs:
+                    lines.append(f"  Source switch MACs ({len(session.stp_src_macs)}):")
+                    for mac, count in session.stp_src_macs.most_common(10):
+                        identity = _resolve_switch(mac)
+                        lines.append(f"    {mac}: {count:,} BPDUs{identity}")
+
+                # VLANs
+                if session.stp_vlans:
+                    vlan_parts = [f"VLAN {v}: {c:,}" for v, c in session.stp_vlans.most_common(20)]
+                    lines.append(f"  VLANs (from System ID Extension): {', '.join(vlan_parts)}")
+
+                # Path cost changes
+                if session.stp_path_costs:
+                    for bridge_key, costs in session.stp_path_costs.items():
+                        unique_costs = set(c for _, c in costs)
+                        if len(unique_costs) > 1:
+                            lines.append(f"  ⚠️  PATH COST CHANGE on {bridge_key}: "
+                                         f"seen values {sorted(unique_costs)}")
+
+                # Timer values (flag non-standard)
+                if session.stp_timers:
+                    for timer_name, dist in session.stp_timers.items():
+                        if dist:
+                            vals = [f"{v}s:{c:,}" for v, c in dist.most_common(5)]
+                            lines.append(f"  Timer {timer_name}: {', '.join(vals)}")
+
+                # Port IDs
+                if session.stp_port_ids and len(session.stp_port_ids) > 1:
+                    lines.append(f"  Port IDs ({len(session.stp_port_ids)} unique):")
+                    for pid, count in session.stp_port_ids.most_common(10):
+                        lines.append(f"    {pid}: {count:,}")
+
+                # BPDU starvation detection (gaps > max_age)
+                if session.stp_bpdu_gaps:
+                    lines.append(f"  🔴 BPDU STARVATION DETECTED: {len(session.stp_bpdu_gaps)} gap(s) "
+                                 f"exceeding max_age!")
+                    lines.append(f"    A BPDU stream that stops for >max_age causes the port to "
+                                 f"transition to Forwarding — potential bridging loop!")
+                    for src_mac, gap_start, gap_secs in session.stp_bpdu_gaps[:15]:
+                        from datetime import datetime, timezone
+                        dt = datetime.fromtimestamp(gap_start, tz=timezone.utc).strftime('%H:%M:%S')
+                        identity = _resolve_switch(src_mac)
+                        lines.append(f"    {dt}: {src_mac}{identity} — {gap_secs}s silence "
+                                     f"(>{int(gap_secs // 20)}x max_age)")
+
+                # MAC mismatch (spoofing / misconfiguration)
+                if session.stp_mac_mismatches:
+                    lines.append(f"  🔴 BPDU MAC MISMATCH: {len(session.stp_mac_mismatches)} "
+                                 f"packet(s) where Ethernet source ≠ BPDU bridge MAC!")
+                    lines.append(f"    This may indicate BPDU spoofing (e.g. Yersinia), a "
+                                 f"misconfigured transparent bridge, or packet crafting.")
+                    for ts, eth_mac, bpdu_mac in session.stp_mac_mismatches[:10]:
+                        from datetime import datetime, timezone
+                        dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%H:%M:%S.%f')[:-3]
+                        lines.append(f"    {dt}: Ethernet src={eth_mac}  BPDU bridge={bpdu_mac}")
+
+                # CDP/LLDP Switch Inventory (from capture)
+                if session.cdp_neighbors or session.lldp_neighbors:
+                    lines.append(f"\n  CDP/LLDP SWITCH INVENTORY (from capture)")
+                    lines.append(f"  {'─' * 40}")
+                    lines.append(f"  CDP frames: {session.cdp_frame_count:,}  |  "
+                                 f"LLDP frames: {session.lldp_frame_count:,}")
+                    # Merge CDP and LLDP into unified view
+                    all_switches: dict[str, dict[str, str]] = {}
+                    for mac, info in session.cdp_neighbors.items():
+                        all_switches[mac] = {
+                            'name': info.get('device_id', ''),
+                            'platform': info.get('platform', ''),
+                            'mgmt_ip': info.get('mgmt_ip', ''),
+                            'port': info.get('port_id', ''),
+                            'software': info.get('software_version', ''),
+                            'capabilities': info.get('capabilities', ''),
+                            'native_vlan': str(info.get('native_vlan', '')),
+                            'source': 'CDP',
+                        }
+                    for mac, info in session.lldp_neighbors.items():
+                        if mac not in all_switches:
+                            all_switches[mac] = {
+                                'name': info.get('system_name', ''),
+                                'platform': info.get('system_desc', ''),
+                                'mgmt_ip': info.get('mgmt_ip', ''),
+                                'port': info.get('port_id', ''),
+                                'software': '',
+                                'capabilities': info.get('capabilities', ''),
+                                'native_vlan': '',
+                                'source': 'LLDP',
+                            }
+                        else:
+                            # Merge LLDP into existing CDP entry (fill gaps)
+                            existing = all_switches[mac]
+                            if not existing['name'] and info.get('system_name'):
+                                existing['name'] = info['system_name']
+                            if not existing['platform'] and info.get('system_desc'):
+                                existing['platform'] = info['system_desc']
+                            if not existing['mgmt_ip'] and info.get('mgmt_ip'):
+                                existing['mgmt_ip'] = info['mgmt_ip']
+                            existing['source'] = 'CDP+LLDP'
+
+                    for mac, sw in all_switches.items():
+                        parts = [f"{mac}"]
+                        if sw['name']:
+                            parts[0] += f" ({sw['name']})"
+                        detail_parts = []
+                        if sw['platform']:
+                            detail_parts.append(f"Platform: {sw['platform']}")
+                        if sw['mgmt_ip']:
+                            detail_parts.append(f"Mgmt: {sw['mgmt_ip']}")
+                        if sw['port']:
+                            detail_parts.append(f"Port: {sw['port']}")
+                        if sw['software']:
+                            detail_parts.append(f"SW: {sw['software']}")
+                        if sw['capabilities']:
+                            detail_parts.append(f"Caps: {sw['capabilities']}")
+                        if sw['native_vlan']:
+                            detail_parts.append(f"Native VLAN: {sw['native_vlan']}")
+                        lines.append(f"    {parts[0]} [{sw['source']}]")
+                        if detail_parts:
+                            lines.append(f"      {' | '.join(detail_parts)}")
 
             # --- HSRP ---
             if session.hsrp_hello_count > 0:
@@ -3099,6 +4401,45 @@ class PcapAiAnalyzer:
                         f"{_format_bytes(stats_d['bytes'])}"
                     )
 
+        # --- Active /24 Network Inventory ---
+        net_inventory: dict = defaultdict(lambda: {
+            "ips": set(), "bytes": 0, "flows": 0,
+        })
+        for (src, dst, dport, proto), stats in session.conversations.items():
+            for ip in (src, dst):
+                parts = ip.rsplit(".", 1)
+                if len(parts) == 2:
+                    sn = f"{parts[0]}.0/24"
+                    net_inventory[sn]["ips"].add(ip)
+            src_sn = ".".join(src.split(".")[:3]) + ".0/24"
+            net_inventory[src_sn]["bytes"] += stats.get("bytes_out", 0)
+            net_inventory[src_sn]["flows"] += 1
+
+        if net_inventory:
+            sorted_nets = sorted(net_inventory.items(),
+                                 key=lambda x: x[1]["bytes"], reverse=True)
+            int_nets = [(sn, s) for sn, s in sorted_nets if is_internal(sn.split("/")[0])]
+            ext_nets = [(sn, s) for sn, s in sorted_nets if not is_internal(sn.split("/")[0])]
+
+            lines.append(f"\n{'=' * 60}")
+            lines.append(f"ACTIVE /24 NETWORK INVENTORY — {len(sorted_nets)} subnet(s)")
+            lines.append(f"{'=' * 60}")
+            lines.append(f"  Internal: {len(int_nets)}  |  External: {len(ext_nets)}")
+            lines.append(
+                f"\n  {'Subnet':<20} {'Hosts':<7} {'Flows':<8} {'Bytes':<12} {'Type'}"
+            )
+            lines.append("  " + "-" * 65)
+            for sn, s in sorted_nets[:50]:
+                ip_base = sn.split("/")[0]
+                loc = "INT" if is_internal(ip_base) else "EXT"
+                lines.append(
+                    f"  {sn:<20} {len(s['ips']):<7} {s['flows']:<8} "
+                    f"{_format_bytes(s['bytes']):<12} {loc}"
+                )
+            if len(sorted_nets) > 50:
+                lines.append(f"  ... +{len(sorted_nets) - 50} more subnet(s) "
+                             "(see companion .md for full list)")
+
         # --- Subnet Anomaly Summary ---
         subnet_scores: dict = defaultdict(lambda: {
             "rst": 0, "retransmit": 0, "icmp_errors": 0,
@@ -3133,7 +4474,7 @@ class PcapAiAnalyzer:
                 subnet_scores[_to_subnet(ip)]["ips_seen"].add(ip)
 
         for ip, macs in session.arp_ip_to_macs.items():
-            if len(macs) > 1 and is_internal(ip):
+            if len(macs) > 1 and is_internal(ip) and ip not in ('0.0.0.0', '255.255.255.255'):
                 subnet_scores[_to_subnet(ip)]["ip_conflicts"] += 1
                 subnet_scores[_to_subnet(ip)]["ips_seen"].add(ip)
 
@@ -3215,6 +4556,110 @@ class PcapAiAnalyzer:
                 lines.append(f"  ⚠️  THIRD: {sn3} (score={s3['total_score']}, "
                              f"{len(s3['ips_seen'])} IPs)")
 
+        # --- AD / Windows Protocol Activity ---
+        ad_sections = []
+        if hasattr(session, "kerberos_tickets") and session.kerberos_tickets:
+            kb = session.kerberos_tickets
+            failures = [t for t in kb if t.get("success") is False or t.get("success") == "false"]
+            ad_sections.append(f"Kerberos: {len(kb)} tickets ({len(failures)} failures)")
+            if failures:
+                fail_clients = Counter(t.get("client", "?") for t in failures)
+                for client, cnt in fail_clients.most_common(5):
+                    ad_sections.append(f"  Failed: {client} ({cnt}x)")
+
+        if hasattr(session, "ntlm_auths") and session.ntlm_auths:
+            nt = session.ntlm_auths
+            fails = [a for a in nt if a.get("success") is False or a.get("success") == "false"]
+            ad_sections.append(f"NTLM: {len(nt)} auths ({len(fails)} failures)")
+
+        if hasattr(session, "smb_mappings") and session.smb_mappings:
+            ad_sections.append(f"SMB tree connects: {len(session.smb_mappings)}")
+            shares = Counter(m.get("share", "?") for m in session.smb_mappings)
+            for share, cnt in shares.most_common(5):
+                ad_sections.append(f"  {share} ({cnt}x)")
+
+        if hasattr(session, "smb_files") and session.smb_files:
+            actions = Counter(f.get("action", "?") for f in session.smb_files)
+            ad_sections.append(f"SMB file ops: {len(session.smb_files)} — " +
+                               ", ".join(f"{a}={c}" for a, c in actions.most_common()))
+
+        if hasattr(session, "dce_rpc_calls") and session.dce_rpc_calls:
+            endpoints = Counter(c.get("endpoint", "?") for c in session.dce_rpc_calls)
+            ad_sections.append(f"DCE/RPC: {len(session.dce_rpc_calls)} calls — " +
+                               ", ".join(f"{e}={c}" for e, c in endpoints.most_common(5)))
+
+        if hasattr(session, "ldap_operations") and session.ldap_operations:
+            msg_types = Counter(o.get("message_type", "?") for o in session.ldap_operations)
+            ad_sections.append(f"LDAP: {len(session.ldap_operations)} ops — " +
+                               ", ".join(f"{t}={c}" for t, c in msg_types.most_common(5)))
+
+        if ad_sections:
+            lines.append(f"\n{'=' * 60}")
+            lines.append("ACTIVE DIRECTORY / WINDOWS PROTOCOL ACTIVITY")
+            lines.append(f"{'=' * 60}")
+            for s in ad_sections:
+                lines.append(s)
+
+        # --- Syslog Summary (if present in netops context) ---
+        if hasattr(session, "syslog_total") and session.syslog_total:
+            lines.append(f"\n{'=' * 60}")
+            lines.append("SYSLOG SUMMARY")
+            lines.append(f"{'=' * 60}")
+            lines.append(f"Total messages: {session.syslog_total:,}")
+            if session.syslog_sources:
+                lines.append(f"Sources: {', '.join(sorted(session.syslog_sources.keys())[:10])}")
+            if session.syslog_severity:
+                from plugins.network_forensics.pcap_metadata_summary.tool import _SYSLOG_SEVERITY
+                sev_strs = [f"{_SYSLOG_SEVERITY.get(k, str(k))}={v:,}"
+                            for k, v in session.syslog_severity.most_common()]
+                lines.append(f"Severity: {', '.join(sev_strs)}")
+            if session.syslog_patterns:
+                pat_strs = [f"{k}={v:,}" for k, v in session.syslog_patterns.most_common()]
+                lines.append(f"Patterns: {', '.join(pat_strs)}")
+
+        # --- VLAN Configuration Analysis (Network Ops Focus) ---
+        has_vlan_tags = bool(session.vlan_ids)
+        has_stp_vlans = hasattr(session, "stp_vlans") and bool(session.stp_vlans)
+        if has_vlan_tags or session.untagged_frame_count > 0 or has_stp_vlans:
+            lines.append(f"\n{'=' * 60}")
+            lines.append("VLAN CONFIGURATION")
+            lines.append(f"{'=' * 60}")
+            if session.vlan_1_detected:
+                lines.append("⚠️  VLAN 1 (Native VLAN) In Use")
+                lines.append(f"  - Frames on VLAN 1: {session.vlan_ids.get(1, 0):,}")
+                if 1 in session.vlan_to_ips:
+                    lines.append(f"  - IPs observed: {', '.join(sorted(session.vlan_to_ips[1])[:10])}")
+                lines.append("  • Production traffic on native VLAN may indicate misconfiguration")
+                lines.append("  • Verify against network design documentation")
+            if session.vlan_ids:
+                lines.append(f"\n  VLAN Distribution: {len(session.vlan_ids)} VLAN(s) detected")
+                total_tagged = sum(session.vlan_ids.values())
+                if total_tagged + session.untagged_frame_count > 0:
+                    untagged_pct = session.untagged_frame_count / (total_tagged + session.untagged_frame_count) * 100
+                    lines.append(f"  Tagged frames: {total_tagged:,}")
+                    lines.append(f"  Untagged frames: {session.untagged_frame_count:,} ({untagged_pct:.1f}%)")
+                lines.append(f"\n  Top VLANs by traffic:")
+                for vlan_id, count in session.vlan_ids.most_common(10):
+                    ips_on_vlan = len(session.vlan_to_ips.get(vlan_id, set()))
+                    marker = ""
+                    if vlan_id == 1:
+                        marker = "  ⚠️  Native"
+                    lines.append(f"    VLAN {vlan_id}: {count:,} frames, {ips_on_vlan} unique IP(s){marker}")
+            elif has_stp_vlans:
+                # No 802.1Q tags but STP BPDUs reveal VLANs
+                stp_vlan_list = sorted(session.stp_vlans.keys())
+                lines.append("  No 802.1Q tagged frames (capture on access/untagged port)")
+                lines.append(f"  However, STP/PVST+ BPDUs reveal {len(stp_vlan_list)} active VLAN(s):")
+                for vlan_id in stp_vlan_list[:15]:
+                    cnt = session.stp_vlans[vlan_id]
+                    marker = "  ⚠️  Native" if vlan_id == 1 else ""
+                    lines.append(f"    VLAN {vlan_id}: {cnt:,} BPDUs{marker}")
+                if len(stp_vlan_list) > 15:
+                    lines.append(f"    ... and {len(stp_vlan_list) - 15} more")
+            else:
+                lines.append("  No VLAN tags detected in capture")
+                lines.append(f"  Untagged frames: {session.untagged_frame_count:,}")
+
         return "\n".join(lines)
 
     @staticmethod
@@ -3222,17 +4667,27 @@ class PcapAiAnalyzer:
         """Build a PCAP context header with key metadata."""
         from plugins.network_forensics.pcap_metadata_summary.tool import is_internal, _format_bytes
 
-        duration = session.duration_seconds
+        duration = session.duration_seconds or 0.0
         internal_ips = [ip for ip in session.unique_ips if is_internal(ip)]
         external_ips = [ip for ip in session.unique_ips if not is_internal(ip)]
 
         lines = [
             "=" * 60,
-            f"PCAP ANALYSIS: {session.filename}",
+            f"PCAP ANALYSIS: {session.filename or 'unknown'}",
             "=" * 60,
-            f"Size: {_format_bytes(session.file_size)} | "
-            f"Packets: {session.packet_count:,} | Duration: {duration:.1f}s",
         ]
+        packet_count = session.packet_count or 0
+        if session.file_size:
+            lines.append(
+                f"Size: {_format_bytes(session.file_size)} | "
+                f"Packets: {packet_count:,} | Duration: {duration:.1f}s"
+            )
+        else:
+            lines.append(
+                f"Packets: {packet_count:,} | Duration: {duration:.1f}s"
+            )
+        if getattr(session, "bytes_transferred", 0):
+            lines.append(f"Network bytes transferred: {_format_bytes(session.bytes_transferred)}")
         if session.start_time:
             from datetime import datetime, timezone
             start = datetime.fromtimestamp(session.start_time, tz=timezone.utc)

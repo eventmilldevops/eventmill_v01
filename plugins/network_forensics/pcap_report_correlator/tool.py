@@ -18,8 +18,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from framework.plugins.protocol import QueryHints
-
 logger = logging.getLogger("eventmill.plugins.pcap_report_correlator")
 
 
@@ -467,12 +465,9 @@ class PcapReportCorrelator:
             f"REPORT TEXT:\n{text[:8000]}"
         )
         try:
-            # Bulk IOC extraction is pattern-matching, not reasoning — the
-            # provider default (medium) buys latency and cost, not accuracy.
             response = context.llm_query.query_text(
                 prompt=prompt,
                 max_tokens=2048,
-                hints=QueryHints(thinking_level="low"),
             )
             if response.ok and response.text:
                 import json

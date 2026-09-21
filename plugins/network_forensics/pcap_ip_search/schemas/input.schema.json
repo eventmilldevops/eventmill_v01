@@ -15,6 +15,30 @@
     "ip": {
       "type": "string",
       "description": "IP address for timeline mode."
+    },
+    "src_ip": {
+      "type": "string",
+      "description": "Filter timeline to only show events where this is the source IP."
+    },
+    "dst_ip": {
+      "type": "string",
+      "description": "Filter timeline to only show events where this is the destination IP."
+    },
+    "src_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "Filter timeline to only show events with this source port."
+    },
+    "dst_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "Filter timeline to only show events with this destination port."
+    },
+    "proto": {
+      "type": "string",
+      "description": "Filter timeline by protocol (e.g. TCP, UDP)."
     }
   },
   "required": ["mode"]

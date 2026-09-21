@@ -1,0 +1,44 @@
+## Event for STP Configuration BPDU (type 0x00) or RSTP BPDU (type 0x02).
+##
+## src_mac:         Ethernet source MAC of the switch sending the BPDU
+## dst_mac:         Ethernet destination MAC (usually 01:80:c2:00:00:00)
+## version:         Protocol Version (0=STP, 2=RSTP, 3=MSTP)
+## bpdu_type:       BPDU Type (0x00=Config, 0x02=RSTP)
+## flags:           Raw flags byte — decoded in Zeek script
+## root_priority:   Root Bridge Priority (includes System ID Extension)
+## root_mac:        Root Bridge MAC address
+## root_path_cost:  Root Path Cost from this bridge
+## bridge_priority: Sending Bridge Priority (includes System ID Extension)
+## bridge_mac:      Sending Bridge MAC address
+## port_id:         Port Identifier
+## message_age:     Message Age in seconds
+## max_age:         Max Age in seconds
+## hello_time:      Hello Time in seconds
+## forward_delay:   Forward Delay in seconds
+event stp_config_bpdu%(
+    src_mac: string,
+    dst_mac: string,
+    version: count,
+    bpdu_type: count,
+    flags: count,
+    root_priority: count,
+    root_mac: string,
+    root_path_cost: count,
+    bridge_priority: count,
+    bridge_mac: string,
+    port_id: count,
+    message_age: count,
+    max_age: count,
+    hello_time: count,
+    forward_delay: count
+%);
+
+## Event for STP Topology Change Notification BPDU (type 0x80).
+## TCN BPDUs carry no payload beyond the BPDU type field.
+##
+## src_mac: Ethernet source MAC of the switch that detected a topology change
+## dst_mac: Ethernet destination MAC
+event stp_tcn_bpdu%(
+    src_mac: string,
+    dst_mac: string
+%);

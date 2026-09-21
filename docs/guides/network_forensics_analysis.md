@@ -663,9 +663,9 @@ def execute(self, payload, context):
     combined = static_output + "\n\n" + AI_SEPARATOR + "\n" + response
 ```
 
-The `context.llm_query` is a `TierScopedLLMClient` provided by the
-framework, wrapping the LLM Dispatcher. Routing follows the plugin's
-manifest `model_tier` — light models (Flash) or heavy models (Pro).
+The `context.llm_query` is an `MCPLLMClient` instance provided by the
+framework. It uses the LLM Dispatcher for tiered routing — light
+models (Flash) for small prompts, heavy models (Pro) for large ones.
 Connect with the `connect` command before running AI tools.
 
 ### 6.2 Three Prompt Tiers
@@ -1301,7 +1301,7 @@ eventmill (network_forensics) > run pcap_threat_hunter {"hunt": "dns"}
 
 ```
 eventmill (network_forensics) > connect
-  ✓ Connected to Gemini Flash (gemini-3.8-flash)
+  ✓ Connected to Gemini Flash (gemini-2.5-flash)
 
 eventmill (network_forensics) > run pcap_ai_analyzer {"mode": "hunt_beacons"}
   [PCAP header + beaconing data + 🔍 AI ANALYSIS with MITRE ATT&CK mapping]

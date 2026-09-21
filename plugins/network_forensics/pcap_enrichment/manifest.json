@@ -1,0 +1,30 @@
+{
+  "tool_name": "pcap_enrichment",
+  "version": "1.0.0",
+  "pillar": "network_forensics",
+  "display_name": "PCAP IP Enrichment",
+  "description_short": "Enrich PCAP IPs with context from BigQuery tables.",
+  "description_long": "Queries a user-specified BigQuery table to enrich all IPs extracted from a loaded PCAP session. Supports configurable field selection via --fields and arbitrary table targeting via --table. Results are stored in the session for automatic injection into pcap_ai_analyzer prompts. Handles batching for large IP sets and graceful fallback when BQ is unavailable.",
+  "author": "Event Mill Contributors",
+  "entry_point": "tool.py",
+  "class_name": "PcapEnrichment",
+  "artifacts_consumed": ["pcap"],
+  "artifacts_produced": ["json_events"],
+  "capabilities": [
+    "network_forensics:ip_enrichment",
+    "network_forensics:bq_lookup",
+    "network_forensics:asset_context"
+  ],
+  "input_schema": "schemas/input.schema.json",
+  "output_schema": "schemas/output.schema.json",
+  "timeout_class": "medium",
+  "cost_hint": "low",
+  "model_tier": "none",
+  "safe_for_auto_invoke": false,
+  "requires_llm": false,
+  "dependencies": ["pcap_metadata_summary"],
+  "stability": "beta",
+  "tags": ["enrichment", "bigquery", "gcp", "ip", "asset", "threat-intel"],
+  "chains_to": ["pcap_ai_analyzer"],
+  "chains_from": ["pcap_metadata_summary", "pcap_ip_search"]
+}
