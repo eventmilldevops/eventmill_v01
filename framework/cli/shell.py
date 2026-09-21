@@ -1891,6 +1891,40 @@ class EventMillShell(cmd.Cmd):
     # Persistent state for tracking Zeek jobs across commands
     _zeek_jobs: dict[str, dict] = {}
 
+    _ZEEK_SUBCOMMANDS = ("status", "load", "jobs", "list")
+
+    def complete_zeek(self, text: str, line: str, begidx: int, endidx: int) -> list[str]:
+        """Complete 'zeek': a subcommand or filename first, then --async or a known id.
+
+        No completer existed for this command either — same gap 'load' had
+        before complete_load. Job/output identifiers only ever come from
+        this session's own _zeek_jobs state, never from GCS, so completion
+        can never block on the network.
+        """
+        parts = line[:begidx].split()
+        args_before = parts[1:] if parts and parts[0] == "zeek" else parts
+
+        if not args_before:
+            candidates = set(self._ZEEK_SUBCOMMANDS) | set(self._complete_path(text))
+            return [c for c in sorted(candidates) if c.startswith(text)]
+
+        first = args_before[0]
+        if first == "status":
+            return [b for b in self._zeek_jobs if b.startswith(text)]
+        if first == "load":
+            folders = {
+                job["output_prefix"].rsplit("/", 1)[-1]
+                for job in self._zeek_jobs.values()
+                if job.get("output_prefix")
+            }
+            return [f for f in sorted(folders) if f.startswith(text)]
+        if first in ("jobs", "list"):
+            return []
+        # First token was a filename/gs:// URI — only --async is left to offer.
+        if "--async" in args_before:
+            return []
+        return [c for c in ("--async",) if c.startswith(text)]
+
     def do_zeek(self, arg: str) -> None:
         """Process a large PCAP with Zeek via Cloud Build.
 
