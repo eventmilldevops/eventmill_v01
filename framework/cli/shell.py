@@ -1600,7 +1600,52 @@ class EventMillShell(cmd.Cmd):
     # -------------------------------------------------------------------
     # Artifact Commands
     # -------------------------------------------------------------------
-    
+
+    _LOAD_ARTIFACT_TYPES = (
+        "pcap", "json_events", "log_stream", "risk_model",
+        "cloud_audit_log", "pdf_report", "html_report", "image", "text",
+    )
+
+    def complete_load(self, text: str, line: str, begidx: int, endidx: int) -> list[str]:
+        """Complete 'load': a filesystem path first, then artifact type or --fast.
+
+        No completer existed for this command at all before this — 'load
+        capture.pcap --fa' had nothing to complete against, at any position,
+        the same gap complete_run had before it grew flag/enum completion.
+        """
+        parts = line[:begidx].split()
+        args_before = parts[1:] if parts and parts[0] == "load" else parts
+
+        if not args_before:
+            return self._complete_path(text)
+
+        # After the file path: remaining artifact types, plus --fast unless
+        # it is already on the line. Order doesn't matter to do_load.
+        candidates = [t for t in self._LOAD_ARTIFACT_TYPES if t not in args_before]
+        if "--fast" not in args_before:
+            candidates.append("--fast")
+        return [c for c in sorted(candidates) if c.startswith(text)]
+
+    @staticmethod
+    def _complete_path(text: str) -> list[str]:
+        """Filesystem path completion; directories are suffixed with a separator."""
+        directory = os.path.dirname(text) or "."
+        prefix = os.path.basename(text)
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            return []
+        lead = os.path.dirname(text)
+        results = []
+        for name in sorted(names):
+            if not name.startswith(prefix):
+                continue
+            candidate = os.path.join(lead, name) if lead else name
+            if os.path.isdir(os.path.join(directory, name)):
+                candidate += os.sep
+            results.append(candidate)
+        return results
+
     def do_load(self, arg: str) -> None:
         """Load an artifact file into the current session.
         
