@@ -252,8 +252,23 @@ def test_candidates_carry_what_a_draft_needs_and_not_the_whole_entry():
         "owner",
         "control_function",
         "absent_without_enrichment",
+        "fields",
     }
     assert "version_scope" not in candidate
+
+
+def test_a_candidate_names_the_fields_a_draft_may_use():
+    """Passing absent_without_enrichment while withholding native told a
+    model what each source lacks and never what it has, so the first live run
+    on the annotated build invented all 14 of its field names."""
+    node = next(n for n in _all_nodes() if n.fields["telemetry_candidates"])
+    candidate = node.fields["telemetry_candidates"][0]
+    assert candidate["fields"]["native"]
+    assert "derived" in candidate["fields"]
+    overlap = set(candidate["fields"]["native"]) & set(
+        candidate["absent_without_enrichment"]
+    )
+    assert not overlap, "a field cannot be both present and absent"
 
 
 def test_the_join_does_not_move_node_identity():

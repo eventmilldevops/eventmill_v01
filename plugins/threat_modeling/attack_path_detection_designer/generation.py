@@ -40,8 +40,23 @@ REVIEW_FLAG_CODES = (
     "FIELD_UNDECLARED_IN_LOGIC",
     "FIELD_FROM_UNCITED_SOURCE",
     "LOGIC_KIND_CORRECTED",
+    "LOGIC_KIND_AMBIGUOUS",
+    "LOGIC_NULL_AS_MATCH",
     "WINDOW_UNPARSED",
 )
+
+# An absence tested as though it were a value. `IS NOT NULL` is excluded: it
+# requires presence, which is the opposite failure and a legitimate condition.
+_NULL_AS_MATCH = re.compile(
+    r"\bIS\s+(?!NOT\b)(NULL|NONE|EMPTY|MISSING|UNSET|ABSENT)\b"
+    r"|(?<![!<>])={1,3}\s*NULL\b"
+    r"|\bNOT\s+SET\b",
+    re.IGNORECASE,
+)
+
+# A null test next to a declared insufficiency is the handling the contract
+# asks for, not the defect it forbids.
+_INSUFFICIENCY = re.compile(r"insufficient_telemetry", re.IGNORECASE)
 
 # Kinds derivable from the record's own shape. `baseline_deviation` and
 # `reconciliation` are claims about method that no structural rule can infer,
@@ -89,6 +104,10 @@ and grounded. Everything factual is supplied to you. Follow these rules:
   absent_without_enrichment field names.
 - If required data could be missing at evaluation time, missing_data_behaviour
   is insufficient_telemetry. Never let absent data evaluate as benign.
+- Never make an absence the thing that fires. A condition such as
+  "principal IS NULL" alerts on every record when the field is simply not
+  collected. Say what a present value would have to show instead, and put the
+  missing case in missing_data_behaviour.
 - Thresholds and windows are proposed starting parameters. State the grouping
   and what a baseline would need; do not assert a universal normal.
 - A window is a number and a time unit, written value_timeunit: 60_sec, 10_min,
@@ -96,6 +115,15 @@ and grounded. Everything factual is supplied to you. Follow these rules:
 - Every native field your logic reads must appear in the required_fields of the
   source you cite for it. A field you collect but never read is fine when it is
   context for the analyst; if it was meant to be part of the condition, use it.
+- Fields are offered, not invented, exactly as sources are. Each candidate
+  carries fields.native and fields.derived; required_fields may contain ONLY
+  those names, spelled exactly as given. Do not substitute a name you expect -
+  if the source offers "method" and "ref", never write "http_method" or
+  "head_branch". Where no offered field carries what you need, say so in
+  grounding.limitations and draft against what is there.
+- fields.derived are purpose-built indicators the library computes for this
+  source. Prefer one over reconstructing the same signal from raw fields, and
+  say in assumptions what the indicator assumes.
 
 Match draft_example's STRUCTURE exactly, field for field. x_eventmill.node is
 an object, never a string. x_eventmill.telemetry is an array of objects, never
@@ -140,7 +168,7 @@ DRAFT_EXAMPLE: dict[str, Any] = {
                 "source_id": "<one of the step's telemetry_candidates>",
                 "necessity": "required",
                 "collection_status": "unknown",
-                "required_fields": ["<native field>"],
+                "required_fields": ["<a name from this source's fields.native or fields.derived, spelled exactly>"],
                 "prerequisites": ["<what must be configured>"],
             }
         ],
@@ -421,14 +449,47 @@ def validate_draft(draft: dict[str, Any], node: dict[str, Any]) -> list[str]:
 
 
 def _validate_telemetry(extension: dict[str, Any], node: dict[str, Any]) -> list[str]:
-    """A draft may only cite sources it was offered."""
+    """A draft may only cite sources it was offered, and their real fields.
+
+    Fields are the same rule as sources, one level down. `required_fields` is
+    the list a collection engineer onboards against, so a plausible invention
+    - `http_method` for `method`, `head_branch` for `ref` - ships a rule that
+    cannot evaluate and a collection request nobody can fulfil. The candidate
+    carries the field names, so this checks against what the prompt offered
+    rather than against the library: a draft is judged on what it was told.
+    """
     problems: list[str] = []
-    offered = {c["source_id"] for c in as_dicts(node.get("telemetry_candidates"))}
+    candidates = as_dicts(node.get("telemetry_candidates"))
+    offered = {c["source_id"] for c in candidates}
+    fields_by_source: dict[str, set[str]] = {}
+    for candidate in candidates:
+        available = as_dict(candidate.get("fields"))
+        fields_by_source[str(candidate.get("source_id"))] = {
+            str(name)
+            for name in list(available.get("native") or [])
+            + list(available.get("derived") or [])
+        }
+
     for entry in as_dicts(extension.get("telemetry")):
         source_id = entry.get("source_id")
         if source_id not in offered:
             problems.append(
                 f"telemetry source {source_id!r} was not offered for this node"
+            )
+            continue
+        available = fields_by_source.get(str(source_id)) or set()
+        if not available:
+            # The candidate carried no field list, so there is nothing to
+            # check against and inventing a complaint would be worse.
+            continue
+        invented = sorted(
+            str(f) for f in entry.get("required_fields") or [] if str(f) not in available
+        )
+        if invented:
+            problems.append(
+                f"required_fields {', '.join(repr(f) for f in invented)} are not "
+                f"fields of {source_id!r}; it offers "
+                f"{', '.join(sorted(available))}"
             )
     for event in as_dicts(extension.get("events_of_interest")):
         if event.get("mapping_status") == "native_identifier" and not event.get("event_ref"):
@@ -527,21 +588,71 @@ def derive_kind(logic: dict[str, Any]) -> str:
     `single_event` is the skeleton's placeholder, so a model that reasons about
     the logic and not the example returns it unchanged while filling in a
     window and a threshold. The shape is the reliable witness, not the label.
+
+    Thresholds outrank join keys because `join_keys` carries two meanings. A
+    live draft counting statements `BY user_name` over ten minutes declared
+    itself a threshold and was correct; reading its grouping key as a join
+    rewrote the one kind the model had reasoned its way to. Where both are
+    present the shape is ambiguous, and `annotate` flags rather than decides.
     """
+    if logic.get("thresholds"):
+        return "threshold"
     if logic.get("join_keys"):
         return "correlation"
-    if logic.get("thresholds") or logic.get("window"):
+    if logic.get("window"):
         return "threshold"
     return "single_event"
 
 
+def null_as_match(logic: dict[str, Any]) -> str | None:
+    """An absence used as the thing that fires, not as a missing-data state.
+
+    The spec forbids null-as-match outright, and a live draft alerted on
+    `auth_identity IS NULL` to mean "unauthenticated". If that field is simply
+    not collected every row satisfies the condition and the rule alerts on all
+    traffic through the source - the same shape as an empty bucket prefix,
+    reading as a signal when it is really the absence of one.
+
+    This is a **flag, not a rejection**, and the line is deliberate.
+    `_validate_telemetry` rejects because a source or field that was never
+    offered is a checkable fact about the record. This is a pattern read out
+    of prose pseudocode, where the same words can express the handling the
+    contract asks for, so it states the concern and leaves the judgement.
+    """
+    text = _QUOTED.sub(" ", str(logic.get("pseudocode") or ""))
+    found = _NULL_AS_MATCH.search(text)
+    if not found or _INSUFFICIENCY.search(text):
+        return None
+    return found.group(0).strip()
+
+
+def kind_is_ambiguous(logic: dict[str, Any]) -> bool:
+    """Whether the shape supports more than one reading.
+
+    Grouping keys and join keys are spelled the same, so a thresholded rule
+    with keys could be either. Describing that honestly is the job; picking
+    for the author is how a validator starts reviewing instead.
+    """
+    return bool(logic.get("thresholds")) and bool(logic.get("join_keys"))
+
+
 def logic_field_references(logic: dict[str, Any]) -> set[str]:
-    """Identifiers the logic reads, with quoted values removed."""
+    """Native identifiers the logic reads, with values and aliases removed.
+
+    Pseudocode is normally written in the draft's own normalized names, so the
+    alias each `normalized_fields` entry defines is subtracted: a draft that
+    maps `connection.remote_address` to `source_ip` and then filters on
+    `source_ip` is reading its own alias, not some other source's field of the
+    same name. Leaving them in reported that alias as a foreign field.
+    """
     parts = [_QUOTED.sub(" ", str(logic.get("pseudocode") or ""))]
+    aliases: set[str] = set()
     for mapping in as_dicts(logic.get("normalized_fields")):
         parts.append(str(mapping.get("from") or ""))
+        if mapping.get("name"):
+            aliases.add(str(mapping["name"]))
     parts.extend(str(k) for k in logic.get("join_keys") or [])
-    return set(_IDENTIFIER.findall(" ".join(parts)))
+    return set(_IDENTIFIER.findall(" ".join(parts))) - aliases
 
 
 def field_closure_flags(
@@ -643,7 +754,19 @@ def annotate(
         flags.append(_review_flag("WINDOW_UNPARSED", problem))
 
     declared_kind = logic.get("kind")
-    if declared_kind in _DERIVABLE_KINDS or not declared_kind:
+    # Ambiguity only protects a kind that is one of the two readings. A draft
+    # still carrying the placeholder expressed no view, and `single_event` is
+    # definitively wrong once a threshold is present, so it is derived.
+    if kind_is_ambiguous(logic) and declared_kind in ("threshold", "correlation"):
+        flags.append(
+            _review_flag(
+                "LOGIC_KIND_AMBIGUOUS",
+                f"kind is {declared_kind!r}; the logic carries both thresholds "
+                f"and keys, which reads as a grouped threshold or a "
+                f"correlation. The declared kind was kept.",
+            )
+        )
+    elif declared_kind in _DERIVABLE_KINDS or not declared_kind:
         derived = derive_kind(logic)
         if derived != declared_kind:
             logic["kind"] = derived
@@ -655,6 +778,18 @@ def annotate(
                     f"so it is {derived!r}.",
                 )
             )
+
+    absence = null_as_match(logic)
+    if absence:
+        flags.append(
+            _review_flag(
+                "LOGIC_NULL_AS_MATCH",
+                f"the condition fires on {absence!r}: an absent value is being "
+                f"read as the signal. If the field is not collected, every "
+                f"record matches. State what a present value would have to "
+                f"show instead.",
+            )
+        )
 
     flags.extend(field_closure_flags(extension, library))
 

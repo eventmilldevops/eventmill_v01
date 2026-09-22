@@ -139,6 +139,8 @@
                   "FIELD_UNDECLARED_IN_LOGIC",
                   "FIELD_FROM_UNCITED_SOURCE",
                   "LOGIC_KIND_CORRECTED",
+                  "LOGIC_KIND_AMBIGUOUS",
+                  "LOGIC_NULL_AS_MATCH",
                   "WINDOW_UNPARSED",
                   "ANNOTATION_FAILED"
                 ]

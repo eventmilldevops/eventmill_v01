@@ -45,6 +45,15 @@ question to whoever tests the rule. That is the shape adopted here.
 
 `tool.py` — `annotate` runs on drafts that pass validation. An annotation that
 raises becomes `ANNOTATION_FAILED` on the draft rather than costing it.
+`_review_flag_line` puts the flags in `summarize_for_llm`, added 09-22 after the
+first version left them reachable only by opening the JSON: a flag that exists
+solely in the artifact is a flag nobody acts on, and this summary is what
+downstream reasoning sees. Codes and counts only — the messages name fields and
+sources, and nine drafts' worth would push the rest of the summary past the
+budget. It sits above the closing caveat because the summary truncates from the
+end. Absence is stated rather than left silent (`Review flags: none across 9
+draft(s)`), so a run with nothing to ask reads differently from a run where the
+annotation never happened.
 
 `schemas/detection_draft.schema.json` — `window` gains the `value_timeunit`
 pattern; `review_flags` gains the code enum and requires `code` and `message`.
@@ -97,6 +106,6 @@ the work is the projector behaving as triage, not a defect.
 
 ## Tests
 
-`tests/test_generation.py` gains 22 cases against a fixture library rather than
+`tests/test_generation.py` gains 27 cases against a fixture library rather than
 the seed, so they describe the check and not the library's current contents.
-235 pass in the plugin, 812 across `plugins/threat_modeling/`, 1782 overall.
+240 pass in the plugin, 1787 overall.

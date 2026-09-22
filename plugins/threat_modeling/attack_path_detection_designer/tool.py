@@ -668,6 +668,34 @@ def _incomplete_message(
     return "\n".join(lines)
 
 
+def _review_flag_line(drafts: list[dict[str, Any]]) -> str:
+    """Which questions the drafts carry, by code and by draft count.
+
+    A flag that only exists in the artifact is a flag nobody acts on: this
+    summary is what downstream reasoning sees. Codes and counts only - the
+    messages name fields and sources, and nine drafts' worth of them would
+    push everything after this line past the budget.
+    """
+    counts: dict[str, int] = {}
+    flagged = 0
+    for draft in drafts:
+        extension = draft.get("x_eventmill")
+        flags = extension.get("review_flags") if isinstance(extension, dict) else None
+        if not isinstance(flags, list) or not flags:
+            continue
+        flagged += 1
+        for flag in flags:
+            code = flag.get("code") if isinstance(flag, dict) else None
+            counts[str(code or "UNCODED")] = counts.get(str(code or "UNCODED"), 0) + 1
+    if not counts:
+        return f"Review flags: none across {len(drafts)} draft(s)."
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return (
+        f"Review flags: {sum(counts.values())} across {flagged} of {len(drafts)} "
+        f"draft(s) - " + ", ".join(f"{code} {n}" for code, n in ranked) + "."
+    )
+
+
 def _generation_summary(data: dict[str, Any], result: ToolResult) -> str:
     """Coverage first, then why anything is missing. Never the drafts."""
     ledger = data.get("coverage") or {}
@@ -685,6 +713,7 @@ def _generation_summary(data: dict[str, Any], result: ToolResult) -> str:
     rejected = data.get("rejected") or []
     if rejected:
         lines.append(f"Rejected: {len(rejected)}; first: {str(rejected[0])[:180]}")
+    lines.append(_review_flag_line(data.get("drafts") or []))
     calls = data.get("calls") or []
     if calls:
         models = {c.get("model_used") for c in calls if c.get("model_used")}

@@ -345,6 +345,32 @@ canonicalizes after generation; a window it cannot read is kept verbatim and
 carries `WINDOW_UNPARSED`, because discarding a parameter an engineer proposed
 is worse than carrying one that needs a human to read it.
 
+### Fields are offered, not invented
+
+A draft may name only the fields its candidate carried, in
+`fields.native` and `fields.derived`, spelled exactly. This is the source rule
+one level down, and it is a **rejection**, not a flag: `required_fields` is the
+list a collection engineer onboards against, so a plausible substitution —
+`http_method` for `method`, `head_branch` for `ref` — ships a rule that cannot
+evaluate and a collection request nobody can fulfil. The refusal names what the
+source does offer, because a rejection the author cannot act on costs the draft
+and teaches nothing. A candidate that carries no field list is not second-
+guessed: there is nothing to check against, and inventing a complaint is worse.
+
+Validation reads the candidate rather than the library, so a draft is judged on
+what it was told. That is only sound because the candidate now carries the
+fields at all: it previously passed `absent_without_enrichment` while
+withholding `native` and `derived`, which told a model what each source lacks
+and never what it has. The first live run on the annotated build invented all
+14 of its field names while copying `prerequisites` verbatim — it used what it
+was given and fabricated the rest.
+
+`fields.derived` are the library's purpose-built indicators, one per source
+(`rows_touched_estimate`, `secret_read_rate_per_principal`,
+`token_file_read_by_unexpected_process`). Withholding them cost that run the
+best field each source offers: one draft reconstructed a query count by hand
+where `rows_touched_estimate` measures the thing the rule was actually after.
+
 ### Derived record state and review flags
 
 Pseudocode is a hypothesis to be generated and then tested. Holding a model to
@@ -355,8 +381,18 @@ trusted to the reply, and the rest become flags:
 
 | Derived | Rule |
 |---|---|
-| `detection_logic.kind` | `join_keys` present → `correlation`; otherwise `thresholds` or `window` present → `threshold`; otherwise `single_event`. A draft declaring `baseline_deviation` or `reconciliation` keeps it: those are claims about method that no structural rule can infer. |
+| `detection_logic.kind` | `thresholds` present → `threshold`; otherwise `join_keys` → `correlation`; otherwise `window` → `threshold`; otherwise `single_event`. A draft declaring `baseline_deviation` or `reconciliation` keeps it: those are claims about method that no structural rule can infer. |
 | `detection_logic.window` | Canonical `value_timeunit`. A bare number is seconds. |
+
+Thresholds outrank keys because `join_keys` carries two meanings. A live draft
+counting statements `BY user_name` over ten minutes declared itself a
+`threshold` and was right; reading its grouping key as a join rewrote the one
+kind the model had reasoned its way to. Where both a threshold and keys are
+present the shape genuinely supports either reading, so a draft that declared
+`threshold` or `correlation` keeps its answer and carries
+`LOGIC_KIND_AMBIGUOUS`. A draft still carrying the `single_event` placeholder
+expressed no view and is derived: the placeholder is definitively wrong once a
+threshold exists.
 
 `review_flags` is a closed catalogue, and an empty array asserts there are none.
 None of these codes rejects a draft.
@@ -367,14 +403,33 @@ None of these codes rejects a draft.
 | `FIELD_UNDECLARED_IN_LOGIC` | The logic reads a field of a cited source that is not in `required_fields`. `required_fields` is the list a collection engineer onboards against, so the rule as written would ship uncollectable. |
 | `FIELD_FROM_UNCITED_SOURCE` | The logic reads a field the library attributes only to sources this draft does not cite. Either the source list or the logic is wrong. |
 | `LOGIC_KIND_CORRECTED` | `kind` disagreed with the shape and was replaced. |
+| `LOGIC_KIND_AMBIGUOUS` | Thresholds and keys together; the declared kind was kept. |
+| `LOGIC_NULL_AS_MATCH` | The condition fires on an absent value. If the field is not collected, every record matches. |
 | `WINDOW_UNPARSED` | A window that is not a number and a time unit. |
 | `ANNOTATION_FAILED` | Annotation raised. The draft passed validation and is kept. |
+
+`LOGIC_NULL_AS_MATCH` is where the line between a rejection and a flag is
+clearest. The spec forbids null-as-match outright, and `missing_data_behaviour`
+is enforced as a rejection because it is a declared value — a checkable fact
+about the record. The null test is read out of prose pseudocode, where the same
+words express the defect (`auth_identity IS NULL` meaning "unauthenticated")
+and the handling the contract asks for (`IF principal IS NULL THEN
+insufficient_telemetry`). A pattern that cannot tell those apart with certainty
+states the concern and leaves the judgement. `IS NOT NULL` and `!= NULL` are
+excluded: requiring presence is the opposite failure and a legitimate
+condition.
 
 The field checks are grounded in the telemetry reference library: only names the
 library knows to be fields of some source are reported, so pseudocode
 placeholders and SQL keywords never become findings. Generation takes the
 library as an argument and runs without it, in which case only
 `FIELD_DECLARED_UNUSED` is available.
+
+`summarize_for_llm` reports the flags by code and count, above the closing
+caveat because the summary truncates from the end. Codes only: the messages name
+fields and sources, and a full path's worth would push the rest of the summary
+past the budget. Absence is stated rather than left silent, so a run with
+nothing to ask reads differently from one where annotation never happened.
 
 ### Expandable assessment tuple
 

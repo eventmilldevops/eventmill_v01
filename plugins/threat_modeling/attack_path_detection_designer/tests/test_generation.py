@@ -707,3 +707,240 @@ def test_every_flag_code_is_registered():
 def test_the_prompt_asks_for_a_canonical_window():
     assert "60_sec" in gen.SYSTEM_CONTEXT
     assert "single_event | threshold | correlation" in json.dumps(gen.DRAFT_EXAMPLE)
+
+
+def test_the_summary_says_which_questions_the_drafts_carry():
+    """A flag that only exists in the artifact is a flag nobody acts on."""
+    drafts = [
+        {"x_eventmill": {"review_flags": [
+            {"code": "FIELD_DECLARED_UNUSED", "message": "m"},
+            {"code": "LOGIC_KIND_CORRECTED", "message": "m"},
+        ]}},
+        {"x_eventmill": {"review_flags": [{"code": "FIELD_DECLARED_UNUSED", "message": "m"}]}},
+        {"x_eventmill": {"review_flags": []}},
+    ]
+    line = _tool_mod._review_flag_line(drafts)
+    assert "3 across 2 of 3 draft(s)" in line
+    assert "FIELD_DECLARED_UNUSED 2" in line
+    assert line.index("FIELD_DECLARED_UNUSED") < line.index("LOGIC_KIND_CORRECTED")
+
+
+def test_the_summary_carries_codes_and_never_the_messages():
+    """The messages name fields and sources; nine drafts' worth would push
+    everything after this line past the budget."""
+    drafts = [
+        {"x_eventmill": {"review_flags": [
+            {"code": "FIELD_FROM_UNCITED_SOURCE", "message": "'file_path' belongs to x"}
+        ]}}
+    ]
+    line = _tool_mod._review_flag_line(drafts)
+    assert "file_path" not in line
+
+
+def test_no_flags_is_stated_rather_than_left_silent():
+    assert "none across 2 draft(s)" in _tool_mod._review_flag_line(
+        [{"x_eventmill": {"review_flags": []}}, {"x_eventmill": {}}]
+    )
+
+
+def test_the_flag_line_survives_a_malformed_draft():
+    drafts = [{"x_eventmill": "not an object"}, {"x_eventmill": {"review_flags": "no"}}]
+    assert "none across 2 draft(s)" in _tool_mod._review_flag_line(drafts)
+
+
+def test_the_generation_summary_reports_flags_above_the_closing_caveat(tool, nodes):
+    """summarize_for_llm truncates from the end, so the flags go above the
+    line a reader needs least."""
+    llm = FakeLLM(_responder(nodes))
+    result = tool.execute(
+        {"action": "generate_detections", "sources": [GRAPH, SEED], "flow_map_path": MAP},
+        FakeContext(llm_query=llm),
+    )
+    summary = tool.summarize_for_llm(result)
+    assert "Review flags:" in summary
+    assert summary.index("Review flags:") < summary.index("a person still judges")
+
+
+# ---------------------------------------------------------------------------
+# Fields are offered, not invented
+# ---------------------------------------------------------------------------
+
+def _node_offering(source_id: str, native: list[str], derived: list[str] | None = None):
+    return {
+        "telemetry_candidates": [
+            {"source_id": source_id, "fields": {"native": native, "derived": derived or []}}
+        ]
+    }
+
+
+def _cites(source_id: str, required_fields: list[str]) -> dict[str, Any]:
+    return {"telemetry": [{"source_id": source_id, "required_fields": required_fields}]}
+
+
+def test_a_field_the_source_does_not_have_is_refused():
+    """The first live run on the annotated build invented all 14 of its field
+    names - `http_method` for `method`, `head_branch` for `ref` - because the
+    candidate carried prerequisites and withheld the field list."""
+    node = _node_offering("application.runtime_log", ["method", "route", "request_id"])
+    problems = gen._validate_telemetry(_cites("application.runtime_log", ["http_method"]), node)
+    assert any("'http_method' are not fields of" in p for p in problems)
+
+
+def test_the_refusal_names_what_the_source_does_offer():
+    """A rejection a model cannot act on costs the draft and teaches nothing."""
+    node = _node_offering("application.runtime_log", ["method", "route"])
+    problems = gen._validate_telemetry(_cites("application.runtime_log", ["http_method"]), node)
+    assert "method, route" in problems[0]
+
+
+def test_offered_native_and_derived_fields_both_pass():
+    node = _node_offering(
+        "pgaudit.object_access", ["statement", "object_name"], ["rows_touched_estimate"]
+    )
+    extension = _cites("pgaudit.object_access", ["statement", "rows_touched_estimate"])
+    assert gen._validate_telemetry(extension, node) == []
+
+
+def test_a_candidate_with_no_field_list_is_not_second_guessed():
+    """Inventing a complaint is worse than having nothing to check against."""
+    node = {"telemetry_candidates": [{"source_id": "legacy.source"}]}
+    assert gen._validate_telemetry(_cites("legacy.source", ["anything"]), node) == []
+
+
+def test_an_unoffered_source_is_still_refused_before_its_fields():
+    """One problem, not two: the source is the cause and the fields the symptom."""
+    node = _node_offering("a.source", ["x"])
+    problems = gen._validate_telemetry(_cites("b.source", ["y"]), node)
+    assert len(problems) == 1
+    assert "was not offered" in problems[0]
+
+
+def test_the_prompt_offers_the_field_names(nodes):
+    """Withholding them while passing absent_without_enrichment told a model
+    what each source lacks and never what it has."""
+    node = next(n for n in nodes if n.get("telemetry_candidates"))
+    candidate = node["telemetry_candidates"][0]
+    assert "native" in candidate["fields"]
+    assert "derived" in candidate["fields"]
+    prompt = gen.build_prompt([node], {}, gen.path_outline(nodes, node["path_id"]))
+    assert "fields.native" in gen.SYSTEM_CONTEXT
+    assert candidate["fields"]["native"][0] in prompt
+
+
+def test_the_prompt_says_a_field_is_never_substituted():
+    assert "never write \"http_method\"" in gen.SYSTEM_CONTEXT
+    assert "fields.derived" in gen.SYSTEM_CONTEXT
+
+
+# ---------------------------------------------------------------------------
+# Two defects the same live run found in the annotation itself
+# ---------------------------------------------------------------------------
+
+def test_a_drafts_own_alias_is_not_read_as_a_foreign_field():
+    """A draft mapping `connection.remote_address` to `source_ip` and then
+    filtering on `source_ip` reads its own alias, not another source's field
+    of the same name. The first version reported it as foreign."""
+    draft = _logic_draft(
+        normalized_fields=[{"name": "username", "from": "client_ip"}],
+        pseudocode="WHERE username IS unexpected",
+    )
+    assert _codes(gen.annotate(draft, ANNOTATION_LIBRARY)) == []
+
+
+def test_the_native_field_behind_an_alias_still_counts_as_read():
+    """Subtracting aliases must not make the field they map from look unused."""
+    draft = _logic_draft(
+        normalized_fields=[{"name": "src", "from": "client_ip"}],
+        pseudocode="WHERE src IN known",
+    )
+    assert "FIELD_DECLARED_UNUSED" not in _codes(gen.annotate(draft, ANNOTATION_LIBRARY))
+
+
+def test_a_grouped_threshold_keeps_the_kind_it_declared():
+    """A live draft counting statements BY user_name over ten minutes declared
+    itself a threshold and was correct; reading its grouping key as a join
+    rewrote the one kind the model had reasoned its way to."""
+    draft = _logic_draft(
+        kind="threshold", join_keys=["user_name"], window="10_min",
+        thresholds={"query_count": 100},
+    )
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "threshold"
+    assert "LOGIC_KIND_AMBIGUOUS" in _codes(flags)
+    assert "LOGIC_KIND_CORRECTED" not in _codes(flags)
+
+
+def test_join_keys_without_thresholds_are_still_a_correlation():
+    draft = _logic_draft(join_keys=["session_id"])
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "correlation"
+
+
+def test_thresholds_outrank_join_keys_when_the_kind_is_the_placeholder():
+    draft = _logic_draft(join_keys=["session_id"], thresholds={"n": 10})
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "threshold"
+
+
+# ---------------------------------------------------------------------------
+# An absence is not a signal
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "pseudocode",
+    [
+        "WHERE operation = 'read' AND auth_identity IS NULL",
+        "WHERE principal = NULL",
+        "WHERE principal == NULL",
+        "WHERE tenant IS EMPTY",
+        "WHERE tenant IS MISSING",
+        "WHERE token IS UNSET",
+        "WHERE token NOT SET",
+    ],
+)
+def test_an_absence_used_as_the_signal_is_flagged(pseudocode):
+    """A live draft alerted on `auth_identity IS NULL` to mean unauthenticated.
+    If that field is not collected, every record satisfies the condition."""
+    draft = _logic_draft(pseudocode=pseudocode)
+    assert "LOGIC_NULL_AS_MATCH" in _codes(gen.annotate(draft, ANNOTATION_LIBRARY))
+
+
+@pytest.mark.parametrize(
+    "pseudocode",
+    [
+        "WHERE principal IS NOT NULL AND status = 500",
+        "WHERE principal != NULL",
+        "WHERE principal <> NULL",
+        "WHERE client_ip IN known_ips",
+    ],
+)
+def test_requiring_a_value_to_be_present_is_not_the_defect(pseudocode):
+    """`IS NOT NULL` requires presence - the opposite failure, and a
+    legitimate condition."""
+    draft = _logic_draft(pseudocode=pseudocode)
+    assert "LOGIC_NULL_AS_MATCH" not in _codes(gen.annotate(draft, ANNOTATION_LIBRARY))
+
+
+def test_a_null_test_that_declares_insufficiency_is_the_handling_asked_for():
+    draft = _logic_draft(
+        pseudocode="IF principal IS NULL THEN insufficient_telemetry ELSE compare"
+    )
+    assert "LOGIC_NULL_AS_MATCH" not in _codes(gen.annotate(draft, ANNOTATION_LIBRARY))
+
+
+def test_a_quoted_null_is_a_value_not_a_condition():
+    draft = _logic_draft(pseudocode="WHERE message CONTAINS 'IS NULL'")
+    assert "LOGIC_NULL_AS_MATCH" not in _codes(gen.annotate(draft, ANNOTATION_LIBRARY))
+
+
+def test_null_as_match_never_rejects_a_draft(nodes):
+    """It is read out of prose, so it states the concern and leaves the
+    judgement; the rejections are checkable facts about the record."""
+    node = next(n for n in nodes if n.get("telemetry_candidates"))
+    draft = _draft_for(node)
+    draft["x_eventmill"]["detection_logic"]["pseudocode"] = "WHERE principal IS NULL"
+    assert gen.validate_draft(draft, node) == []
+
+
+def test_the_prompt_says_an_absence_may_not_be_the_signal():
+    assert "Never make an absence the thing that fires" in gen.SYSTEM_CONTEXT

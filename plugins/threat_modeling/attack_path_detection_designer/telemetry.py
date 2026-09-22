@@ -122,6 +122,17 @@ def _candidate(source: dict[str, Any], matched_on: str) -> dict[str, Any]:
         "control_function": (source.get("control_function") or {}).get("domain"),
         "supports": source.get("supports") or [],
         "observes": source.get("observes") or [],
+        # The fields a draft may name. Withholding these while still passing
+        # `absent_without_enrichment` told a model what each source lacks and
+        # never what it has, and the first live run on the annotated build
+        # invented all 14 of its field names while copying `prerequisites`
+        # verbatim - it used what it was given and fabricated the rest. The
+        # `derived` entries are the library's purpose-built indicators, so
+        # withholding them cost the drafts the best field each source offers.
+        "fields": {
+            "native": list((source.get("fields") or {}).get("native") or []),
+            "derived": list((source.get("fields") or {}).get("derived") or []),
+        },
         "absent_without_enrichment": (source.get("fields") or {}).get(
             "absent_without_enrichment"
         )
