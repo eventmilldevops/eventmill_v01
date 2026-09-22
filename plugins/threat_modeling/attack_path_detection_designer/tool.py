@@ -60,6 +60,18 @@ PLANNED_ACTIONS = ("normalize_paths",)
 
 gen = _load_sibling("generation.py", "attack_path_detection_designer_generation")
 
+
+def _telemetry_fields_by_source() -> dict[str, dict[str, Any]]:
+    """The library keyed by source id, for the draft field-closure check.
+
+    Imported here rather than at module scope so the library stays a G1a
+    concern: generation takes it as an argument and works without it, which is
+    what lets the check be tested against a fixture library.
+    """
+    from framework.reference_data.telemetry_library import all_sources
+
+    return {str(s["source_id"]): s for s in all_sources()}
+
 # Sized against the provider's content budget, not a guaranteed node limit.
 GENERATION_MAX_TOKENS = 32000
 
@@ -513,6 +525,18 @@ class AttackPathDetectionDesigner:
             if findings:
                 problems.append({"draft_id": node["draft_id"], "problems": findings})
                 continue
+            try:
+                gen.annotate(draft, _telemetry_fields_by_source())
+            except Exception as exc:  # noqa: BLE001 - annotation never costs a draft
+                # A flag that could not be derived is a flag, not a rejection.
+                # The draft passed validation; losing it here would discard
+                # work over a question about it.
+                draft["x_eventmill"].setdefault("review_flags", []).append(
+                    {
+                        "code": "ANNOTATION_FAILED",
+                        "message": f"{type(exc).__name__}: {exc}",
+                    }
+                )
             valid.append(draft)
 
         ledger = gen.coverage(nodes, valid)

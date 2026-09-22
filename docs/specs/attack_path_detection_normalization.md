@@ -818,7 +818,7 @@ Normalization first and separately; guidance builds on the pack.
 | **N3. Enrichment and grading** — **complete**: N3a join and grades, N3b controls (2026-09-19), N3c mitigations, N3d taxonomy (2026-09-20) | Flow-map join, control catalogue, mitigation-name resolution, the §1.4b focus cut and coverage ratio, taxonomy reconciliation, completeness grades | `Stealth` survives against v19.2. `uncovered_mitigations` resolve to names locally. `mitigation_focus[]` is the 1–2 narrowest by technique breadth, deterministic and tie-broken by M-ID. Grades match §5 across all four fixtures with and without the flow map — 38 `component_bound`, 5 `component_bound_partial`, and 43 `asset_named` when the map is withheld. The two `TACTIC_CORRECTED` relabels in `124121` and the one in `022646` survive normalization. |
 | **N4. Context pack artifact** | `normalize_paths` action, pack schema, registration, CLI `show`/`export`, bounded `summarize_for_llm` | Pack round-trips; re-normalizing the same inputs is byte-identical apart from run ID and timestamp; the summary states counts, grades and conflicts without pasting node bodies. Input by `artifact_ids` and output as a registered artifact are **done in N1** (decision 8); what N4 adds is the pack's own schema and `metadata.kind`, not persistence — the shell already auto-persists a result that registers nothing. |
 | **N5. `normalize_flow_map`** | The projector's own Phase 4 action | Prose/Markdown/Mermaid → canonical flow map JSON with a stable `_canonical_flow_map_hash`. An unstated control status becomes `partial` and is flagged, never `implemented` — the rule already recorded in `docs/change_log/2026-09-11-adversary-path-projector-phase-3.md`. This is what makes `component_bound` routinely reachable. |
-| **G1…** | Grounding, generation, workbook — designer plan stages 2–5, unchanged except that they consume a pack | As in the designer plan, with the node-count constants replaced by pack inventory. |
+| **G1…** — G1a telemetry join, G1b generation **built and live-run 2026-09-20**; G1c repair and G1d workbook outstanding | Grounding, generation, workbook — designer plan stages 2–5, unchanged except that they consume a pack | As in the designer plan, with the node-count constants replaced by pack inventory. |
 
 N1–N4 need no provider and no cost. N5 is projector work and can run in
 parallel; the designer degrades to `asset_named` without it, which is a
@@ -1341,6 +1341,17 @@ artifacts, closing the question decision 8 left open, and a live projection
 produced a **three-path** graph, a shape §7a records as having no fixture.
 Test steps 7-10 — edited map, wrong map, error paths, cross-run refusal — are
 not yet run.
+
+**G1a and G1b, 2026-09-20 (live).** `generate_detections` ran against
+`gcp_gemini` and completed: one valid draft per node, every `draft_id`
+matched. Five live runs found five defects, every one in this repository's code
+or prompt rather than in the model - a crash on reply shape, loyalty telemetry
+sources leaking onto a telemetry SaaS warehouse (which validation would have
+*accepted*), a contract that named required keys without their shapes, and
+`logsource.product` filled with an Event Mill `source_id` instead of a vendor
+name. All fixed, each with tests. The scripted tests passed throughout, because
+the same author wrote both sides of them. Suite 1705 → 1757. No draft has been
+evaluated against real telemetry.
 
 **N3c and N3d, 2026-09-20.** Both of this document's independent mitigation
 figures were reproduced by the code rather than assumed: the §7 focus cut on

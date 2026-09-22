@@ -110,7 +110,11 @@
             "kind": { "type": "string", "enum": ["single_event", "threshold", "correlation", "baseline_deviation", "reconciliation"] },
             "normalized_fields": { "type": "array", "items": { "type": "object" } },
             "join_keys": { "type": "array", "items": { "type": "string" } },
-            "window": { "type": ["string", "null"] },
+            "window": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9]+_(sec|min|hour|day)$",
+              "description": "Canonical value_timeunit, e.g. 60_sec or 10_min, so a consumer splits rather than parses. Normalized after generation; a window that could not be read is kept verbatim and carries WINDOW_UNPARSED."
+            },
             "thresholds": { "type": "object", "description": "Proposed and tunable starting parameters, never a universal definition of normal." },
             "pseudocode": { "type": "string", "minLength": 10 },
             "missing_data_behaviour": {
@@ -121,7 +125,28 @@
           }
         },
         "assumptions": { "type": "array", "items": { "type": "string" } },
-        "review_flags": { "type": "array", "items": { "type": "object" } },
+        "review_flags": {
+          "type": "array",
+          "description": "Questions the draft carries into testing, not errors. Derived after validation; an empty array asserts there are none.",
+          "items": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "FIELD_DECLARED_UNUSED",
+                  "FIELD_UNDECLARED_IN_LOGIC",
+                  "FIELD_FROM_UNCITED_SOURCE",
+                  "LOGIC_KIND_CORRECTED",
+                  "WINDOW_UNPARSED",
+                  "ANNOTATION_FAILED"
+                ]
+              },
+              "message": { "type": "string" }
+            }
+          }
+        },
         "catalogue_status": { "type": "string", "enum": ["new_unchecked"] },
         "validation_status": { "type": "string", "enum": ["draft_unvalidated"] }
       }

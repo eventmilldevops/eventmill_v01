@@ -337,6 +337,45 @@ for service accounts. Where a baseline is needed, define the grouping, learning
 period, minimum samples, and cold-start behavior. Prefer approved workload policy
 and trace context when these are available.
 
+A window is written `value_timeunit` — `60_sec`, `10_min`, `24_hour`, `7_day` —
+so a consumer splits on the underscore rather than parsing prose. The first live
+run produced both `60` and `"10 minutes"` for the same field, which no consumer
+can compare without guessing what the bare number meant. `normalize_window`
+canonicalizes after generation; a window it cannot read is kept verbatim and
+carries `WINDOW_UNPARSED`, because discarding a parameter an engineer proposed
+is worse than carrying one that needs a human to read it.
+
+### Derived record state and review flags
+
+Pseudocode is a hypothesis to be generated and then tested. Holding a model to
+a rule that is correct on first emission is the wrong target; what the record
+owes its reader is an accurate account of itself and the questions it carries
+into testing. Two things are therefore derived after validation rather than
+trusted to the reply, and the rest become flags:
+
+| Derived | Rule |
+|---|---|
+| `detection_logic.kind` | `join_keys` present → `correlation`; otherwise `thresholds` or `window` present → `threshold`; otherwise `single_event`. A draft declaring `baseline_deviation` or `reconciliation` keeps it: those are claims about method that no structural rule can infer. |
+| `detection_logic.window` | Canonical `value_timeunit`. A bare number is seconds. |
+
+`review_flags` is a closed catalogue, and an empty array asserts there are none.
+None of these codes rejects a draft.
+
+| Code | Meaning |
+|---|---|
+| `FIELD_DECLARED_UNUSED` | A `required_fields` entry the logic never reads. Often deliberate analyst context — and also what a rule looks like when its discriminator went missing. |
+| `FIELD_UNDECLARED_IN_LOGIC` | The logic reads a field of a cited source that is not in `required_fields`. `required_fields` is the list a collection engineer onboards against, so the rule as written would ship uncollectable. |
+| `FIELD_FROM_UNCITED_SOURCE` | The logic reads a field the library attributes only to sources this draft does not cite. Either the source list or the logic is wrong. |
+| `LOGIC_KIND_CORRECTED` | `kind` disagreed with the shape and was replaced. |
+| `WINDOW_UNPARSED` | A window that is not a number and a time unit. |
+| `ANNOTATION_FAILED` | Annotation raised. The draft passed validation and is kept. |
+
+The field checks are grounded in the telemetry reference library: only names the
+library knows to be fields of some source are reported, so pseudocode
+placeholders and SQL keywords never become findings. Generation takes the
+library as an argument and runs without it, in which case only
+`FIELD_DECLARED_UNUSED` is available.
+
 ### Expandable assessment tuple
 
 Serialize the tuple as a **named YAML/JSON mapping**, not an anonymous positional
@@ -920,8 +959,19 @@ asks of this one — node counts as data rather than the constant 15, the
 batching rule, the graph/seed union — are listed in its section 6 and are not
 yet applied here.
 
-No plugin code or source exports were changed. No generated detection has been
-tested against live telemetry, and no LLM generation run was performed. The
+**Superseded 2026-09-20 on both counts below.** Generation is built and has
+run: see `docs/change_log/2026-09-20-g1a-g1b-telemetry-join-and-generation.md`.
+Stage 1 (contracts and adapters) and stage 2's grounding half landed as N1-N3
+and G1 in `docs/specs/attack_path_detection_normalization.md`; stage 3 (draft
+generation) produced its first complete workbook-less run on `gcp_gemini` with
+one valid draft per node. Stage 4 (the workbook, YAML and sidecar) and stage 5
+(analyst evaluation against labelled telemetry) remain outstanding, and the
+telemetry reference library this plan asks for is specified and seeded in
+`docs/specs/telemetry_reference_library.md`.
+
+No generated detection has been tested against live telemetry. When this plan
+was written, no plugin code had been changed and no LLM generation run had been
+performed; The
 local Python launcher reports `No installed Pythons found!`; therefore Python
 contract tests and an actual YAML-parser round trip remain implementation-time
 checks rather than claimed validation of these examples.

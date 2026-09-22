@@ -7,8 +7,9 @@
 `tests/test_generation.py` (17); `normalization.py`, `tool.py`,
 `schemas/input.schema.json`, `manifest.json`; telemetry library to v0.2.0;
 spec §4.4 gains two error codes.
-**Status:** built, and run live on `gcp_gemini` — which found two defects, one
-a crash and one silent. Both fixed here. Suite **1705 → 1749**.
+**Status:** built, and run live on `gcp_gemini` — **generation now works end to end**.
+Five live runs found five defects, all ours, all fixed here. Suite
+**1705 → 1757**.
 
 ## G1a — the telemetry join
 
@@ -160,16 +161,86 @@ seed library does not cover at all.** Application B runs Oracle, Mongo and
 Cosmos and the seed has none of them — a recorded gap, and the first thing to
 close if that estate is used in earnest.
 
+## The third live run: the contract named keys and never showed shapes
+
+With both earlier fixes in, generation returned drafts that matched every
+`draft_id` and failed validation on **structure**:
+
+```text
+0 of 7 nodes produced a valid draft (failed).
+  - ['x_eventmill.node is str, not an object',
+     'x_eventmill.telemetry is dict, not a list',
+     'x_eventmill.node.path_id does not match the source node', ...]
+```
+
+**The prompt's fault.** `draft_contract` listed the required key *names* and
+never their shapes, so the model guessed `node` as a string and `telemetry` as
+an object. Both are reasonable guesses against an under-specified contract, and
+a validator refusing them is correct but useless on its own.
+
+Fixed by **showing** rather than describing: a complete `DRAFT_EXAMPLE` filled
+with placeholder values travels in every prompt, with `node` as an object,
+`telemetry` as an array of objects and `missing_data_behaviour` pre-set; plus a
+`field_types` map and a system-context line naming the two shapes the model got
+wrong.
+
+**And the cascade was hiding the cause.** One wrong shape produced four
+problems: the shape itself, then two field comparisons against an empty dict,
+then a logic complaint. Validation now skips field checks on any block that
+arrived the wrong shape, so the report is `['x_eventmill.node is str, not an
+object']` and nothing else. Three tests cover the example's shape, and one
+problem per wrong block.
+
+**The pattern across three live runs.** Every defect was mine, none was a model
+failure, and the scripted tests passed throughout — because the same author
+wrote both sides of them. A crash on reply shape, a contaminated candidate list
+that validation would have *accepted*, and a contract that under-specified what
+it then enforced. This repository has recorded the same lesson before: defects
+found by running the tool, not by tests that agree with the code.
+
+## The fourth run succeeded — and the drafts found a fifth defect
+
+With the example in the prompt, `generate_detections` completed against
+`gcp_gemini`: one draft per node, every `draft_id` matched, every structure
+correct. **The first detection drafts this repository has produced.**
+
+They read as real work. `T1078` at `scm` proposes anomalous workflow triggers
+with per-user baselining and names the two things it cannot see; `T1059` at
+`ci_runner` reaches for interpreter execution in the runner container, carries
+`level: high`, and inherits the state gap verbatim into `multistep_access:
+true` with the projector's own reasoning as its basis. Grounding keeps the
+three claims apart as §4 of the designer plan requires: documented actor
+behaviour, modelled placement, detection inference.
+
+**The defect they exposed:** `logsource.product` read
+`"github_actions.workflow_run"` and `"container.file_access"` — our own
+`source_id`s. `product` is a *Sigma* field naming the vendor or platform
+(`github`, `linux`, `postgresql`); a source id there names a product to nobody
+outside this repository and would compile into nonsense. Validation passed it
+because the node was `component_bound` and nothing checked *what* the product
+was.
+
+Fixed on both sides: the prompt now says product is a vendor or platform and
+never a source_id, with the example showing it; and `validate_logsource`
+rejects a product that matches an offered source id or that contains a dot.
+Three tests. A smaller cosmetic issue is recorded but not enforced —
+`grounding.limitations` came back as a copy of the source's
+`absent_without_enrichment` field names rather than prose, so the prompt now
+asks for prose there.
+
+That is **five defects from five live runs, none of them model failures.** The
+drafts were never the problem; the contract around them was.
+
 ## Verified, and not
 
-- 42 new tests; full suite 1749; 36 schemas valid; manifest validation
+- 53 new tests; full suite 1757; 36 schemas valid; manifest validation
   unchanged at its 15 pre-existing `stability` errors.
 - The catalogue test caught `LLM_UNAVAILABLE` and `GENERATION_INCOMPLETE`
   missing from spec §4.4 before this entry was written.
-- **One live call made**, against an 11-node pair on `gcp_gemini`. It reached
-  the provider, returned in about 90 seconds, and crashed the plugin on the
-  reply's shape. The fix is above; the drafts themselves have still never been
-  read, so nothing is yet known about their quality.
+- **Five live runs on `gcp_gemini`**, ending in a complete one: one valid
+  draft per node, every draft_id matched. The drafts have been read once, by
+  the operator and in this entry; nothing has been evaluated against real
+  telemetry, which is what would test whether they detect anything.
 - No workbook yet: drafts are returned as JSON, and the YAML/Markdown
   rendering plus its sidecar are G1d. PyYAML remains undeclared in
   `pyproject.toml`.

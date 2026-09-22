@@ -505,3 +505,205 @@ def test_a_wrong_logic_shape_does_not_also_report_its_contents(nodes):
     draft["x_eventmill"]["detection_logic"] = "just pseudocode"
     problems = gen.validate_draft(draft, node)
     assert problems == ["x_eventmill.detection_logic is str, not an object"]
+
+
+def test_a_source_id_may_not_masquerade_as_a_sigma_product(nodes):
+    """The first successful live run filled logsource.product with our own
+    source_id, which names a product to nobody outside this repository."""
+    node = next(
+        n for n in nodes
+        if n["context_completeness"] == "component_bound" and n.get("telemetry_candidates")
+    )
+    source_id = node["telemetry_candidates"][0]["source_id"]
+    draft = _draft_for(node, logsource={"product": source_id})
+    problems = gen.validate_logsource(draft, node)
+    assert any("is a telemetry source_id, not a product" in p for p in problems)
+
+
+def test_a_real_product_name_passes(nodes):
+    node = next(n for n in nodes if n["context_completeness"] == "component_bound")
+    draft = _draft_for(node, logsource={"product": "postgresql"})
+    assert gen.validate_logsource(draft, node) == []
+
+
+def test_the_prompt_says_product_is_never_a_source_id():
+    assert "NEVER a source_id" in gen.SYSTEM_CONTEXT or "NEVER a source_id" in json.dumps(
+        gen.DRAFT_EXAMPLE
+    )
+    assert "belong in x_eventmill.telemetry" in gen.SYSTEM_CONTEXT
+
+
+# ---------------------------------------------------------------------------
+# Annotation: what the record can state for itself
+# ---------------------------------------------------------------------------
+
+# A fixture library rather than the real one, so these tests describe the check
+# and not the seed library's current field lists.
+ANNOTATION_LIBRARY = {
+    "postgres.session": {
+        "source_id": "postgres.session",
+        "fields": {"native": ["client_ip", "username"], "derived": []},
+    },
+    "container.file_access": {
+        "source_id": "container.file_access",
+        "fields": {"native": ["process_name", "file_path", "action"], "derived": []},
+    },
+}
+
+
+def _logic_draft(**logic) -> dict[str, Any]:
+    base = {
+        "kind": "single_event",
+        "normalized_fields": [],
+        "join_keys": [],
+        "window": None,
+        "thresholds": {},
+        "pseudocode": "SELECT * FROM postgres.session",
+        "missing_data_behaviour": "insufficient_telemetry",
+    }
+    base.update(logic)
+    return {
+        "x_eventmill": {
+            "telemetry": [
+                {"source_id": "postgres.session", "required_fields": ["client_ip"]}
+            ],
+            "detection_logic": base,
+            "review_flags": [],
+        }
+    }
+
+
+def _codes(flags) -> list[str]:
+    return [f["code"] for f in flags]
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (60, "60_sec"),
+        ("60", "60_sec"),
+        ("10 minutes", "10_min"),
+        ("5m", "5_min"),
+        ("24 hours", "24_hour"),
+        ("7 days", "7_day"),
+        ("10_min", "10_min"),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_a_window_is_canonical_value_timeunit(raw, expected):
+    """One live run produced both 60 and "10 minutes" for the same field."""
+    value, problem = gen.normalize_window(raw)
+    assert value == expected
+    assert problem is None
+
+
+@pytest.mark.parametrize("raw", ["whenever the build runs", "10 fortnights", True])
+def test_an_unreadable_window_is_kept_and_flagged(raw):
+    """Discarding a parameter an engineer proposed is worse than carrying one
+    that needs a human to read it."""
+    value, problem = gen.normalize_window(raw)
+    assert value == raw
+    assert problem
+
+
+def test_kind_follows_the_shape_not_the_skeleton():
+    """`single_event` is the prompt example's placeholder, so a model that
+    reasons about the logic still returns it while filling in a window."""
+    draft = _logic_draft(window=60, thresholds={"directory_access_count": 100})
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    logic = draft["x_eventmill"]["detection_logic"]
+    assert logic["kind"] == "threshold"
+    assert logic["window"] == "60_sec"
+    assert "LOGIC_KIND_CORRECTED" in _codes(flags)
+
+
+def test_join_keys_make_it_a_correlation():
+    draft = _logic_draft(join_keys=["session_id"])
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "correlation"
+
+
+def test_a_single_event_with_no_window_is_left_alone():
+    draft = _logic_draft()
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "single_event"
+    assert "LOGIC_KIND_CORRECTED" not in _codes(flags)
+
+
+def test_a_declared_method_is_not_overwritten():
+    """`baseline_deviation` is a claim about method that no structural rule
+    can infer, so a draft that makes it keeps it."""
+    draft = _logic_draft(kind="baseline_deviation", window="10_min")
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "baseline_deviation"
+    assert "LOGIC_KIND_CORRECTED" not in _codes(flags)
+
+
+def test_a_collected_field_the_logic_never_reads_is_flagged():
+    """The T1210 draft collected `username` and then filtered on source address
+    alone, so the field separating the app from its stolen credentials went
+    unused. The flag asks the question; it does not answer it."""
+    draft = _logic_draft(pseudocode="SELECT * FROM postgres.session WHERE client_ip NOT IN known_ips")
+    draft["x_eventmill"]["telemetry"][0]["required_fields"] = ["client_ip", "username"]
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert "FIELD_DECLARED_UNUSED" in _codes(flags)
+    assert "username" in flags[0]["message"]
+
+
+def test_a_field_read_but_never_declared_is_flagged():
+    """required_fields is what a collection engineer onboards against."""
+    draft = _logic_draft(pseudocode="WHERE client_ip IS set AND username IS unexpected")
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert "FIELD_UNDECLARED_IN_LOGIC" in _codes(flags)
+
+
+def test_a_field_belonging_to_an_uncited_source_says_so():
+    """The credential-file draft read `file_path` from an application log that
+    has no such field. Either the source list or the logic is wrong."""
+    draft = _logic_draft(pseudocode="WHERE client_ip IS set AND file_path MATCHES creds")
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert "FIELD_FROM_UNCITED_SOURCE" in _codes(flags)
+    assert "container.file_access" in flags[-1]["message"]
+
+
+def test_quoted_values_are_not_field_references():
+    """Pseudocode reading `type IS 'username'` names a value, not a field."""
+    draft = _logic_draft(pseudocode="WHERE client_ip IS set AND type IS 'username'")
+    assert _codes(gen.annotate(draft, ANNOTATION_LIBRARY)) == []
+
+
+def test_placeholders_and_keywords_never_become_findings():
+    """The library is what keeps the check quiet: only names it knows to be
+    fields of some source are reported."""
+    draft = _logic_draft(
+        pseudocode="SELECT * FROM postgres.session WHERE client_ip IN anomalous_set"
+    )
+    assert _codes(gen.annotate(draft, ANNOTATION_LIBRARY)) == []
+
+
+def test_without_a_library_only_the_unused_direction_runs():
+    """Generation takes the library as an argument and works without it."""
+    draft = _logic_draft(pseudocode="WHERE username IS unexpected")
+    codes = _codes(gen.annotate(draft, None))
+    assert codes == ["FIELD_DECLARED_UNUSED"]
+
+
+def test_annotation_appends_rather_than_replacing():
+    draft = _logic_draft(window=60)
+    draft["x_eventmill"]["review_flags"] = [{"code": "EXISTING", "message": "kept"}]
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    codes = _codes(draft["x_eventmill"]["review_flags"])
+    assert codes[0] == "EXISTING"
+    assert "LOGIC_KIND_CORRECTED" in codes
+
+
+def test_every_flag_code_is_registered():
+    """An unregistered code is a typo that reads as a finding."""
+    with pytest.raises(KeyError):
+        gen._review_flag("NOT_A_REAL_CODE", "message")
+
+
+def test_the_prompt_asks_for_a_canonical_window():
+    assert "60_sec" in gen.SYSTEM_CONTEXT
+    assert "single_event | threshold | correlation" in json.dumps(gen.DRAFT_EXAMPLE)

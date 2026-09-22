@@ -30,6 +30,41 @@ DRAFT_FORMAT_VERSION = "1.0"
 # can check. Section 1.5 of the normalization spec forbids it outright.
 _DS_PATTERN = re.compile(r"\bDS\d{4}\b")
 
+# Draft-stage review flags, section 1.6b. A closed catalogue like the
+# normalization stage's, and for the same reason: a flag nobody registered is a
+# typo that reads as a finding. These annotate a draft that has already passed
+# validation - pseudocode is a hypothesis to be tested, so a field question is
+# an observation for whoever tests it, never grounds for rejection.
+REVIEW_FLAG_CODES = (
+    "FIELD_DECLARED_UNUSED",
+    "FIELD_UNDECLARED_IN_LOGIC",
+    "FIELD_FROM_UNCITED_SOURCE",
+    "LOGIC_KIND_CORRECTED",
+    "WINDOW_UNPARSED",
+)
+
+# Kinds derivable from the record's own shape. `baseline_deviation` and
+# `reconciliation` are claims about method that no structural rule can infer,
+# so a draft declaring one keeps it.
+_DERIVABLE_KINDS = ("single_event", "threshold", "correlation")
+
+# Canonical window spelling is value_timeunit - `60_sec`, `10_min` - so a
+# consumer splits on the underscore instead of parsing prose. A bare number is
+# seconds: it is how every window arrived in the first live run.
+_WINDOW_UNITS = {
+    "s": "sec", "sec": "sec", "secs": "sec", "second": "sec", "seconds": "sec",
+    "m": "min", "min": "min", "mins": "min", "minute": "min", "minutes": "min",
+    "h": "hour", "hr": "hour", "hrs": "hour", "hour": "hour", "hours": "hour",
+    "d": "day", "day": "day", "days": "day",
+}
+_WINDOW_PATTERN = re.compile(r"^\s*(\d+)\s*_?\s*([A-Za-z]*)\s*$")
+
+# Quoted literals are values, not field references. Without this, a pseudocode
+# reading `type IS 'request'` reports the vault source's `request` prefix as a
+# field belonging to nginx.
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z_0-9.]*")
+
 SYSTEM_CONTEXT = """You are drafting detection guidance for a security engineer.
 
 You will be given attack path steps that have already been normalized, graded
@@ -47,10 +82,20 @@ and grounded. Everything factual is supplied to you. Follow these rules:
 - logsource.product may be set only when the step's context_completeness is
   component_bound. Otherwise describe the required collection in
   logsource.definition and leave product unset.
+- logsource.product is a Sigma field naming the vendor or platform - "github",
+  "linux", "postgresql". It is NEVER a source_id: source ids such as
+  "github_actions.workflow_run" belong in x_eventmill.telemetry[].source_id.
+- grounding.limitations is prose for a reader, not a copy of the source's
+  absent_without_enrichment field names.
 - If required data could be missing at evaluation time, missing_data_behaviour
   is insufficient_telemetry. Never let absent data evaluate as benign.
 - Thresholds and windows are proposed starting parameters. State the grouping
   and what a baseline would need; do not assert a universal normal.
+- A window is a number and a time unit, written value_timeunit: 60_sec, 10_min,
+  24_hour. Never a bare number, and never prose.
+- Every native field your logic reads must appear in the required_fields of the
+  source you cite for it. A field you collect but never read is fine when it is
+  context for the analyst; if it was meant to be part of the condition, use it.
 
 Match draft_example's STRUCTURE exactly, field for field. x_eventmill.node is
 an object, never a string. x_eventmill.telemetry is an array of objects, never
@@ -69,7 +114,7 @@ DRAFT_EXAMPLE: dict[str, Any] = {
     "status": "experimental",
     "description": "What this detects and whether it observes an attempt or an outcome.",
     "logsource": {
-        "product": "<only when context_completeness is component_bound, else omit>",
+        "product": "<vendor or platform, e.g. github | linux | postgresql; only when context_completeness is component_bound, else omit. NEVER a source_id>",
         "definition": "<the collection required, when no product may be named>",
     },
     "falsepositives": ["<a legitimate lookalike>"],
@@ -87,7 +132,7 @@ DRAFT_EXAMPLE: dict[str, Any] = {
             "actor_behaviour": "<what the local evidence documents>",
             "modelled_placement": "<how the path applies it here>",
             "detection_inference": "<what would be observable>",
-            "limitations": ["<what the sources cannot show>"],
+            "limitations": ["<in prose: what the sources cannot show>"],
         },
         "assessment": {"version": "1.0", "tuple": "<copy the step's assessment>"},
         "telemetry": [
@@ -108,10 +153,10 @@ DRAFT_EXAMPLE: dict[str, Any] = {
             }
         ],
         "detection_logic": {
-            "kind": "single_event",
+            "kind": "<single_event | threshold | correlation | baseline_deviation | reconciliation>",
             "normalized_fields": [{"name": "<field>", "from": "<native field>"}],
             "join_keys": [],
-            "window": None,
+            "window": "<null, or a number and a time unit: 60_sec | 10_min | 24_hour>",
             "thresholds": {},
             "pseudocode": "<the logic, as prose or pseudocode>",
             "missing_data_behaviour": "insufficient_telemetry",
@@ -408,16 +453,214 @@ def _validate_logic(extension: dict[str, Any], node: dict[str, Any]) -> list[str
 
 
 def validate_logsource(draft: dict[str, Any], node: dict[str, Any]) -> list[str]:
-    """`logsource.product` is a claim the completeness grade has to support."""
+    """`logsource.product` is a claim the completeness grade has to support.
+
+    It is also a *Sigma* field, meaning the vendor or platform - `github`,
+    `linux`, `postgresql`. The first live run filled it with our own
+    `source_id` (`github_actions.workflow_run`), which reads as a product to
+    nobody outside this repository and would compile into nonsense. The
+    source_id belongs in `x_eventmill.telemetry`, where it already is.
+    """
+    problems: list[str] = []
     logsource = as_dict(draft.get("logsource"))
-    if logsource.get("product") and node.get("context_completeness") != "component_bound":
-        return [
+    product = logsource.get("product")
+
+    if product and node.get("context_completeness") != "component_bound":
+        problems.append(
             f"logsource.product is set at grade {node.get('context_completeness')!r}; "
             "only component_bound may name a product"
-        ]
-    if not logsource.get("product") and not logsource.get("definition"):
-        return ["logsource needs a product or a definition describing required collection"]
-    return []
+        )
+    if product:
+        offered = {c["source_id"] for c in as_dicts(node.get("telemetry_candidates"))}
+        if product in offered or "." in str(product):
+            problems.append(
+                f"logsource.product {product!r} is a telemetry source_id, not a "
+                "product; name the vendor or platform and keep the source_id in "
+                "x_eventmill.telemetry"
+            )
+    if not product and not logsource.get("definition"):
+        problems.append(
+            "logsource needs a product or a definition describing required collection"
+        )
+    return problems
+
+
+def _review_flag(code: str, message: str) -> dict[str, str]:
+    """A flag from the closed catalogue. An undeclared code is a bug."""
+    if code not in REVIEW_FLAG_CODES:
+        raise KeyError(code)
+    return {"code": code, "message": message}
+
+
+def normalize_window(value: Any) -> tuple[Any, str | None]:
+    """Canonicalize a correlation window to `value_timeunit`.
+
+    Returns the window and, when it could not be read, the reason. The first
+    live run produced both `60` and `"10 minutes"` for the same field, which
+    no consumer can compare without guessing which unit the bare number meant.
+    An unreadable window is kept verbatim and flagged: discarding a parameter
+    an engineer proposed is worse than carrying one that needs a human.
+    """
+    if value is None or value == "":
+        return None, None
+    if isinstance(value, bool):
+        return value, f"window {value!r} is a boolean, not a duration"
+    if isinstance(value, (int, float)):
+        return f"{int(value)}_sec", None
+    if not isinstance(value, str):
+        return value, f"window is {type(value).__name__}, not a duration"
+
+    match = _WINDOW_PATTERN.match(value)
+    if not match:
+        return value, f"window {value!r} is not a number with a time unit"
+    amount, unit = match.group(1), match.group(2).lower()
+    if not unit:
+        return f"{int(amount)}_sec", None
+    if unit not in _WINDOW_UNITS:
+        return value, f"window {value!r} uses an unrecognized time unit {unit!r}"
+    return f"{int(amount)}_{_WINDOW_UNITS[unit]}", None
+
+
+def derive_kind(logic: dict[str, Any]) -> str:
+    """The kind the record's own shape implies.
+
+    `single_event` is the skeleton's placeholder, so a model that reasons about
+    the logic and not the example returns it unchanged while filling in a
+    window and a threshold. The shape is the reliable witness, not the label.
+    """
+    if logic.get("join_keys"):
+        return "correlation"
+    if logic.get("thresholds") or logic.get("window"):
+        return "threshold"
+    return "single_event"
+
+
+def logic_field_references(logic: dict[str, Any]) -> set[str]:
+    """Identifiers the logic reads, with quoted values removed."""
+    parts = [_QUOTED.sub(" ", str(logic.get("pseudocode") or ""))]
+    for mapping in as_dicts(logic.get("normalized_fields")):
+        parts.append(str(mapping.get("from") or ""))
+    parts.extend(str(k) for k in logic.get("join_keys") or [])
+    return set(_IDENTIFIER.findall(" ".join(parts)))
+
+
+def field_closure_flags(
+    extension: dict[str, Any], library: dict[str, dict[str, Any]] | None = None
+) -> list[dict[str, str]]:
+    """Whether the fields collected and the fields read are the same set.
+
+    Both directions are observations, not errors. A declared field the logic
+    never reads is often deliberate context for the analyst - but it is also
+    what a rule looks like when its discriminator went missing, which is how
+    `postgres.session` came to be filtered on source address alone while the
+    `username` that separates the app from its stolen credentials sat unused.
+    A field read but never declared is the sharper one: `required_fields` is
+    the list a collection engineer onboards against, so anything missing from
+    it ships a rule that cannot evaluate.
+
+    The library is what keeps the second direction quiet. Only names it knows
+    to be fields of some source are reported, so pseudocode placeholders and
+    SQL keywords never become findings.
+    """
+    flags: list[dict[str, str]] = []
+    logic = as_dict(extension.get("detection_logic"))
+    if not logic:
+        return flags
+
+    declared: set[str] = set()
+    cited: set[str] = set()
+    for entry in as_dicts(extension.get("telemetry")):
+        cited.add(str(entry.get("source_id")))
+        declared.update(str(f) for f in entry.get("required_fields") or [])
+
+    referenced = logic_field_references(logic)
+
+    unused = sorted(f for f in declared if f not in referenced)
+    if unused:
+        flags.append(
+            _review_flag(
+                "FIELD_DECLARED_UNUSED",
+                f"required_fields not read by the detection logic: "
+                f"{', '.join(unused)}. Confirm these are analyst context and "
+                f"not a missing condition.",
+            )
+        )
+
+    if library is None:
+        return flags
+
+    owners: dict[str, set[str]] = {}
+    for source_id, source in library.items():
+        fields = as_dict(source.get("fields"))
+        for name in list(fields.get("native") or []) + list(fields.get("derived") or []):
+            owners.setdefault(str(name), set()).add(source_id)
+
+    for name in sorted(referenced - declared):
+        holders = owners.get(name)
+        if not holders:
+            continue
+        if holders & cited:
+            flags.append(
+                _review_flag(
+                    "FIELD_UNDECLARED_IN_LOGIC",
+                    f"{name!r} is read by the logic and is a field of "
+                    f"{', '.join(sorted(holders & cited))}, but is not in "
+                    f"required_fields.",
+                )
+            )
+        else:
+            flags.append(
+                _review_flag(
+                    "FIELD_FROM_UNCITED_SOURCE",
+                    f"{name!r} is read by the logic but belongs to "
+                    f"{', '.join(sorted(holders))}, which this draft does not "
+                    f"cite. Either the source list or the logic is wrong.",
+                )
+            )
+    return flags
+
+
+def annotate(
+    draft: dict[str, Any], library: dict[str, dict[str, Any]] | None = None
+) -> list[dict[str, str]]:
+    """Derive what the record can state for itself, and flag what it cannot.
+
+    Runs on drafts that already passed validation, and returns the flags it
+    added so a caller can count them. Pseudocode is generated and then tested;
+    this stage carries the questions that test should answer rather than
+    asking a model to have had none.
+    """
+    extension = as_dict(draft.get("x_eventmill"))
+    logic = as_dict(extension.get("detection_logic"))
+    if not extension or not logic:
+        return []
+
+    flags: list[dict[str, str]] = []
+
+    window, problem = normalize_window(logic.get("window"))
+    logic["window"] = window
+    if problem:
+        flags.append(_review_flag("WINDOW_UNPARSED", problem))
+
+    declared_kind = logic.get("kind")
+    if declared_kind in _DERIVABLE_KINDS or not declared_kind:
+        derived = derive_kind(logic)
+        if derived != declared_kind:
+            logic["kind"] = derived
+            carries = "join keys" if logic.get("join_keys") else "a window or threshold"
+            flags.append(
+                _review_flag(
+                    "LOGIC_KIND_CORRECTED",
+                    f"kind was {declared_kind!r}; the logic carries {carries}, "
+                    f"so it is {derived!r}.",
+                )
+            )
+
+    flags.extend(field_closure_flags(extension, library))
+
+    existing = extension.get("review_flags")
+    extension["review_flags"] = (existing if isinstance(existing, list) else []) + flags
+    return flags
 
 
 def coverage(
