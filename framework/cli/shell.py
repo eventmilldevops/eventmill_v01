@@ -664,6 +664,20 @@ class EventMillShell(cmd.Cmd):
     
     def preloop(self) -> None:
         """Display startup banner with summary stats."""
+        # Every complete_* method parses 'line'/'text' assuming a token is a
+        # whitespace-delimited chunk (e.g. '--fast', 'plugins/net'). readline's
+        # own default word-break characters include '-', '/', '.' and more, so
+        # without this it silently hands completers the tail end of the token
+        # instead — 'run tool --f<TAB>' resolves 'f' against '--fast' and
+        # never matches, exactly like nothing was typed being offered instead
+        # of completed. Narrowing delims to whitespace makes readline's idea
+        # of a word match what every completer already assumes.
+        try:
+            import readline
+            readline.set_completer_delims(" \t\n")
+        except ImportError:
+            pass  # no readline (e.g. Windows without pyreadline3) — completion is inert anyway
+
         # Random colored ASCII art banner (Metasploit-style)
         print(_random_banner())
         
