@@ -869,7 +869,6 @@ def test_a_grouped_threshold_keeps_the_kind_it_declared():
     )
     flags = gen.annotate(draft, ANNOTATION_LIBRARY)
     assert draft["x_eventmill"]["detection_logic"]["kind"] == "threshold"
-    assert "LOGIC_KIND_AMBIGUOUS" in _codes(flags)
     assert "LOGIC_KIND_CORRECTED" not in _codes(flags)
 
 
@@ -1071,3 +1070,137 @@ def test_a_genuine_alias_is_still_subtracted():
     codes = _codes(gen.annotate(draft, ANNOTATION_LIBRARY))
     assert "FIELD_FROM_UNCITED_SOURCE" not in codes
     assert "FIELD_UNDECLARED_IN_LOGIC" not in codes
+
+
+# ---------------------------------------------------------------------------
+# Parameters stay parameters
+# ---------------------------------------------------------------------------
+
+def test_a_threshold_written_as_prose_moves_to_threshold_notes():
+    """`thresholds` is where a model puts the parameter and, given the chance,
+    the reasoning behind it. Nothing is discarded: the note keeps the
+    parameter's name."""
+    draft = _logic_draft(
+        thresholds={
+            "rows": 1000,
+            "runs_per_principal": "proposed starting point: alert on the first event",
+        }
+    )
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    logic = draft["x_eventmill"]["detection_logic"]
+    assert logic["thresholds"] == {"rows": 1000}
+    assert logic["threshold_notes"]["runs_per_principal"].startswith("proposed")
+
+
+def test_a_numeric_string_is_read_as_the_number_it_is():
+    draft = _logic_draft(thresholds={"rows": "1000", "ratio": "2.5"})
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["thresholds"] == {
+        "rows": 1000,
+        "ratio": 2.5,
+    }
+
+
+def test_prose_in_thresholds_can_no_longer_rewrite_the_kind():
+    """The one wrong correction in the Opus run: the only threshold entry read
+    'alert on the first event', which made the mapping non-empty and turned a
+    correct single_event into a threshold."""
+    draft = _logic_draft(
+        kind="single_event",
+        thresholds={"runs": "proposed starting point: alert on the first event"},
+        pseudocode="WHERE workflow_changed_and_run_by_same_actor = true",
+    )
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "single_event"
+    assert "LOGIC_KIND_CORRECTED" not in _codes(flags)
+
+
+def test_a_real_threshold_still_corrects_the_placeholder():
+    draft = _logic_draft(kind="single_event", thresholds={"rows": 1000})
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "threshold"
+    assert "LOGIC_KIND_CORRECTED" in _codes(flags)
+
+
+def test_a_join_key_that_is_a_sentence_moves_to_join_notes():
+    """One draft set join_keys to 'approximate temporal join only; no shared
+    identifier exists...' - true, useful, and not a key."""
+    draft = _logic_draft(
+        join_keys=[
+            "session_id",
+            "approximate temporal join only; no shared identifier exists",
+        ]
+    )
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    logic = draft["x_eventmill"]["detection_logic"]
+    assert logic["join_keys"] == ["session_id"]
+    assert logic["join_notes"] == [
+        "approximate temporal join only; no shared identifier exists"
+    ]
+
+
+def test_a_logic_whose_only_join_key_was_prose_is_not_a_correlation():
+    draft = _logic_draft(kind="single_event", join_keys=["no shared identifier exists"])
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "single_event"
+
+
+def test_the_ambiguity_flag_is_retired_but_the_declared_kind_is_still_kept():
+    """It fired on eight of nine drafts in one run. A flag at that rate tells
+    a reader nothing, and all it reported was the default behaviour."""
+    assert "LOGIC_KIND_AMBIGUOUS" not in gen.REVIEW_FLAG_CODES
+    draft = _logic_draft(
+        kind="correlation", join_keys=["session_id"], thresholds={"rows": 1000}
+    )
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "correlation"
+    assert not [f for f in flags if f["code"].startswith("LOGIC_KIND")]
+
+
+def test_the_prompt_asks_for_numbers_and_field_names():
+    assert "never a sentence" in gen.SYSTEM_CONTEXT
+    assert "join_keys are field names only" in gen.SYSTEM_CONTEXT
+    assert "threshold_notes" in json.dumps(gen.DRAFT_EXAMPLE)
+    assert "join_notes" in json.dumps(gen.DRAFT_EXAMPLE)
+
+
+def _multi_source_draft(**logic) -> dict[str, Any]:
+    draft = _logic_draft(**logic)
+    draft["x_eventmill"]["telemetry"].append(
+        {"source_id": "container.file_access", "required_fields": ["process_path"]}
+    )
+    return draft
+
+
+def test_two_sources_over_a_window_stay_a_correlation_without_a_join_key():
+    """A draft joining CI records to runner process events said in prose that
+    the two share no identifier. Once that moved to join_notes the remaining
+    shape read as a threshold - relocating the explanation must not change
+    what the record claims."""
+    draft = _multi_source_draft(
+        kind="correlation",
+        join_keys=["no shared identifier exists between the two sources"],
+        window="10_min",
+    )
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    logic = draft["x_eventmill"]["detection_logic"]
+    assert logic["kind"] == "correlation"
+    assert logic["join_keys"] == []
+    assert logic["join_notes"]
+    assert "LOGIC_KIND_CORRECTED" not in _codes(flags)
+
+
+def test_one_source_over_a_window_is_still_a_threshold():
+    draft = _logic_draft(kind="single_event", window="10_min")
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "threshold"
+
+
+def test_multiple_sources_with_a_real_threshold_keep_the_declared_kind():
+    draft = _multi_source_draft(
+        kind="threshold", join_keys=["session_id"], window="30_min",
+        thresholds={"rows": 500000},
+    )
+    flags = gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["detection_logic"]["kind"] == "threshold"
+    assert "LOGIC_KIND_CORRECTED" not in _codes(flags)

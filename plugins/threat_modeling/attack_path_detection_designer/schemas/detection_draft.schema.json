@@ -109,13 +109,31 @@
           "properties": {
             "kind": { "type": "string", "enum": ["single_event", "threshold", "correlation", "baseline_deviation", "reconciliation"] },
             "normalized_fields": { "type": "array", "items": { "type": "object" } },
-            "join_keys": { "type": "array", "items": { "type": "string" } },
+            "join_keys": {
+              "type": "array",
+              "description": "Field names only, one per entry. Prose about the join belongs in join_notes; relocated there after generation.",
+              "items": { "type": "string", "pattern": "^[^\\s]{1,64}$" }
+            },
+            "join_notes": {
+              "type": "array",
+              "description": "What the draft has to say about the join, including that no shared identifier exists.",
+              "items": { "type": "string" }
+            },
             "window": {
               "type": ["string", "null"],
               "pattern": "^[0-9]+_(sec|min|hour|day)$",
               "description": "Canonical value_timeunit, e.g. 60_sec or 10_min, so a consumer splits rather than parses. Normalized after generation; a window that could not be read is kept verbatim and carries WINDOW_UNPARSED."
             },
-            "thresholds": { "type": "object", "description": "Proposed and tunable starting parameters, never a universal definition of normal." },
+            "thresholds": {
+              "type": "object",
+              "description": "Proposed and tunable starting parameters, never a universal definition of normal. Values are numbers; a value that arrives as prose is moved to threshold_notes under the same key.",
+              "additionalProperties": { "type": "number" }
+            },
+            "threshold_notes": {
+              "type": "object",
+              "description": "Per-parameter reasoning and the baseline each would need, keyed by the same name as its threshold.",
+              "additionalProperties": { "type": "string" }
+            },
             "pseudocode": { "type": "string", "minLength": 10 },
             "missing_data_behaviour": {
               "type": "string",
@@ -144,7 +162,6 @@
                   "FIELD_UNDECLARED_IN_LOGIC",
                   "FIELD_FROM_UNCITED_SOURCE",
                   "LOGIC_KIND_CORRECTED",
-                  "LOGIC_KIND_AMBIGUOUS",
                   "LOGIC_NULL_AS_MATCH",
                   "WINDOW_UNPARSED",
                   "ANNOTATION_FAILED"

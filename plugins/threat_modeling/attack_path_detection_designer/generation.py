@@ -40,7 +40,6 @@ REVIEW_FLAG_CODES = (
     "FIELD_UNDECLARED_IN_LOGIC",
     "FIELD_FROM_UNCITED_SOURCE",
     "LOGIC_KIND_CORRECTED",
-    "LOGIC_KIND_AMBIGUOUS",
     "LOGIC_NULL_AS_MATCH",
     "WINDOW_UNPARSED",
 )
@@ -123,6 +122,12 @@ and grounded. Everything factual is supplied to you. Follow these rules:
   missing case in missing_data_behaviour.
 - Thresholds and windows are proposed starting parameters. State the grouping
   and what a baseline would need; do not assert a universal normal.
+- Every thresholds value is a bare number - 100, 5000 - never a sentence. The
+  reasoning, the baseline it needs and anything that is a rule rather than a
+  number go in threshold_notes, keyed by the same name.
+- join_keys are field names only, one per entry, no spaces. If the sources
+  share no identifier, say so in join_notes and leave join_keys empty; that is
+  a real and useful answer, not a gap to fill with prose.
 - A window is a number and a time unit, written value_timeunit: 60_sec, 10_min,
   24_hour. Never a bare number, and never prose.
 - Every native field your logic reads must appear in the required_fields of the
@@ -196,9 +201,11 @@ DRAFT_EXAMPLE: dict[str, Any] = {
         "detection_logic": {
             "kind": "<single_event | threshold | correlation | baseline_deviation | reconciliation>",
             "normalized_fields": [{"name": "<field>", "from": "<native field>"}],
-            "join_keys": [],
+            "join_keys": ["<native field name only, no spaces; empty when nothing joins>"],
+            "join_notes": ["<what to know about the join, e.g. that no shared identifier exists>"],
             "window": "<null, or a number and a time unit: 60_sec | 10_min | 24_hour>",
-            "thresholds": {},
+            "thresholds": {"<parameter_name>": 100},
+            "threshold_notes": {"<parameter_name>": "<the reasoning and the baseline it needs>"},
             "pseudocode": "<the logic, as prose or pseudocode>",
             "missing_data_behaviour": "insufficient_telemetry",
         },
@@ -596,20 +603,70 @@ def normalize_window(value: Any) -> tuple[Any, str | None]:
     return f"{int(amount)}_{_WINDOW_UNITS[unit]}", None
 
 
-def derive_kind(logic: dict[str, Any]) -> str:
+def numeric_threshold(value: Any) -> int | float | None:
+    """A threshold as a tunable number, or None when it is prose.
+
+    `thresholds` is where a model puts the parameter and, given the chance,
+    the reasoning behind it. Across three vendors 4 of 19 entries arrived as
+    sentences - "proposed starting point: alert on the first event" - which is
+    a description of a rule that has no threshold at all.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value).strip()
+    for cast in (int, float):
+        try:
+            return cast(text)
+        except ValueError:
+            continue
+    return None
+
+
+def has_numeric_threshold(logic: dict[str, Any]) -> bool:
+    """Whether any threshold is a number that could actually be tuned."""
+    values = as_dict(logic.get("thresholds")).values()
+    return any(numeric_threshold(v) is not None for v in values)
+
+
+def is_field_name(value: Any) -> bool:
+    """Whether a join key names a field rather than describing the join.
+
+    A live draft set `join_keys` to "approximate temporal join only; no shared
+    identifier exists between runner_name and container_id in the offered
+    fields" - true, useful, and not a key.
+    """
+    text = str(value).strip()
+    return bool(text) and not any(c.isspace() for c in text) and len(text) <= 64
+
+
+def derive_kind(logic: dict[str, Any], source_count: int = 1) -> str:
     """The kind the record's own shape implies.
+
+    Citing more than one source over a window is a correlation whether or not
+    a join key is named: a draft joining CI records to runner process events
+    said so in prose because the two sources share no identifier, and once
+    that prose moved to `join_notes` the remaining shape read as a threshold.
+    Relocating the explanation must not change what the record claims.
 
     `single_event` is the skeleton's placeholder, so a model that reasons about
     the logic and not the example returns it unchanged while filling in a
     window and a threshold. The shape is the reliable witness, not the label.
 
+    Only a *numeric* threshold counts. The one wrong correction in the Opus
+    run came from a `thresholds` entry reading "alert on the first event" -
+    prose that says the opposite of a threshold, and which nonetheless made
+    the mapping non-empty and rewrote a correct `single_event`.
+
     Thresholds outrank join keys because `join_keys` carries two meanings. A
     live draft counting statements `BY user_name` over ten minutes declared
     itself a threshold and was correct; reading its grouping key as a join
-    rewrote the one kind the model had reasoned its way to. Where both are
-    present the shape is ambiguous, and `annotate` flags rather than decides.
+    rewrote the one kind the model had reasoned its way to.
     """
-    if logic.get("thresholds"):
+    if source_count > 1 and logic.get("window") and not has_numeric_threshold(logic):
+        return "correlation"
+    if has_numeric_threshold(logic):
         return "threshold"
     if logic.get("join_keys"):
         return "correlation"
@@ -640,14 +697,18 @@ def null_as_match(logic: dict[str, Any]) -> str | None:
     return found.group(0).strip()
 
 
-def kind_is_ambiguous(logic: dict[str, Any]) -> bool:
+def kind_is_ambiguous(logic: dict[str, Any], source_count: int = 1) -> bool:
     """Whether the shape supports more than one reading.
 
     Grouping keys and join keys are spelled the same, so a thresholded rule
-    with keys could be either. Describing that honestly is the job; picking
-    for the author is how a validator starts reviewing instead.
+    with keys could be either, and a draft that declared one of the readings
+    keeps it. This used to raise `LOGIC_KIND_AMBIGUOUS` as well, retired after
+    it fired on eight of nine drafts in one run: a flag at that rate tells a
+    reader nothing, and all it reported was that the declared kind was kept,
+    which is the default everywhere else.
     """
-    return bool(logic.get("thresholds")) and bool(logic.get("join_keys"))
+    grouped = bool(logic.get("join_keys")) or source_count > 1
+    return has_numeric_threshold(logic) and grouped
 
 
 def logic_field_references(logic: dict[str, Any]) -> set[str]:
@@ -774,21 +835,19 @@ def annotate(
     if problem:
         flags.append(_review_flag("WINDOW_UNPARSED", problem))
 
+    _separate_prose_from_parameters(logic)
+
     declared_kind = logic.get("kind")
     # Ambiguity only protects a kind that is one of the two readings. A draft
     # still carrying the placeholder expressed no view, and `single_event` is
     # definitively wrong once a threshold is present, so it is derived.
-    if kind_is_ambiguous(logic) and declared_kind in ("threshold", "correlation"):
-        flags.append(
-            _review_flag(
-                "LOGIC_KIND_AMBIGUOUS",
-                f"kind is {declared_kind!r}; the logic carries both thresholds "
-                f"and keys, which reads as a grouped threshold or a "
-                f"correlation. The declared kind was kept.",
-            )
-        )
-    elif declared_kind in _DERIVABLE_KINDS or not declared_kind:
-        derived = derive_kind(logic)
+    sources = len(as_dicts(extension.get("telemetry")))
+    ambiguous = kind_is_ambiguous(logic, sources) and declared_kind in (
+        "threshold",
+        "correlation",
+    )
+    if not ambiguous and (declared_kind in _DERIVABLE_KINDS or not declared_kind):
+        derived = derive_kind(logic, sources)
         if derived != declared_kind:
             logic["kind"] = derived
             carries = "join keys" if logic.get("join_keys") else "a window or threshold"
@@ -816,6 +875,47 @@ def annotate(
 
     extension["review_flags"] = _relocate_caveats(extension) + flags
     return flags
+
+
+def _separate_prose_from_parameters(logic: dict[str, Any]) -> None:
+    """Keep `thresholds` and `join_keys` machine-readable, and keep the prose.
+
+    The same thing happens to both fields and to `review_flags` before them: a
+    model with something worth saying says it in whichever field is nearest,
+    and the field stops being parseable. A threshold reading "proposed
+    starting point: alert on the first event" also rewrote a correct
+    `single_event` into a `threshold`, so this runs before the kind is derived.
+
+    Nothing is discarded - `threshold_notes` keeps the parameter's name beside
+    its prose, and `join_notes` keeps what the draft said about the join,
+    which in one run was that no join key existed at all.
+    """
+    thresholds = as_dict(logic.get("thresholds"))
+    if thresholds:
+        numeric: dict[str, Any] = {}
+        notes = as_dict(logic.get("threshold_notes"))
+        for name, value in thresholds.items():
+            parsed = numeric_threshold(value)
+            if parsed is None:
+                notes[str(name)] = str(value)
+            else:
+                numeric[str(name)] = parsed
+        logic["thresholds"] = numeric
+        if notes:
+            logic["threshold_notes"] = notes
+
+    keys = logic.get("join_keys")
+    if isinstance(keys, list) and keys:
+        names = [k for k in keys if is_field_name(k)]
+        notes = [str(k).strip() for k in keys if not is_field_name(k)]
+        logic["join_keys"] = names
+        existing = logic.get("join_notes")
+        existing = list(existing) if isinstance(existing, list) else []
+        for note in notes:
+            if note and note not in existing:
+                existing.append(note)
+        if existing:
+            logic["join_notes"] = existing
 
 
 def _relocate_caveats(extension: dict[str, Any]) -> list[dict[str, str]]:

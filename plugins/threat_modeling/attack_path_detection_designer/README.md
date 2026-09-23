@@ -3,7 +3,14 @@
 Turns `adversary_path_projector` exports into a normalized, reviewable context
 for every step of a projected attack path — one node per step, with a stable
 identity, a JSON pointer and an origin for every field, and an explicit record
-of anything the source documents disagree about.
+of anything the source documents disagree about — and then drafts a detection
+for each of those steps against the telemetry that component actually has.
+
+The drafts are **starting points for a detection engineer**, not rules to
+deploy. Every one carries `validation_status: draft_unvalidated`, the
+collection it would need, what it cannot see, and the questions a tester should
+answer first. See *Keeping a generated record honest* for the measures that
+make that claim checkable, and *Descriptors* for how to read the output.
 
 Plan: `docs/specs/attack_path_detection_normalization.md`.
 Producer shape it reads: `docs/specs/projector_export_shapes.md`.
@@ -14,7 +21,13 @@ node occurrence key, a deterministic `draft_id`, the union merge and
 catalogue (N2); the flow-map join and the five completeness grades (N3a);
 controls per node and `monitoring_claim` (N3b); mitigation names, the focus
 cut and the coverage ratio (N3c); taxonomy status against ATT&CK v19.2 (N3d).
-The context pack's own schema is N4. No LLM, no network.
+The context pack's own schema is N4. Normalization uses no LLM and no network.
+
+**Stages G1a and G1b are implemented and live-run on four vendors.** The
+telemetry library joins to each node (G1a); `generate_detections` drafts one
+detection per node, batched per path with the full path outline (G1b). G1c
+(repair) and G1d (the rendered workbook) are outstanding — drafts are returned
+as JSON today.
 
 ## Actions
 
@@ -234,10 +247,256 @@ whose telemetry readiness is `none_declared`, is still drafted with the
 weakness stated — attackers change tactics, and a path the projector produced
 is still a path.
 
+## Keeping a generated record honest
+
+Everything below exists because a live run produced something wrong, and
+almost none of it was the model's fault. Across seven runs on four vendors the
+tally is consistent: the drafts' *reasoning* has been sound, and the defects
+have been in the contract we handed the model or in the checks we wrote to
+inspect it. That shapes the whole design.
+
+The governing rule is that **pseudocode is a hypothesis that will be generated
+and then tested.** Every draft carries `validation_status: draft_unvalidated`
+and means it. So this stage never tries to decide whether a detection is
+*good*. It has three jobs, and they are kept strictly apart because each can
+support a different kind of claim.
+
+| Mechanism | What it can check | On failure |
+|---|---|---|
+| **Rejection** | A comparison of two values, both present in the record | The draft is refused and named in `rejected` |
+| **Derivation** | Something the record's own shape determines better than its label does | The record is corrected to describe itself |
+| **Flag** | A question a human should answer | Recorded in `review_flags`; nothing is blocked |
+
+### Rejections: checkable facts
+
+A rejection needs a fact, not a judgement. Each of these is a comparison
+against something the prompt actually supplied:
+
+- **A telemetry source that was not offered** for that node.
+- **A `required_fields` entry the cited candidate does not list.** Fields are
+  offered exactly as sources are, one level down. The refusal names what the
+  source *does* offer, because a rejection the author cannot act on costs the
+  draft and teaches nothing. A candidate carrying no field list is not
+  second-guessed — there is nothing to check against, and inventing a
+  complaint is worse.
+- **A changed `technique_id`**, or a `draft_id`, `path_id` or `node_index`
+  that does not match the node it claims to be.
+- **Any `DS####` data component identifier**: no local reference defines them.
+- **`logsource.product` below `component_bound`**, or holding a `source_id`
+  rather than a vendor name.
+- **`missing_data_behaviour` other than `insufficient_telemetry`.** Absent data
+  may never evaluate as benign.
+
+Why field-level rejection had to wait: the candidate projection passed
+`prerequisites` and `absent_without_enrichment` while withholding `native` and
+`derived`, so the model was told what each source *lacked* and never what it
+*had*. One run invented all fourteen of its field names while copying
+`prerequisites` verbatim — it used what it was given and fabricated the rest.
+Rejecting on fields before offering them would have failed every draft with no
+route to compliance. Offering them fixed the behaviour outright: **0 invented
+names across 13 citations** in the next run, with all five of the library's
+purpose-built indicators in use.
+
+### Derivations: making the record describe itself
+
+Some fields the model fills in are better read off the logic than taken on
+trust.
+
+- **`detection_logic.kind`** is derived from the shape: a numeric threshold
+  makes it `threshold`; more than one source over a window makes it
+  `correlation` whether or not a key is named; join keys alone make it
+  `correlation`; a window alone makes it `threshold`; otherwise
+  `single_event`. A draft declaring `baseline_deviation` or `reconciliation`
+  keeps it — those are claims about *method* that no structural rule can infer.
+  Where a threshold and a grouping are both present the shape genuinely
+  supports either reading, and a draft that declared one of them keeps its
+  answer.
+- **`window`** is canonicalised to `value_timeunit` — `60_sec`, `10_min`,
+  `24_hour` — so a consumer splits on the underscore instead of parsing prose.
+  A bare number is seconds. A window that cannot be read is kept verbatim and
+  flagged, because discarding a parameter an engineer proposed is worse than
+  carrying one that needs a human.
+
+Two lessons are built into these. First, **`single_event` was once the literal
+placeholder in the prompt skeleton**, and every draft in one run declared it —
+including two carrying windows and thresholds. A model that reasons about the
+logic still copies a fixed example, so placeholders are enumerations now.
+Second, **only a numeric threshold counts**: one run's single wrong correction
+came from a `thresholds` entry reading *"proposed starting point: alert on the
+first event"*, prose saying the opposite of a threshold, which nonetheless made
+the mapping non-empty and rewrote a correct `single_event`.
+
+### Flags: questions, never verdicts
+
+`review_flags` is a closed catalogue in `generation.py`, and **no code in it
+can reject a draft**. An empty array asserts there are none.
+
+| Code | Meaning |
+|---|---|
+| `FIELD_DECLARED_UNUSED` | A `required_fields` entry the logic never reads. Often deliberate analyst context — and also what a rule looks like when its discriminator went missing. |
+| `FIELD_UNDECLARED_IN_LOGIC` | The logic reads a field of a cited source that is not in `required_fields`, so the rule would ship uncollectable. |
+| `FIELD_FROM_UNCITED_SOURCE` | The logic reads a field the library attributes only to sources this draft does not cite. Either the source list or the logic is wrong. |
+| `LOGIC_KIND_CORRECTED` | `kind` disagreed with the shape and was replaced. |
+| `LOGIC_NULL_AS_MATCH` | The condition fires on an absent value. If the field is not collected, every record matches. |
+| `WINDOW_UNPARSED` | A window that is not a number and a time unit. |
+| `ANNOTATION_FAILED` | Annotation raised. The draft passed validation and is kept. |
+
+`FIELD_DECLARED_UNUSED` is the one that matters most and reads most like
+noise. It was written after a T1210 draft filtered a database session on source
+address alone while the `username` that separates the service from its stolen
+credentials sat declared and unread. One mechanical check — do the fields
+collected and the fields read agree — caught it with no understanding of
+Postgres, the path, or the attack, and handed the question to whoever tests the
+rule.
+
+Three things keep the field checks quiet enough to be worth reading. They are
+**grounded in the telemetry library**, so only names it knows to be fields of
+some source are ever reported and pseudocode placeholders never become
+findings. They report only **distinctive** names — containing `_` or `.` —
+because the contract permits prose pseudocode, and a draft reading *"executing
+command patterns"* means English, not the `command` that happens to be a field
+somewhere. And a draft's own **normalized-field aliases are subtracted**, but
+only when the alias differs from the native name it maps: an identity mapping
+`{"name": "actor", "from": "actor"}` declares the field is read, and
+subtracting it once took the native reference with it.
+
+`LOGIC_NULL_AS_MATCH` is where the rejection/flag line is clearest. The spec
+forbids null-as-match outright and `missing_data_behaviour` is enforced as a
+rejection, because that is a declared value. The null test is read out of prose
+pseudocode, where the same words express the defect (`auth_identity IS NULL`
+meaning "unauthenticated") and the handling the contract asks for (`IF
+principal IS NULL THEN insufficient_telemetry`). A pattern that cannot tell
+those apart with certainty states the concern and leaves the judgement.
+`IS NOT NULL` and `!= NULL` are excluded: requiring presence is the opposite
+failure and a legitimate condition.
+
+Flags reach `summarize_for_llm` by code and count, above the closing caveat
+because the summary truncates from the end. A flag that exists only in the
+artefact is a flag nobody acts on.
+
+### Relocation: give the prose a home
+
+The most persistent pattern has nothing to do with correctness. **A model with
+something worth saying says it in whichever field is nearest, and that field
+stops being parseable.** It has happened four times:
+
+| Field | What arrived | Where it goes now |
+|---|---|---|
+| `grounding.limitations` | Copies of `absent_without_enrichment` field names | Prose for a reader (prompt rule) |
+| `review_flags` | Bare strings — `authentication_not_directly_observed` | `caveats` |
+| `thresholds` | *"proposed starting point: alert on the first event"* | `threshold_notes`, keyed by the same parameter |
+| `join_keys` | *"approximate temporal join only; no shared identifier exists"* | `join_notes` |
+
+In every case the content was **good** — "no shared identifier exists between
+these two sources" is a real and valuable answer about a join, and
+`post_exploitation_outcome_only` is exactly the caveat a tester wants. So
+nothing is discarded. Each machine-readable field now has a prose sibling, the
+prompt asks for the right one by name, and anything left in the wrong place is
+moved.
+
+One rule governs the move: **relocating an explanation must never change what
+the record claims.** Stripping a sentence out of `join_keys` once left a
+genuine two-source temporal correlation looking like a threshold, because the
+prose *was* the evidence of the join. That is why multiple sources over a
+window now derive as `correlation` regardless of keys.
+
+### What this record has cost, and why flags over rejections
+
+The honest summary: the checks themselves have needed correcting four times —
+a foreign-alias false positive, an identity-mapping regression, prose tokens in
+a field-reference scan, and a kind derivation that overrode an answer the model
+had reasoned its way to. Twenty-odd lines of mechanical comparison, wrong four
+times, each time caught by live output rather than by review or tests.
+
+That is the case for the design. A rejection is a strong claim and is reserved
+for facts. Everything requiring inference is a flag, phrased as a question,
+that a person resolves while testing the rule. A validator that starts
+reviewing the detection rather than describing the record will be wrong in its
+own turn — and the record above is what that looks like when it happens.
+
+## Descriptors: a language, not a vocabulary
+
+Read any draft and the same shape appears everywhere:
+`token_file_read_by_unexpected_process`, `first_time_route_for_principal`,
+`attempt_only_not_code_execution`, `distinct_new_routes_per_group`,
+`credential_theft_indistinguishable_from_service_defect`. Long, lowercase,
+underscore-joined. They are not variable names that grew out of control. They
+are the working notation of this pillar, and understanding how they are built
+is most of what it takes to read the output.
+
+**A descriptor compresses a complete proposition into a single token.** Not a
+category and not a label — a statement that can be true or false of one record,
+or a question that has an answer. `actor_approver_same_person` is not the topic
+"approval"; it is the claim *the person who created this adjustment is the
+person who approved it*. `allowed_after_rule_match` is *the WAF matched a rule
+and let the request through anyway*. Read each one as a sentence with the
+articles and the verb "to be" removed, and it resolves immediately.
+
+They are deliberately long. A descriptor is read by someone deciding what to
+collect, what to test, or whether an alert means anything, and at that moment
+precision is worth far more than brevity. `token_file_read_by_unexpected_process`
+survives being quoted in a ticket, pasted into a query, and argued about in a
+review. `unusual_file_access` does not.
+
+### The two halves are governed differently
+
+**The library half is authored and stable.** In telemetry library v0.3.0 there
+are 36 sources carrying 160 distinct native fields, **38 distinct derived
+indicators** and **59 distinct `absent_without_enrichment` descriptors**. The
+derived ones are the library's purpose-built observations — 26 sources carry
+exactly one, five carry none — and they are the single highest-value thing the
+library offers, because each encodes an analytic somebody already thought
+through. The `absent_without_enrichment` names are the mirror image: they state
+precisely what a source *cannot* tell you, which is how a draft knows to say so
+in `grounding.limitations` rather than quietly assume it.
+
+These are versioned, reviewed, and change only when the library does.
+
+**The generated half is coined per run and cannot be enumerated.** Normalized
+field aliases (`source_address`, `route_is_new_for_actor`, `sql_text`),
+threshold parameter names (`distinct_new_routes_per_group`,
+`single_statement_rows_estimate`), and `caveats`
+(`temporal_correlation_only_no_shared_join_key`,
+`end_user_principal_not_available_in_database_records`) are minted by the
+drafting model, for that node, in that run. A different model, or the same
+model tomorrow, will coin different ones for the same node.
+
+That is not a defect to be closed. It is the point. Asking a model to name the
+thing it just reasoned about, in a notation dense enough to be a key and
+explicit enough to be read cold, is how a detection concept travels from the
+draft into a ticket, a query and a test plan without a paragraph of
+explanation attached. The prompt asks for the *form* — short snake_case labels,
+one proposition each — and leaves the content open, because the content is
+the analysis.
+
+### The glossary
+
+[`framework/reference_data/telemetry_descriptor_glossary.md`](../../../framework/reference_data/telemetry_descriptor_glossary.md)
+exists for someone meeting this output for the first time. It covers the
+library's full fixed half — all 38 derived indicators and all 59 enrichment
+descriptors, with a plain-language reading of each — and then walks one
+recorded run draft by draft, explaining every alias, threshold name and caveat
+it coined.
+
+**It is far from complete, and it can never be complete.** The library half
+will track the library. The generated half is a snapshot of one run and will
+not match the next one. The glossary is not a controlled vocabulary and must
+not be read as one: it is a reading primer for a language whose grammar is
+fixed and whose lexicon is open.
+
+Two cautions carried in the glossary itself are worth repeating. A derived
+indicator's meaning there is a plain-language interpretation of its name and
+source context, **not a calculation specification** — `derived` means an
+indicator to compute or enrich, never that an implementation exists. And every
+library source reports `collection_status: unknown`, so a descriptor appearing
+in a draft says what *would* be observable, not what is being collected today.
+
 ## Codes
 
 Warnings, review flags and errors are closed sets (spec §4.4): `WARNING_CODES`
-and `REVIEW_FLAG_CODES` in `normalization.py`, `ERROR_CODES` in `tool.py`.
+and `REVIEW_FLAG_CODES` in `normalization.py` for the normalization stage,
+a separate `REVIEW_FLAG_CODES` in `generation.py` for the draft stage (see
+*Keeping a generated record honest* above), and `ERROR_CODES` in `tool.py`.
 Every warning carries a `severity` — `blocking` if the output omits or
 downgrades something because of it, `advisory` otherwise — and the summary
 reports the two separately. Add a code to the catalogue and the spec table

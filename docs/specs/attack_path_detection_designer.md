@@ -387,12 +387,22 @@ trusted to the reply, and the rest become flags:
 Thresholds outrank keys because `join_keys` carries two meanings. A live draft
 counting statements `BY user_name` over ten minutes declared itself a
 `threshold` and was right; reading its grouping key as a join rewrote the one
-kind the model had reasoned its way to. Where both a threshold and keys are
-present the shape genuinely supports either reading, so a draft that declared
-`threshold` or `correlation` keeps its answer and carries
-`LOGIC_KIND_AMBIGUOUS`. A draft still carrying the `single_event` placeholder
-expressed no view and is derived: the placeholder is definitively wrong once a
-threshold exists.
+kind the model had reasoned its way to. Where both a threshold and a grouping
+are present the shape genuinely supports either reading, so a draft that
+declared `threshold` or `correlation` keeps its answer. A draft still carrying
+the `single_event` placeholder expressed no view and is derived: the
+placeholder is definitively wrong once a threshold exists.
+
+Only a **numeric** threshold counts. One run's single wrong correction came
+from a `thresholds` entry reading *"proposed starting point: alert on the first
+event"* — prose saying the opposite of a threshold, which nonetheless made the
+mapping non-empty and rewrote a correct `single_event`.
+
+More than one source over a window is a correlation whether or not a join key
+is named. A draft joining CI records to runner process events stated in prose
+that the two share no identifier; once that prose moved to `join_notes` the
+remaining shape read as a threshold. Relocating an explanation must never
+change what the record claims.
 
 `review_flags` is a closed catalogue, and an empty array asserts there are none.
 None of these codes rejects a draft.
@@ -403,7 +413,6 @@ None of these codes rejects a draft.
 | `FIELD_UNDECLARED_IN_LOGIC` | The logic reads a field of a cited source that is not in `required_fields`. `required_fields` is the list a collection engineer onboards against, so the rule as written would ship uncollectable. |
 | `FIELD_FROM_UNCITED_SOURCE` | The logic reads a field the library attributes only to sources this draft does not cite. Either the source list or the logic is wrong. |
 | `LOGIC_KIND_CORRECTED` | `kind` disagreed with the shape and was replaced. |
-| `LOGIC_KIND_AMBIGUOUS` | Thresholds and keys together; the declared kind was kept. |
 | `LOGIC_NULL_AS_MATCH` | The condition fires on an absent value. If the field is not collected, every record matches. |
 | `WINDOW_UNPARSED` | A window that is not a number and a time unit. |
 | `ANNOTATION_FAILED` | Annotation raised. The draft passed validation and is kept. |
@@ -431,6 +440,21 @@ monitoring request patterns"* means English, not the `command` and `request`
 that happen to be fields of some source. One prose draft produced four findings
 this way. Every true positive to date has been distinctive (`request.operation`,
 `file_path`, `db_user`), so the bare word is not worth the noise.
+
+### Parameters stay parameters
+
+`thresholds` values are numbers and `join_keys` entries are field names. Where
+a model supplies prose instead — and across three vendors it often does, since
+both fields invite the reasoning as readily as the value — it is **moved, not
+discarded**: `threshold_notes` keeps each note under its parameter's name, and
+`join_notes` keeps what the draft said about the join, which in one run was
+that no join key existed at all. That is a real and useful answer; the fix is
+to give it a field, not to suppress it.
+
+This is the same failure as `review_flags` below and as `limitations` before
+it. A model with something worth saying says it in whichever field is nearest,
+and the field stops being parseable. Each machine-readable field therefore has
+a prose sibling.
 
 ### `caveats` is the model's, `review_flags` is ours
 
