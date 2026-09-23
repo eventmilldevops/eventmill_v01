@@ -401,6 +401,19 @@ class EventMillShell(cmd.Cmd):
         # hazard as a stale .env pin. None means the dispatcher's own default.
         self._provider_default: str | None = None
         self._provider_by_tool: dict[str, str] = {}
+
+        # Which analysis stance an LLM-calling tool reasons with, chosen by
+        # the operator with 'posture'. Same lifetime rule as provider
+        # selection: session-only, never persisted, None means "no posture
+        # text injected" so a session that never touches 'posture' behaves
+        # exactly as it did before the feature existed.
+        self._posture_default: str | None = None
+        self._posture_by_tool: dict[str, str] = {}
+        self._shared_postures_dir = self.project_root / "framework" / "llm" / "postures"
+        # Local dirs cover shipped/pillar postures; this caches the one
+        # bucket-resolved posture file per name so an operator can author a
+        # single custom posture without it living in the repo at all.
+        self._posture_bucket_cache: dict[str, Path] = {}
         
         self._update_prompt()
     
@@ -526,6 +539,94 @@ class EventMillShell(cmd.Cmd):
         behaves exactly as it did before 'use' existed.
         """
         return self._provider_by_tool.get(tool_name) or self._provider_default
+
+    def _posture_for(self, tool_name: str) -> str | None:
+        """The posture name the operator selected for this tool, if any.
+
+        Per-tool override, then session default, then None — mirrors
+        _provider_for exactly, for the same reason: a session that never
+        touches 'posture' must behave exactly as before the feature existed.
+        """
+        return self._posture_by_tool.get(tool_name) or self._posture_default
+
+    def _posture_dirs(self, pillar: str | None) -> list[Path]:
+        """Directories searched for a posture file, most specific first.
+
+        A pillar's own 'postures/' directory can override the meaning of a
+        name (e.g. 'paranoid') for its tools; the shared directory under
+        framework/llm/postures/ is the fallback every pillar sees.
+        """
+        dirs = []
+        if pillar:
+            dirs.append(self.plugins_path / pillar / "postures")
+        dirs.append(self._shared_postures_dir)
+        return dirs
+
+    def _list_postures(self, pillar: str | None) -> dict[str, Path]:
+        """Available posture names to file path, pillar-specific ones winning."""
+        found: dict[str, Path] = {}
+        for directory in reversed(self._posture_dirs(pillar)):
+            if not directory.is_dir():
+                continue
+            for path in sorted(directory.glob("*.md")):
+                found[path.stem] = path
+        return found
+
+    def _load_posture_text(
+        self, name: str | None, pillar: str | None, workspace_folder: str | None = None,
+    ) -> str | None:
+        """Read a posture's file contents, pillar-specific directory first.
+
+        Falls back to a single bucket-resolved file (``<name>.md`` in the
+        pillar or common bucket) when no local file matches, so an operator
+        can author one custom posture without adding it to the repo.
+
+        Returns None for no selection or a name that resolves to no file —
+        the caller treats both the same way TierScopedLLMClient treats no
+        provider selection: silently fall back to no posture text.
+        """
+        if not name:
+            return None
+        for directory in self._posture_dirs(pillar):
+            candidate = directory / f"{name}.md"
+            if candidate.is_file():
+                return candidate.read_text(encoding="utf-8").strip()
+        bucket_path = self._resolve_bucket_posture(name, pillar, workspace_folder)
+        if bucket_path:
+            return bucket_path.read_text(encoding="utf-8").strip()
+        return None
+
+    def _resolve_bucket_posture(
+        self, name: str, pillar: str | None, workspace_folder: str | None,
+    ) -> Path | None:
+        """Download a single ``<name>.md`` posture file from the bucket, if any.
+
+        Best-effort and quiet: a bucket lookup failing (no resolver, no
+        pillar, network error, file absent) is treated exactly like a local
+        miss — the caller falls back to no posture text. Results are cached
+        per name for the process lifetime so this doesn't re-hit the bucket
+        on every LLM call.
+        """
+        if name in self._posture_bucket_cache:
+            return self._posture_bucket_cache[name]
+        if not self.storage_resolver or not pillar:
+            return None
+        try:
+            resolved = self.storage_resolver.resolve(
+                filename=f"{name}.md",
+                pillar=pillar,
+                workspace_folder=workspace_folder,
+            )
+            if not resolved:
+                return None
+            local_dest = self.workspace_path / "artifacts" / "postures" / f"{name}.md"
+            local_dest.parent.mkdir(parents=True, exist_ok=True)
+            self.storage_resolver.download(resolved, local_dest)
+        except Exception as e:
+            logger.warning("Bucket posture lookup failed for '%s': %s", name, e)
+            return None
+        self._posture_bucket_cache[name] = local_dest
+        return local_dest
 
     def _provider_kwargs(self, provider_id: str | None) -> dict[str, str]:
         """Provider scope for a direct dispatcher call, if it accepts one.
@@ -3437,13 +3538,20 @@ class EventMillShell(cmd.Cmd):
         if model_tier == "none" or not llm_connected:
             scoped_llm = None
         else:
-            # The provider joins the tier here and nowhere else. Both are
-            # per-execution decisions the operator owns, and the wrapper is
-            # the one place a plugin cannot reach either of them.
+            # The provider and posture join the tier here and nowhere else.
+            # All three are per-execution decisions the operator owns, and
+            # the wrapper is the one place a plugin cannot reach any of them.
+            posture_name = self._posture_for(tool_name)
+            posture_text = self._load_posture_text(
+                posture_name,
+                session.active_pillar if session else None,
+                session.workspace_folder if session else None,
+            )
             scoped_llm = TierScopedLLMClient(
                 self.llm_client,
                 default_tier=model_tier,
                 default_provider=selected_provider,
+                posture_text=posture_text,
             )
 
         context = ExecutionContext(
@@ -4174,6 +4282,128 @@ class EventMillShell(cmd.Cmd):
         print("")
         print("  'use <provider> for <tool_name>' overrides one tool;")
         print("  'use default' clears every selection.")
+
+    def do_posture(self, arg: str) -> None:
+        """Choose the analysis stance LLM-calling tools reason with.
+
+        Usage: posture                        show the current selection
+               posture list                   show available postures for the active pillar
+               posture <name>                 session default for every tool
+               posture <name> for <tool_name> override one tool
+               posture default [for <tool_name>]  clear a selection
+
+        A posture is a text file whose contents are prepended to every LLM
+        call's system context — it changes how a tool's LLM calls reason
+        about ambiguous signal (e.g. flag weak indicators vs. only report
+        high-confidence findings), never what a plugin computes
+        deterministically. <name> is a file stem: 'paranoid' resolves to
+        paranoid.md, checked first under the active pillar's own
+        plugins/<pillar>/postures/ directory, then under the shared
+        framework/llm/postures/ directory. Add your own .md file to either
+        directory and select it by name — no code change or restart needed.
+
+        A name not found locally falls back to a single <name>.md file
+        resolved from the pillar or common bucket (same lookup 'load' uses),
+        so one custom posture can be authored without touching the repo.
+        This fallback is not shown by 'posture list', which stays local-only.
+
+        Shipped: paranoid, balanced, permissive. network_forensics ships its
+        own paranoid.md that overrides the shared one for that pillar's tools.
+
+        Examples:
+          posture paranoid
+          posture permissive for pcap_threat_hunter
+          posture default for pcap_threat_hunter
+        """
+        parts = arg.strip().split()
+
+        if not parts:
+            self._show_posture_selection()
+            return
+
+        if len(parts) == 1 and parts[0] == "list":
+            self._list_posture_selection()
+            return
+
+        if len(parts) == 1:
+            posture_name, tool_name = parts[0], None
+        elif len(parts) == 3 and parts[1] == "for":
+            posture_name, tool_name = parts[0], parts[2]
+        elif len(parts) == 2 and parts[0] == "default" and parts[1] == "for":
+            print("  Usage: posture default for <tool_name>")
+            return
+        else:
+            print(f"  Unknown argument: {arg.strip()}")
+            print("  Usage: posture [list | <name> | default] [for <tool_name>]")
+            return
+
+        if tool_name is not None and not self.plugin_loader.get(tool_name):
+            print(f"  Tool not found: {tool_name}")
+            print("  Use 'tools' to see the tool names.")
+            return
+
+        if posture_name == "default":
+            if tool_name is None:
+                self._posture_default = None
+                self._posture_by_tool.clear()
+                print("  Cleared. No posture text is injected for any tool.")
+            else:
+                self._posture_by_tool.pop(tool_name, None)
+                print(f"  Cleared the override on {tool_name}.")
+            self._show_posture_selection()
+            return
+
+        session = self.session_manager.get_current_session()
+        pillar = session.active_pillar if session else None
+        workspace_folder = session.workspace_folder if session else None
+        available = self._list_postures(pillar)
+        if posture_name not in available:
+            if not self._resolve_bucket_posture(posture_name, pillar, workspace_folder):
+                print(f"  Posture not found: {posture_name}")
+                if available:
+                    print(f"  Available: {', '.join(sorted(available))}")
+                print("  'posture list' shows where each one resolves from.")
+                return
+
+        if tool_name is None:
+            self._posture_default = posture_name
+            print(f"  Session default: {posture_name}")
+            if self._posture_by_tool:
+                overridden = ", ".join(sorted(self._posture_by_tool))
+                print(f"  Still overridden per tool: {overridden}")
+        else:
+            self._posture_by_tool[tool_name] = posture_name
+            print(f"  {tool_name} will reason under the '{posture_name}' posture.")
+
+    def _show_posture_selection(self) -> None:
+        """Print which posture serves tools, and any per-tool overrides."""
+        source = "chosen with 'posture'" if self._posture_default else "none — no posture text injected"
+        print(f"  Session default: {self._posture_default or '—'}  ({source})")
+
+        if self._posture_by_tool:
+            print("")
+            print("  Per-tool overrides")
+            for tool_name in sorted(self._posture_by_tool):
+                print(f"    {tool_name:34s} {self._posture_by_tool[tool_name]}")
+        print("")
+        print("  'posture list' shows what's available; 'posture <name> for <tool_name>'")
+        print("  overrides one tool; 'posture default' clears every selection.")
+
+    def _list_posture_selection(self) -> None:
+        """Print available postures for the active pillar, most specific first."""
+        session = self.session_manager.get_current_session()
+        pillar = session.active_pillar if session else None
+        available = self._list_postures(pillar)
+        if not available:
+            print("  No posture files found.")
+            print(f"  Shared directory: {self._shared_postures_dir}")
+            return
+
+        print(f"  Active pillar: {pillar or '—'}")
+        for name in sorted(available):
+            path = available[name]
+            scope = "pillar-specific" if pillar and str(path).startswith(str(self.plugins_path / pillar)) else "shared"
+            print(f"    {name:16s} {scope:16s} {path}")
 
     def do_providers(self, arg: str) -> None:
         """Show LLM providers: configured, keyed, and reachable.

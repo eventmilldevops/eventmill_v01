@@ -943,7 +943,8 @@ class TierScopedLLMClient:
     """
 
     def __init__(self, inner: LLMQueryInterface, default_tier: str = "light",
-                 default_provider: str | None = None):
+                 default_provider: str | None = None,
+                 posture_text: str | None = None):
         self._inner = inner
         # "none" means the plugin declares no LLM work; treat any incidental
         # call as light rather than silently promoting it to Pro.
@@ -957,6 +958,19 @@ class TierScopedLLMClient:
         # the comparison unattributable and break "the analysis tools do not
         # change". None means the dispatcher's session default serves.
         self.default_provider = default_provider
+        # Operator-selected analysis stance ('use posture'), prepended to every
+        # system_context this wrapper forwards. Same rationale as provider:
+        # it is an operator decision applied to a whole execution, not
+        # something a plugin should have to know exists or can override.
+        self.posture_text = posture_text
+
+    def _with_posture(self, system_context: str | None) -> str | None:
+        """Prepend the selected posture to a call's system_context, if any."""
+        if not self.posture_text:
+            return system_context
+        if not system_context:
+            return self.posture_text
+        return f"{self.posture_text}\n\n{system_context}"
 
     def _provider_kwargs(self) -> dict[str, str]:
         """Provider scope to pass inward, if there is one and it is accepted.
@@ -1009,7 +1023,7 @@ class TierScopedLLMClient:
     ) -> LLMResponse:
         return self._inner.query_text(
             prompt=prompt,
-            system_context=system_context,
+            system_context=self._with_posture(system_context),
             max_tokens=max_tokens,
             grounding_data=grounding_data,
             hints=self._with_default(hints),
@@ -1029,7 +1043,7 @@ class TierScopedLLMClient:
             prompt=prompt,
             image_data=image_data,
             image_format=image_format,
-            system_context=system_context,
+            system_context=self._with_posture(system_context),
             max_tokens=max_tokens,
             hints=self._with_default(hints),
             **self._provider_kwargs(),
@@ -1058,7 +1072,7 @@ class TierScopedLLMClient:
         return inner_call(
             prompt=prompt,
             artifact=artifact,
-            system_context=system_context,
+            system_context=self._with_posture(system_context),
             max_tokens=max_tokens,
             grounding_data=grounding_data,
             hints=resolved,
