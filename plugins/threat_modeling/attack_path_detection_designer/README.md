@@ -300,9 +300,18 @@ should not be read as saying so.
 
 `provenance.model`, never `provenance.provider` — there is no `provider` key at
 that level, and a normalizer looking for one records "no attribution" on an
-export that carries full attribution. `engagement.model_attribution_present`
+export that carries full attribution. `engagement.projection_model_present`
 distinguishes *key absent* from *value null*. Similarly `actor_attack_id`, not
 `actor_attck_id`.
+
+It surfaces as **`engagement.projection_model`**: the model that produced the
+attack path, not the one that drafts detections — that is
+`generation_model`, summarised from `calls[].model_used`. Both models appear in
+one generation export, and while the field was called `model_attribution` a
+reader took the projector's model for the drafting one, which is the confusion
+attribution exists to prevent. `model_attribution` and
+`model_attribution_present` are kept as aliases so an existing consumer is not
+broken.
 
 ## Fixtures
 

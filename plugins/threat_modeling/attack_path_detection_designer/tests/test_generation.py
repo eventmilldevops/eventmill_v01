@@ -542,7 +542,10 @@ def test_the_prompt_says_product_is_never_a_source_id():
 ANNOTATION_LIBRARY = {
     "postgres.session": {
         "source_id": "postgres.session",
-        "fields": {"native": ["client_ip", "username"], "derived": []},
+        # `username` is deliberately a bare word and `db_user` deliberately
+        # distinctive: the library checks only report names that could not be
+        # ordinary English, because the contract allows prose pseudocode.
+        "fields": {"native": ["client_ip", "username", "db_user"], "derived": []},
     },
     "container.file_access": {
         "source_id": "container.file_access",
@@ -653,7 +656,7 @@ def test_a_collected_field_the_logic_never_reads_is_flagged():
 
 def test_a_field_read_but_never_declared_is_flagged():
     """required_fields is what a collection engineer onboards against."""
-    draft = _logic_draft(pseudocode="WHERE client_ip IS set AND username IS unexpected")
+    draft = _logic_draft(pseudocode="WHERE client_ip IS set AND db_user IS unexpected")
     flags = gen.annotate(draft, ANNOTATION_LIBRARY)
     assert "FIELD_UNDECLARED_IN_LOGIC" in _codes(flags)
 
@@ -944,3 +947,106 @@ def test_null_as_match_never_rejects_a_draft(nodes):
 
 def test_the_prompt_says_an_absence_may_not_be_the_signal():
     assert "Never make an absence the thing that fires" in gen.SYSTEM_CONTEXT
+
+
+# ---------------------------------------------------------------------------
+# Prose pseudocode, the model's own caveats, and who made what
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "pseudocode",
+    [
+        "Alert when process_args show an interpreter executing command patterns",
+        "suppress established monitoring request patterns",
+        "Flag a successful request whose route is in the maintained set",
+        "when the response has a health, status, or service endpoint",
+    ],
+)
+def test_an_english_word_in_prose_is_not_a_field_reference(pseudocode):
+    """The contract allows pseudocode as prose. One live draft produced four
+    findings this way: `command`, `request` and `status` are ordinary words
+    that are also fields of some library source."""
+    draft = _logic_draft(pseudocode=pseudocode)
+    codes = _codes(gen.annotate(draft, ANNOTATION_LIBRARY))
+    assert "FIELD_FROM_UNCITED_SOURCE" not in codes
+    assert "FIELD_UNDECLARED_IN_LOGIC" not in codes
+
+
+def test_a_distinctive_name_in_prose_is_still_caught():
+    """Every true positive so far has been distinctive."""
+    draft = _logic_draft(pseudocode="Alert when file_path matches a credential file")
+    assert "FIELD_FROM_UNCITED_SOURCE" in _codes(gen.annotate(draft, ANNOTATION_LIBRARY))
+
+
+def test_the_models_own_flags_move_to_caveats_rather_than_being_discarded():
+    """A live run filled review_flags with bare strings. The content is
+    exactly what a tester wants; the field was the wrong one."""
+    draft = _logic_draft()
+    draft["x_eventmill"]["review_flags"] = [
+        "collection_status_unknown",
+        "authentication_not_directly_observed",
+    ]
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    extension = draft["x_eventmill"]
+    assert extension["caveats"] == [
+        "collection_status_unknown",
+        "authentication_not_directly_observed",
+    ]
+    assert all(isinstance(f, dict) for f in extension["review_flags"])
+
+
+def test_relocated_caveats_join_the_ones_already_there_without_duplicates():
+    draft = _logic_draft()
+    draft["x_eventmill"]["caveats"] = ["attempt_only_not_code_execution"]
+    draft["x_eventmill"]["review_flags"] = [
+        "attempt_only_not_code_execution",
+        "no_file_or_process_visibility",
+    ]
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["caveats"] == [
+        "attempt_only_not_code_execution",
+        "no_file_or_process_visibility",
+    ]
+
+
+def test_a_well_formed_flag_the_model_supplied_is_kept_in_place():
+    draft = _logic_draft()
+    draft["x_eventmill"]["review_flags"] = [{"code": "EXISTING", "message": "kept"}]
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert draft["x_eventmill"]["review_flags"][0]["code"] == "EXISTING"
+    assert "caveats" not in draft["x_eventmill"]
+
+
+def test_review_flags_stay_machine_derived_so_the_summary_stays_coded():
+    draft = _logic_draft(window=60)
+    draft["x_eventmill"]["review_flags"] = ["collection_status_unknown"]
+    gen.annotate(draft, ANNOTATION_LIBRARY)
+    assert "UNCODED" not in _tool_mod._review_flag_line([draft])
+
+
+def test_the_prompt_asks_for_caveats_and_reserves_review_flags():
+    assert "caveats" in gen.SYSTEM_CONTEXT
+    assert "Leave\n  review_flags empty" in gen.SYSTEM_CONTEXT
+
+
+def test_the_projection_model_is_named_as_the_projections(nodes, tool):
+    """One export carries the model that projected the path and the model that
+    drafted the detections; a single `model_attribution` let a reader take the
+    first for the second."""
+    result = tool.execute({"sources": [GRAPH, SEED], "flow_map_path": MAP}, context=None)
+    engagement = result.result["engagement"]
+    assert engagement["projection_model"]["vendor"]
+    assert engagement["projection_model_present"] is True
+    assert "Projection model:" in tool.summarize_for_llm(result)
+
+
+def test_a_run_reports_the_model_that_drafted_it(tool, nodes):
+    llm = FakeLLM(_responder(nodes))
+    result = tool.execute(
+        {"action": "generate_detections", "sources": [GRAPH, SEED], "flow_map_path": MAP},
+        FakeContext(llm_query=llm),
+    )
+    assert result.result["generation_model"] == ["gemini-3.1-pro-preview"]
+    summary = tool.summarize_for_llm(result)
+    assert "Generation model: gemini-3.1-pro-preview" in summary
+    assert "projected by" in summary

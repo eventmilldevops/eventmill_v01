@@ -562,6 +562,15 @@ def _engagement(document: dict[str, Any]) -> dict[str, Any]:
         # Read model, never provider: there is no provenance.provider key, and
         # a normalizer looking for one records "no attribution" on an export
         # that carries full attribution.
+        #
+        # This is the model that produced the *projection*, not the one that
+        # drafts detections - that is `calls[].model_used`. Both appeared in
+        # one export under the single name `model_attribution`, and a reader
+        # took it for the generating model, which is what attribution exists
+        # to prevent. The old keys are kept beside the new ones so an existing
+        # consumer is not broken by the rename.
+        "projection_model": dict(model) if isinstance(model, dict) else None,
+        "projection_model_present": isinstance(model, dict),
         "model_attribution": dict(model) if isinstance(model, dict) else None,
         "model_attribution_present": isinstance(model, dict),
         "flow_map_path": provenance.get("flow_map_path"),

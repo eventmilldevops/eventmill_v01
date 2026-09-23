@@ -402,8 +402,11 @@ source_event_id, source_pointer
 
 # engagement                                   + actor_attack_id split out
 actor_label, actor_attack_id, application, attack_version
-model_attribution: {provider, vendor,                            + §4.1
-                    model_configured, model_served}
+projection_model: {provider, vendor,                             + §4.1
+                   model_configured, model_served}
+                   # the projector's model, never the drafting one;
+                   # that is generation_model, from calls[].model_used.
+                   # aliased as model_attribution for existing consumers
 
 # placement
 component_id (nullable), asset_name, zone, exposure,            + zone/exposure

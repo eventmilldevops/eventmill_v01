@@ -425,6 +425,23 @@ placeholders and SQL keywords never become findings. Generation takes the
 library as an argument and runs without it, in which case only
 `FIELD_DECLARED_UNUSED` is available.
 
+They report only **distinctive** names — those containing `_` or `.`. Pseudocode
+may be prose, and a draft reading *"executing command patterns"* or *"suppress
+monitoring request patterns"* means English, not the `command` and `request`
+that happen to be fields of some source. One prose draft produced four findings
+this way. Every true positive to date has been distinctive (`request.operation`,
+`file_path`, `db_user`), so the bare word is not worth the noise.
+
+### `caveats` is the model's, `review_flags` is ours
+
+A drafting model has things to say about what its draft cannot show —
+`authentication_not_directly_observed`, `attempt_only_not_code_execution` — and
+a live run put them in `review_flags` as bare strings, breaking the
+`{code, message}` shape and reading as uncoded in the summary. The content is
+exactly what a tester wants, so `caveats` exists for it and anything the model
+leaves in `review_flags` is **moved there rather than discarded**. A
+well-formed flag the model supplies is kept where it is.
+
 `summarize_for_llm` reports the flags by code and count, above the closing
 caveat because the summary truncates from the end. Codes only: the messages name
 fields and sources, and a full path's worth would push the rest of the summary

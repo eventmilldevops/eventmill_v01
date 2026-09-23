@@ -125,6 +125,11 @@
           }
         },
         "assumptions": { "type": "array", "items": { "type": "string" } },
+        "caveats": {
+          "type": "array",
+          "description": "The drafting model's own short labels for what this draft cannot show. Distinct from review_flags, which is derived after validation; anything the model puts in review_flags is moved here.",
+          "items": { "type": "string" }
+        },
         "review_flags": {
           "type": "array",
           "description": "Questions the draft carries into testing, not errors. Derived after validation; an empty array asserts there are none.",

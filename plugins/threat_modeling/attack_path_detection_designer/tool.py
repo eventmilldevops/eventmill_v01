@@ -545,6 +545,13 @@ class AttackPathDetectionDesigner:
             "coverage": ledger,
             "rejected": problems,
             "calls": calls,
+            # Named apart from engagement.projection_model on purpose: one
+            # export carries the model that projected the path and the model
+            # that drafted the detections, and a single "model_attribution"
+            # let a reader take the first for the second.
+            "generation_model": sorted(
+                {c["model_used"] for c in calls if c.get("model_used")}
+            ),
             "engagement": engagement,
             "prompt_version": gen.PROMPT_VERSION,
             "telemetry_library_version": nodes[0].get("telemetry_library_version") if nodes else None,
@@ -600,11 +607,11 @@ class AttackPathDetectionDesigner:
             f"ATT&CK {engagement.get('attack_version')}.",
         ]
 
-        model = engagement.get("model_attribution")
+        model = engagement.get("projection_model")
         lines.append(
-            f"Model: {model.get('provider')} / {model.get('model_served')}."
+            f"Projection model: {model.get('provider')} / {model.get('model_served')}."
             if model
-            else "Model: no attribution in the export."
+            else "Projection model: no attribution in the export."
         )
 
         for severity in (nz.SEVERITY_BLOCKING, nz.SEVERITY_ADVISORY):
@@ -716,9 +723,12 @@ def _generation_summary(data: dict[str, Any], result: ToolResult) -> str:
     lines.append(_review_flag_line(data.get("drafts") or []))
     calls = data.get("calls") or []
     if calls:
-        models = {c.get("model_used") for c in calls if c.get("model_used")}
+        models = data.get("generation_model") or []
+        projection = (data.get("engagement") or {}).get("projection_model") or {}
         lines.append(
-            f"{len(calls)} call(s), model {', '.join(sorted(m for m in models if m)) or 'unknown'}."
+            f"{len(calls)} call(s). Generation model: "
+            f"{', '.join(models) or 'unknown'}; the path was projected by "
+            f"{projection.get('model_served') or 'an unattributed model'}."
         )
     lines.append(
         "Drafts are unvalidated against telemetry; a person still judges detection quality."

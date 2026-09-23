@@ -80,6 +80,15 @@ _WINDOW_PATTERN = re.compile(r"^\s*(\d+)\s*_?\s*([A-Za-z]*)\s*$")
 _QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z_0-9.]*")
 
+# A name distinctive enough to be a field reference rather than a word. The
+# contract allows pseudocode as prose, and a model that writes "executing
+# command patterns" or "monitoring request patterns" means English, not
+# `command` and `request` - both of which are fields of some library source.
+# Every true positive so far has been distinctive: `request.operation`,
+# `file_path`, `db_user`. A bare word is not worth the four false findings a
+# single prose draft produced.
+_DISTINCTIVE_FIELD = re.compile(r"[_.]")
+
 SYSTEM_CONTEXT = """You are drafting detection guidance for a security engineer.
 
 You will be given attack path steps that have already been normalized, graded
@@ -104,6 +113,10 @@ and grounded. Everything factual is supplied to you. Follow these rules:
   absent_without_enrichment field names.
 - If required data could be missing at evaluation time, missing_data_behaviour
   is insufficient_telemetry. Never let absent data evaluate as benign.
+- Put what the draft cannot show in caveats, as short snake_case labels:
+  authentication_not_directly_observed, attempt_only_not_code_execution. Leave
+  review_flags empty - it is derived after your reply and anything you put
+  there is moved to caveats.
 - Never make an absence the thing that fires. A condition such as
   "principal IS NULL" alerts on every record when the field is simply not
   collected. Say what a present value would have to show instead, and put the
@@ -190,6 +203,7 @@ DRAFT_EXAMPLE: dict[str, Any] = {
             "missing_data_behaviour": "insufficient_telemetry",
         },
         "assumptions": ["<what this draft assumes>"],
+        "caveats": ["<short_snake_case: what a tester should know this does not show>"],
         "review_flags": [],
         "catalogue_status": "new_unchecked",
         "validation_status": "draft_unvalidated",
@@ -708,7 +722,7 @@ def field_closure_flags(
 
     for name in sorted(referenced - declared):
         holders = owners.get(name)
-        if not holders:
+        if not holders or not _DISTINCTIVE_FIELD.search(name):
             continue
         if holders & cited:
             flags.append(
@@ -793,9 +807,35 @@ def annotate(
 
     flags.extend(field_closure_flags(extension, library))
 
-    existing = extension.get("review_flags")
-    extension["review_flags"] = (existing if isinstance(existing, list) else []) + flags
+    extension["review_flags"] = _relocate_caveats(extension) + flags
     return flags
+
+
+def _relocate_caveats(extension: dict[str, Any]) -> list[dict[str, str]]:
+    """Keep review_flags machine-derived and the model's own notes in caveats.
+
+    A live run filled review_flags with bare strings -
+    `authentication_not_directly_observed`, `post_exploitation_outcome_only` -
+    which break the {code, message} shape and count as uncoded in the summary.
+    The content is exactly what a tester wants, so it moves rather than being
+    discarded: the model was answering a good question in a field reserved for
+    the derived answer. Returns the flags that were already well-formed.
+    """
+    supplied = extension.get("review_flags")
+    supplied = supplied if isinstance(supplied, list) else []
+    kept = [f for f in supplied if isinstance(f, dict)]
+
+    caveats = extension.get("caveats")
+    caveats = list(caveats) if isinstance(caveats, list) else []
+    for entry in supplied:
+        if isinstance(entry, dict):
+            continue
+        text = str(entry).strip()
+        if text and text not in caveats:
+            caveats.append(text)
+    if caveats:
+        extension["caveats"] = caveats
+    return kept
 
 
 def coverage(
