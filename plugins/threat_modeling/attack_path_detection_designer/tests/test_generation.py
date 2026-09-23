@@ -1050,3 +1050,24 @@ def test_a_run_reports_the_model_that_drafted_it(tool, nodes):
     summary = tool.summarize_for_llm(result)
     assert "Generation model: gemini-3.1-pro-preview" in summary
     assert "projected by" in summary
+
+
+def test_an_identity_mapping_counts_the_field_as_read():
+    """Two live runs mapped `actor` to `actor` and `process_path` to itself.
+    Subtracting the alias took the native reference with it, so the field read
+    most plainly of all was the one reported unused."""
+    draft = _logic_draft(
+        normalized_fields=[{"name": "client_ip", "from": "client_ip"}],
+        pseudocode="IF token_seen IS TRUE THEN alert",
+    )
+    assert "FIELD_DECLARED_UNUSED" not in _codes(gen.annotate(draft, ANNOTATION_LIBRARY))
+
+
+def test_a_genuine_alias_is_still_subtracted():
+    draft = _logic_draft(
+        normalized_fields=[{"name": "db_user", "from": "client_ip"}],
+        pseudocode="WHERE db_user IS unexpected",
+    )
+    codes = _codes(gen.annotate(draft, ANNOTATION_LIBRARY))
+    assert "FIELD_FROM_UNCITED_SOURCE" not in codes
+    assert "FIELD_UNDECLARED_IN_LOGIC" not in codes

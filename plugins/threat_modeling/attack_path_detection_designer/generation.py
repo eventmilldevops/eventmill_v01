@@ -662,9 +662,16 @@ def logic_field_references(logic: dict[str, Any]) -> set[str]:
     parts = [_QUOTED.sub(" ", str(logic.get("pseudocode") or ""))]
     aliases: set[str] = set()
     for mapping in as_dicts(logic.get("normalized_fields")):
-        parts.append(str(mapping.get("from") or ""))
-        if mapping.get("name"):
-            aliases.add(str(mapping["name"]))
+        native = str(mapping.get("from") or "")
+        parts.append(native)
+        name = str(mapping.get("name") or "")
+        # An identity mapping is a declaration that the field is used, not an
+        # alias to subtract. Two live runs mapped `actor` to `actor` and
+        # `process_path` to `process_path`, and subtracting the name took the
+        # native reference with it - the field read most plainly of all was
+        # the one reported as unused.
+        if name and name != native:
+            aliases.add(name)
     parts.extend(str(k) for k in logic.get("join_keys") or [])
     return set(_IDENTIFIER.findall(" ".join(parts))) - aliases
 

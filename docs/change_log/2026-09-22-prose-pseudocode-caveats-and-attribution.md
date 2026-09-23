@@ -90,14 +90,44 @@ is the failure the no-silent-failover rule is written against.
 - `summarize_for_llm` names both: *"Generation model: X; the path was projected
   by Y."*
 
+## An identity mapping is not an alias
+
+Two further runs on `8d39656`, both reporting `gemini-3.1-pro-preview`, showed
+the alias subtraction going too far. A draft writing
+`{"name": "actor", "from": "actor"}` declares that it reads `actor`; removing
+the name removed the native reference with it, so the field read most plainly
+of all came back as `FIELD_DECLARED_UNUSED`. Five false findings across the two
+runs - `actor`, `repository`, `container_id`, `process_path`.
+
+A name is now subtracted only when it differs from its `from`. Replayed, the
+five disappear and every true positive stays.
+
+Worth stating plainly: this is the second defect in the field-closure check
+itself, after the foreign-alias one it was written to fix. The check is small
+and mechanical and has still needed correcting twice by live output - which is
+the argument for it flagging rather than rejecting.
+
 ## Not done
 
-The four-vendor comparison is still open. This is the Daybreak Red run; the
-Anthropic and Gemini outputs have not been reviewed against these changes, and
-one of the four attempts failed and passed on a rerun — that failure has not
+**The prose fix is still unexercised by a live run.** The two later runs both
+wrote SQL-shaped pseudocode, so no bare library word ever reached the check -
+the only pseudocode carrying one (`status`) had it declared, which suppresses
+the flag for a different reason. Daybreak Red remains the only prose writer
+seen, and the fix is confirmed only by replaying its sentences.
+
+**Two runs labelled as different vendors both report
+`model_used: gemini-3.1-pro-preview`,** with the same `run_id` and the same
+`flow_map_sha256`. The identical run_id is expected - it belongs to the shared
+input projection - but the drafts differ substantially, so these are two
+generation runs whose `calls` name one model. Either an operator `use`
+selection did not reach the dispatcher, or `model_used` does not reflect the
+client that answered. Undiagnosed, and worth settling before any cross-vendor
+comparison is graded: a grade needs to know which vendor produced which output.
+
+One of the four attempts failed and passed on a rerun. That failure has not
 been diagnosed and no record of it survives here.
 
 ## Tests
 
-13 new cases; 280 in the plugin, 1827 overall. The prose cases use the live
+15 new cases; 282 in the plugin, 1829 overall. The prose cases use the live
 run's own sentences.
