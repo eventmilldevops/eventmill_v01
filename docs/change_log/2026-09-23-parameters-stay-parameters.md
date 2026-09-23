@@ -84,7 +84,19 @@ Replayed against the run: the false correction is gone and the draft stays
 `single_event`; the prose join key moves to `join_notes` while the draft stays
 `correlation`; the genuine numeric thresholds and their keys are untouched.
 
+## Status
+
+Committed at `cc2da9c`, together with the README rewrite and
+`framework/reference_data/telemetry_descriptor_glossary.md`. Branch `llm_5`,
+level with origin. Suite 1840.
+
 ## Not done
+
+**No live run against this commit.** Every measure here is verified by
+replaying recorded output and by fixtures, not by a model. That distinction has
+mattered every day this week: on four consecutive runs the thing that revealed
+the next defect was the previous fix working. The four-vendor comparison should
+be re-run against `cc2da9c` before any of it is treated as settled.
 
 Two defects in the Opus output are unaddressed and neither is caught by
 anything. One draft emitted a stray `" catalogue_status"` key — the correct

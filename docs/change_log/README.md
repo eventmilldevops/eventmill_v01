@@ -137,9 +137,27 @@ version of detection generation (decision 8,
 lineage and never refuses a map. **N3 is complete**, built in four slices:
 N3a (the flow-map join and the five completeness grades) and N3b (controls) on
 09-19, N3c (mitigations) and N3d (taxonomy) on 09-20. N2 and N3a/N3b were
-live-confirmed on Cloud Run on 09-20. Next: **N4**, the context pack's own
-schema and `metadata.kind` — not persistence, which the shell already does.
-N5, the projector's own `normalize_flow_map`, can run in parallel.
+live-confirmed on Cloud Run on 09-20.
+
+**G1a and G1b are implemented and hardened over four days of live runs**
+(09-20 to 09-23), committed at `cc2da9c`. Seven runs across Gemini, Anthropic
+and an openai-family provider; the 09-23 Opus run is the first output judged
+good enough to hand a detection engineer as a starting guide. Every defect
+found in those runs was **ours** — the prompt skeleton's placeholders, a
+candidate projection that withheld the field names it was asking the model to
+fill in, and four separate errors in the annotation checks themselves. The
+measures that came out of it are written up in the plugin README under
+*Keeping a generated record honest*, with the descriptor notation explained
+under *Descriptors: a language, not a vocabulary*.
+
+**Next: a live run against `cc2da9c`.** Nothing since the 09-23 changes has
+been exercised by a model — the pattern all week has been that each fix
+working is what exposes the next defect, so the run matters more than it
+sounds. Then **G1c** (repair) and **G1d** (the rendered workbook; PyYAML is
+still undeclared in `pyproject.toml`). **N4**, the context pack's own schema
+and `metadata.kind`, is outstanding and independent — not persistence, which
+the shell already does. N5, the projector's own `normalize_flow_map`, can run
+in parallel.
 
 | Date | Entry | What landed |
 |---|---|---|
