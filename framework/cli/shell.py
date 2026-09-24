@@ -2152,14 +2152,14 @@ class EventMillShell(cmd.Cmd):
         try:
             # Use prefix as workspace_folder override, or fall back to session's
             folder = prefix.rstrip("/") if prefix else session.workspace_folder
-            files = self.storage_resolver.list_workspace(
+            listing = self.storage_resolver.list_workspace(
                 pillar=session.active_pillar,
                 workspace_folder=folder,
                 include_common=False,
             )
             pcap_files = [
-                f for f in files
-                if any(f["filename"].lower().endswith(ext) for ext in PCAP_EXTENSIONS)
+                f for f in listing.files
+                if any(f.filename.lower().endswith(ext) for ext in PCAP_EXTENSIONS)
             ]
         except Exception as e:
             print(f"  Bucket listing failed: {e}")
@@ -2178,14 +2178,14 @@ class EventMillShell(cmd.Cmd):
         loaded = 0
 
         for i, f_info in enumerate(pcap_files, 1):
-            fname = f_info["filename"]
+            fname = f_info.filename
             print(f"  [{i}/{len(pcap_files)}] Downloading & parsing {fname}...")
             try:
                 from framework.cloud.resolver import ResolvedPath
                 resolved = ResolvedPath(
-                    bucket=f_info["bucket"],
-                    object_path=f_info["object_path"],
-                    source=f_info["source"],
+                    bucket=f_info.bucket,
+                    object_path=f_info.object_path,
+                    source=f_info.source,
                     workspace_folder=folder,
                 )
 
