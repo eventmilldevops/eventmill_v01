@@ -62,9 +62,32 @@ fi
 # ---------------------------------------------------------------------------
 # Step 1: Enable required APIs
 # ---------------------------------------------------------------------------
-echo "📡 Enabling required APIs..."
-gcloud services enable run.googleapis.com --project="${PROJECT_ID}" --quiet
-gcloud services enable cloudbuild.googleapis.com --project="${PROJECT_ID}" --quiet
+# Checked before enabling: a deploy account that only has *.get/*.list on
+# serviceusage (common once provisioning already ran once) can redeploy
+# indefinitely without ever needing serviceusage.services.enable, as long as
+# it never has to actually flip an API on. Enabling is only attempted, and
+# only fails loudly, when the API turns out not to be enabled yet.
+# ---------------------------------------------------------------------------
+echo "📡 Checking required APIs..."
+enable_api_if_needed() {
+    local api="$1"
+    if gcloud services list --enabled --project="${PROJECT_ID}" \
+        --filter="config.name=${api}" --format="value(config.name)" 2>/dev/null \
+        | grep -q "${api}"; then
+        echo "   ✓ ${api} already enabled"
+        return 0
+    fi
+    if gcloud services enable "${api}" --project="${PROJECT_ID}" --quiet 2>/dev/null; then
+        echo "   ✓ ${api} enabled"
+    else
+        echo "   ⚠ Could not confirm or enable ${api} (permission denied)."
+        echo "     Continuing on the assumption it was already enabled during provisioning."
+        echo "     If the deploy fails later with an API-disabled error, ask a project"
+        echo "     IAM admin to run: gcloud services enable ${api} --project=${PROJECT_ID}"
+    fi
+}
+enable_api_if_needed run.googleapis.com
+enable_api_if_needed cloudbuild.googleapis.com
 
 # ---------------------------------------------------------------------------
 # Step 1b: Grant Event Mill SA permission to act as default compute SA
