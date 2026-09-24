@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Detection draft",
+  "description": "A Sigma-inspired detection draft, not a claim of importable Sigma. Familiar Sigma fields keep their names; everything Event Mill adds lives under x_eventmill. Pseudocode must never masquerade as a valid Sigma condition - a later compiler can emit real rules from this.",
+  "type": "object",
+  "required": ["title", "status", "description", "logsource", "x_eventmill"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 8,
+      "description": "Begins with the source technique id where one exists, then asset and behaviour."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["experimental"],
+      "description": "Draft maturity, never catalogue coverage. v1 is always experimental."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 20,
+      "description": "The behaviour being detected and its role in this path, including whether the signal observes an attempt or an outcome."
+    },
+    "logsource": {
+      "type": "object",
+      "description": "product may be set only at component_bound grade. Otherwise use definition to describe the collection required.",
+      "properties": {
+        "product": { "type": "string" },
+        "service": { "type": "string" },
+        "category": { "type": "string" },
+        "definition": { "type": "string" }
+      }
+    },
+    "references": { "type": "array", "items": { "type": "string" } },
+    "falsepositives": { "type": "array", "items": { "type": "string" } },
+    "level": { "type": "string", "enum": ["informational", "low", "medium", "high", "critical"] },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "x_eventmill": {
+      "type": "object",
+      "required": ["format_version", "draft_id", "node", "telemetry", "detection_logic", "assessment", "catalogue_status", "validation_status"],
+      "properties": {
+        "format_version": { "type": "string" },
+        "draft_id": { "type": "string", "pattern": "^drf_[0-9a-f]{16}$" },
+        "node": {
+          "type": "object",
+          "required": ["path_id", "node_index", "technique_id"],
+          "properties": {
+            "path_id": { "type": "string" },
+            "node_index": { "type": "integer" },
+            "technique_id": { "type": "string" },
+            "technique_id_current": { "type": "string" },
+            "tactic": { "type": "string" },
+            "component_id": { "type": ["string", "null"] },
+            "asset_name": { "type": ["string", "null"] },
+            "context_completeness": { "type": "string" },
+            "telemetry_readiness": { "type": "string" },
+            "observation_medium": { "type": "string", "enum": ["network", "physical", "out_of_band"] }
+          }
+        },
+        "grounding": {
+          "type": "object",
+          "description": "Three claims kept apart: documented actor behaviour, modelled placement, detection inference.",
+          "properties": {
+            "actor_behaviour": { "type": "string" },
+            "modelled_placement": { "type": "string" },
+            "detection_inference": { "type": "string" },
+            "limitations": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "assessment": {
+          "type": "object",
+          "description": "The versioned tuple, carried through from the pack. A false actor_evidence lowers confidence and is recorded; it never excludes the node or the path.",
+          "required": ["version", "tuple"],
+          "properties": {
+            "version": { "type": "string" },
+            "tuple": { "type": "object" }
+          }
+        },
+        "telemetry": {
+          "type": "array",
+          "description": "Every source the draft depends on, drawn from the node's telemetry_candidates. A source not offered to the model may not appear here.",
+          "items": {
+            "type": "object",
+            "required": ["source_id", "necessity"],
+            "properties": {
+              "source_id": { "type": "string" },
+              "necessity": { "type": "string", "enum": ["required", "alternative", "enrichment"] },
+              "collection_status": { "type": "string", "enum": ["confirmed", "assumed", "missing", "unknown"] },
+              "required_fields": { "type": "array", "items": { "type": "string" } },
+              "prerequisites": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "events_of_interest": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["mapping_status"],
+            "properties": {
+              "event_ref": { "type": ["string", "null"] },
+              "source_id": { "type": "string" },
+              "mapping_status": { "type": "string", "enum": ["native_identifier", "description_only"] },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "detection_logic": {
+          "type": "object",
+          "required": ["kind", "pseudocode", "missing_data_behaviour"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["single_event", "threshold", "correlation", "baseline_deviation", "reconciliation"] },
+            "normalized_fields": { "type": "array", "items": { "type": "object" } },
+            "join_keys": {
+              "type": "array",
+              "description": "Field names only, one per entry. Prose about the join belongs in join_notes; relocated there after generation.",
+              "items": { "type": "string", "pattern": "^[^\\s]{1,64}$" }
+            },
+            "join_notes": {
+              "type": "array",
+              "description": "What the draft has to say about the join, including that no shared identifier exists.",
+              "items": { "type": "string" }
+            },
+            "window": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9]+_(sec|min|hour|day)$",
+              "description": "Canonical value_timeunit, e.g. 60_sec or 10_min, so a consumer splits rather than parses. Normalized after generation; a window that could not be read is kept verbatim and carries WINDOW_UNPARSED."
+            },
+            "thresholds": {
+              "type": "object",
+              "description": "Proposed and tunable starting parameters, never a universal definition of normal. Values are numbers; a value that arrives as prose is moved to threshold_notes under the same key.",
+              "additionalProperties": { "type": "number" }
+            },
+            "threshold_notes": {
+              "type": "object",
+              "description": "Per-parameter reasoning and the baseline each would need, keyed by the same name as its threshold.",
+              "additionalProperties": { "type": "string" }
+            },
+            "pseudocode": { "type": "string", "minLength": 10 },
+            "missing_data_behaviour": {
+              "type": "string",
+              "enum": ["insufficient_telemetry"],
+              "description": "Missing required data must produce insufficient_telemetry - never a silent benign evaluation and never null-as-match."
+            }
+          }
+        },
+        "assumptions": { "type": "array", "items": { "type": "string" } },
+        "caveats": {
+          "type": "array",
+          "description": "The drafting model's own short labels for what this draft cannot show. Distinct from review_flags, which is derived after validation; anything the model puts in review_flags is moved here.",
+          "items": { "type": "string" }
+        },
+        "review_flags": {
+          "type": "array",
+          "description": "Questions the draft carries into testing, not errors. Derived after validation; an empty array asserts there are none.",
+          "items": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "FIELD_DECLARED_UNUSED",
+                  "FIELD_UNDECLARED_IN_LOGIC",
+                  "FIELD_FROM_UNCITED_SOURCE",
+                  "LOGIC_KIND_CORRECTED",
+                  "LOGIC_NULL_AS_MATCH",
+                  "WINDOW_UNPARSED",
+                  "ANNOTATION_FAILED"
+                ]
+              },
+              "message": { "type": "string" }
+            }
+          }
+        },
+        "catalogue_status": { "type": "string", "enum": ["new_unchecked"] },
+        "validation_status": { "type": "string", "enum": ["draft_unvalidated"] }
+      }
+    }
+  }
+}

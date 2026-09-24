@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "node_count": { "type": "integer", "description": "Normalized node occurrences." },
+    "pair_status": { "type": "string", "description": "verified | derived | conflict | single_source." },
+    "conflict_count": { "type": "integer", "description": "Fields both documents carry that disagree after canonicalization." },
+    "identities": {
+      "type": "object",
+      "description": "The three identities of spec section 4.2a.",
+      "properties": {
+        "projection_identity": {
+          "type": "object",
+          "properties": {
+            "value": { "type": "string" },
+            "status": { "type": "string", "enum": ["verified", "derived"] }
+          }
+        },
+        "artifact_identity": { "type": "array", "items": { "type": "object" } },
+        "node_key_form": { "type": "string" }
+      }
+    },
+    "pair": {
+      "type": "object",
+      "properties": {
+        "join": { "type": "boolean" },
+        "provenance_status": { "type": "string" },
+        "pair_join": { "type": "string" },
+        "verified": { "type": "boolean" },
+        "content_conflicts": { "type": "integer" },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "flow_map_lineage": {
+      "type": ["string", "null"],
+      "enum": ["same_map", "edited_map", "unhashed", null],
+      "description": "Lineage of the supplied flow map; null when none was supplied."
+    },
+    "flow_map": {
+      "type": "object",
+      "description": "Spec section 4.2 and decision 9. Always carries supplied, export_sha256 and export_flow_map_path; when a map was supplied, also its filename, sha256, lineage, application, application_matches and the resolved and unresolved node component ids.",
+      "properties": {
+        "supplied": { "type": "boolean" },
+        "export_sha256": { "type": ["string", "null"] },
+        "export_flow_map_path": { "type": ["string", "null"] },
+        "filename": { "type": "string" },
+        "sha256": { "type": "string" },
+        "lineage": { "type": "string", "enum": ["same_map", "edited_map", "unhashed"] },
+        "application": { "type": ["string", "null"] },
+        "application_matches": { "type": "boolean" },
+        "components_resolved": { "type": "array", "items": { "type": "string" } },
+        "components_unresolved": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["supplied"]
+    },
+    "completeness": {
+      "type": "object",
+      "description": "Spec section 5: how many nodes reached each context grade, from component_bound down to unbound.",
+      "additionalProperties": { "type": "integer" }
+    },
+    "mitigation_coverage": {
+      "type": "object",
+      "description": "Stage N3c totals across every node: covered, total, how many nodes have a focus cut, and any M-ID the reference data does not carry.",
+      "properties": {
+        "covered": { "type": "integer" },
+        "total": { "type": "integer" },
+        "nodes_with_focus": { "type": "integer" },
+        "unresolved": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "taxonomy": {
+      "type": "object",
+      "description": "Stage N3d: counts of technique: and tactic: statuses against ATT&CK v19.2.",
+      "additionalProperties": { "type": "integer" }
+    },
+    "engagement": { "type": "object", "description": "Actor, application, ATT&CK version and model attribution read from provenance.model." },
+    "inventory": { "type": "object", "description": "Paths, node count and the ordered node keys." },
+    "nodes": {
+      "type": "array",
+      "description": "One entry per attack step, keyed by (projection_identity, path_id, node_index).",
+      "items": {
+        "type": "object",
+        "properties": {
+          "draft_id": { "type": "string" },
+          "path_id": { "type": "string" },
+          "node_index": { "type": "integer" },
+          "provenance_by_field": { "type": "object" },
+          "context_completeness": {
+            "type": "string",
+            "enum": ["component_bound", "component_bound_partial", "asset_named", "asset_text_only", "unbound"],
+            "description": "Stage N3a. What a later draft may claim for this node."
+          },
+          "telemetry_requirements": { "type": "array", "items": { "type": "string" } },
+          "control_catalogue": {
+            "type": "array",
+            "description": "Stage N3b, decision 10. Controls attached to this node: structurally from the flow map's component, or by control name plus the component id named in a catalogue entry's description, marked evidence 'text'.",
+            "items": { "type": "object" }
+          },
+          "mitigations_covered": {
+            "type": "array",
+            "description": "Stage N3c. mitigations minus uncovered_mitigations, each with its resolved name and technique breadth. A tagged control exists on this component, so a draft here is a tuning case.",
+            "items": { "type": "object" }
+          },
+          "mitigation_focus": {
+            "type": "array",
+            "description": "Stage N3c, section 1.4b. The one or two narrowest uncovered mitigations by technique breadth, ties broken by M-ID. Narrows what generation reasons about; never an argument that a detection should exist. Empty is ordinary.",
+            "maxItems": 2,
+            "items": { "type": "object" }
+          },
+          "mitigation_names": {
+            "type": "object",
+            "description": "M-ID to name, resolved locally from mitre_relationships.json. An id absent from the reference data is reported in mitigation_coverage.unresolved, never named.",
+            "additionalProperties": { "type": "string" }
+          },
+          "mitigation_coverage": {
+            "type": "object",
+            "description": "covered, total, unresolved, and tag_caveat: the control-tagging counts recomputed from the supplied flow map (decision 11), or null with tag_caveat_reason when no map was supplied. A null caveat never means every control is tagged.",
+            "properties": {
+              "covered": { "type": "integer" },
+              "total": { "type": "integer" },
+              "unresolved": { "type": "array", "items": { "type": "string" } },
+              "tag_caveat": { "type": ["object", "null"] },
+              "tag_caveat_reason": { "type": "string" }
+            }
+          },
+          "technique_status": {
+            "type": "string",
+            "enum": ["current", "retired_remapped", "unresolved"],
+            "description": "Stage N3d against v19.2. A remap adds technique_id_current and technique_remap_basis; the export's technique_id is never rewritten."
+          },
+          "technique_id_current": { "type": "string" },
+          "technique_remap_basis": { "type": "string", "enum": ["curated", "name"] },
+          "tactic_status": {
+            "type": "string",
+            "enum": ["as_supplied", "reconciled", "unresolved"],
+            "description": "Stage N3d. 'reconciled' carries tactic_as_supplied; 'unresolved' keeps the export value untouched."
+          },
+          "tactic_as_supplied": { "type": "string" },
+          "monitoring_claim": {
+            "type": "string",
+            "enum": ["none", "partial", "claimed"],
+            "description": "Derived from detecting_controls and detection_capability. A claim about what is watched, never coverage."
+          },
+          "input_conflicts": { "type": "array", "items": { "type": "object" } },
+          "review_flags": { "type": "array", "items": { "type": "object" } }
+        },
+        "required": ["draft_id", "path_id", "node_index", "provenance_by_field"]
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "description": "Codes from the closed catalogue of spec section 4.4.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string" },
+          "severity": { "type": "string", "enum": ["blocking", "advisory"] },
+          "location": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "required": ["code", "severity", "location", "message"]
+      }
+    },
+    "input_conflicts": { "type": "array", "items": { "type": "object" } }
+  },
+  "required": ["node_count", "nodes", "identities", "pair"]
+}

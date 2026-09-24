@@ -1,0 +1,934 @@
+{
+  "source_tool": "adversary_path_projector",
+  "status": "projected",
+  "interpretation": "Projected attack paths: not confirmed attacks, and not a likelihood assessment. An LLM placed techniques that MITRE ATT&CK documents this actor using onto the organization's own flow map, reasoning the way an adversary would. Technique ids, technique names and controls are sourced; the route, the step rationales and the access states are the model's projection. Each step's access is checked only for continuity \u2014 that an earlier step produced what the step needs \u2014 never for truth. A step that states no access falls back to a typical value for its tactic.",
+  "actor": "APT29 (G0016)",
+  "application": "Application B",
+  "provenance": {
+    "run_id": "ef9285a6-3cf7-40cc-ba46-e9975f3c3d15",
+    "run_group": "ungrouped",
+    "run_index": 1,
+    "created_at": "2026-09-17T12:35:25.469518+00:00",
+    "flow_map_path": "plugins/threat_modeling/adversary_path_projector/examples/application_b_flow_map.json",
+    "flow_map_sha256": "0187724a46f694a232b133fb960e9d7da1e28c143e1fc9152e00a5b5c9d368d3",
+    "prompt_sha256": "4ca7c2e4431c7fd746390068ad3a1678a05f3edb53620e8a089967f26b97c1a4",
+    "attack_version": "19.2",
+    "actor_attack_id": "G0016",
+    "tool_version": {
+      "manifest_version": "0.2.0",
+      "git_sha": "1c2ba74",
+      "code_id_source": "build_env"
+    },
+    "model": {
+      "provider": "gcp_gemini",
+      "vendor": "google",
+      "model_configured": "gemini-3.1-pro-preview",
+      "model_served": "gemini-3.1-pro-preview"
+    }
+  },
+  "scenarios": [
+    {
+      "path_id": "phishing-to-blob",
+      "name": "APT29 (G0016) vs Application B: phishing-to-blob",
+      "description": "Adversary compromises an end user's Okta session via phishing and MFA fatigue, then uses the resulting bearer token to access sensitive PII in Azure Blob Storage via the entry API.",
+      "source_type": "actor_projection",
+      "threat_actor_profile": "APT29 (G0016)",
+      "attack_objective": "Access and collect regulated PII data residing in Azure Blob Storage.",
+      "target_assets": [
+        "Azure Blob Storage",
+        "End users (internet, outside the network)",
+        "Entry-point API (REST + GraphQL)",
+        "Okta"
+      ],
+      "entry_vectors": [
+        "users"
+      ],
+      "security_controls": [
+        {
+          "control_id": "SC-0001",
+          "name": "WAF",
+          "control_type": "perimeter",
+          "description": "Protects Azure Front Door (front_door).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0002",
+          "name": "DDoS protection",
+          "control_type": "perimeter",
+          "description": "Protects Azure Front Door (front_door).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0003",
+          "name": "Private Link origin (Container Apps not publicly reachable)",
+          "control_type": "network",
+          "description": "Protects Azure Front Door (front_door).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0004",
+          "name": "Okta OIDC authorization code flow with PKCE",
+          "control_type": "identity",
+          "description": "Protects Application B React UI (SPA assets container) (react_ui).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0005",
+          "name": "Container Apps HTTPS ingress, Private Link from Front Door only",
+          "control_type": "perimeter",
+          "description": "Protects Application B React UI (SPA assets container) (react_ui).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0006",
+          "name": "Okta sign-on and access policies",
+          "control_type": "identity",
+          "description": "Protects Okta (okta).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0007",
+          "name": "Token lifetime and audience validation",
+          "control_type": "identity",
+          "description": "Protects Okta (okta).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0008",
+          "name": "JWT bearer validation (issuer, audience, signature)",
+          "control_type": "identity",
+          "description": "Protects Entry-point API (REST + GraphQL) (entry_api).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0009",
+          "name": "Scope and role based authorization",
+          "control_type": "application",
+          "description": "Protects Entry-point API (REST + GraphQL) (entry_api).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0010",
+          "name": "GraphQL query depth and complexity limits",
+          "control_type": "application",
+          "description": "Protects Entry-point API (REST + GraphQL) (entry_api).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0011",
+          "name": "Reachable only via Front Door Private Link origin",
+          "control_type": "network",
+          "description": "Protects Entry-point API (REST + GraphQL) (entry_api).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0012",
+          "name": "Private endpoint and firewall rules",
+          "control_type": "network",
+          "description": "Protects Azure Database for PostgreSQL (entry API) (entry_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0013",
+          "name": "TLS in transit and encryption at rest",
+          "control_type": "data",
+          "description": "Protects Azure Database for PostgreSQL (entry API) (entry_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0014",
+          "name": "Private endpoint, public network access disabled",
+          "control_type": "network",
+          "description": "Protects Azure Blob Storage (blob_storage).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0015",
+          "name": "TLS-only access",
+          "control_type": "data",
+          "description": "Protects Azure Cache for Redis (redis).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0016",
+          "name": "Private endpoint",
+          "control_type": "network",
+          "description": "Protects Azure Cache for Redis (redis).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0017",
+          "name": "Shared x-auth-token header validation",
+          "control_type": "application",
+          "description": "Protects Oracle_Int (oracle_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0018",
+          "name": "Internal-only AKS ingress reachable over Private Link",
+          "control_type": "network",
+          "description": "Protects Oracle_Int (oracle_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0019",
+          "name": "Private connectivity from Azure (ExpressRoute/VPN) and network allow-list",
+          "control_type": "network",
+          "description": "Protects Oracle database (on-premises) (oracle_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0020",
+          "name": "Shared x-auth-token header validation",
+          "control_type": "application",
+          "description": "Protects Mongo_Int (mongo_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0021",
+          "name": "Internal-only AKS ingress reachable over Private Link",
+          "control_type": "network",
+          "description": "Protects Mongo_Int (mongo_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0022",
+          "name": "Private endpoint",
+          "control_type": "network",
+          "description": "Protects Azure Cosmos DB for MongoDB (documents) (mongo_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0023",
+          "name": "Shared x-auth-token header validation",
+          "control_type": "application",
+          "description": "Protects Cosmos_Int (cosmos_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0024",
+          "name": "Internal-only AKS ingress reachable over Private Link",
+          "control_type": "network",
+          "description": "Protects Cosmos_Int (cosmos_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0025",
+          "name": "Private endpoint",
+          "control_type": "network",
+          "description": "Protects Azure Cosmos DB (events) (cosmos_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        }
+      ],
+      "attack_sequence": [
+        {
+          "event_id": "AE-0001",
+          "name": "Spearphishing Link on End users (internet, outside the network)",
+          "description": "End users accessing the SPA are targeted with malicious links to harvest their primary Okta credentials.",
+          "sequence_order": 1,
+          "target_asset": "End users (internet, outside the network)",
+          "attack_technique": "Spearphishing Link",
+          "technique_id": "T1566.002",
+          "tactic": "Initial Access",
+          "evidence": "documented",
+          "required_access": "network_reach",
+          "resulting_access": "user_credential",
+          "access_source": "model",
+          "blocking_controls": [],
+          "detecting_controls": [],
+          "success_indicators": [
+            "Attacker acquires valid Okta username and password."
+          ],
+          "precondition": "Attacker has established infrastructure to host a credential harvesting page masquerading as the application's login.",
+          "exploited_condition": "Human susceptibility to social engineering combined with the external internet exposure of the end user demographic.",
+          "assumptions": [
+            "Users can be identified via OSINT",
+            "Harvesting infrastructure is not blocked by threat intelligence feeds"
+          ],
+          "control_note": "Bypasses technical perimeter controls by targeting the human element outside the managed network.",
+          "transition": "entry point (internet-exposed)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "APT29 has used spearphishing with a link to trick victims into clicking on a link to a zip file containing malicious files.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0002",
+          "name": "Multi-Factor Authentication Request Generation on Okta",
+          "description": "APT29 uses MFA fatigue to push repeated authentication requests to the user's device until they approve it, bypassing Okta's primary access policies.",
+          "sequence_order": 2,
+          "target_asset": "Okta",
+          "attack_technique": "Multi-Factor Authentication Request Generation",
+          "technique_id": "T1621",
+          "tactic": "Credential Access",
+          "evidence": "documented",
+          "required_access": "user_credential",
+          "resulting_access": "service_credential",
+          "access_source": "model",
+          "blocking_controls": [
+            "Okta sign-on and access policies",
+            "Token lifetime and audience validation"
+          ],
+          "detecting_controls": [
+            "Okta sign-on and access policies",
+            "Token lifetime and audience validation"
+          ],
+          "success_indicators": [
+            "Attacker establishes a fully authenticated Okta session and extracts the OAuth2 OIDC bearer token."
+          ],
+          "precondition": "Attacker possesses the user's valid primary Okta credentials.",
+          "exploited_condition": "The identity provider relies on push notifications or user-approved MFA prompts which can be flooded.",
+          "assumptions": [
+            "MFA rate limiting is insufficient to stop prompt bombing",
+            "User eventually approves the request out of frustration or confusion"
+          ],
+          "control_note": "Subverts Okta MFA access policies by relying on user authorization fatigue rather than technical cryptographic bypass.",
+          "transition": "flow f1: users -> okta (https, authenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "APT29 has used repeated MFA requests to gain access to victim accounts.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0003",
+          "name": "Cloud Services on Entry-point API (REST + GraphQL)",
+          "description": "The extracted JWT is used to authenticate directly to the Spring Boot REST/GraphQL entry API over the Azure Front Door flow.",
+          "sequence_order": 3,
+          "target_asset": "Entry-point API (REST + GraphQL)",
+          "attack_technique": "Cloud Services",
+          "technique_id": "T1021.007",
+          "tactic": "Lateral Movement",
+          "evidence": "documented",
+          "required_access": "service_credential",
+          "resulting_access": "data_access",
+          "access_source": "model",
+          "blocking_controls": [
+            "JWT bearer validation (issuer, audience, signature)",
+            "Scope and role based authorization",
+            "GraphQL query depth and complexity limits",
+            "Reachable only via Front Door Private Link origin"
+          ],
+          "detecting_controls": [
+            "JWT bearer validation (issuer, audience, signature)",
+            "Scope and role based authorization",
+            "GraphQL query depth and complexity limits",
+            "Reachable only via Front Door Private Link origin"
+          ],
+          "success_indicators": [
+            "Attacker successfully invokes authenticated endpoints on the entry API."
+          ],
+          "precondition": "The attacker holds a valid, unexpired Okta JWT bearer token.",
+          "exploited_condition": "The entry API trusts the JWT issuer (Okta) and grants authorization based on the claims contained within the token.",
+          "assumptions": [
+            "Token audience validation includes the targeted entry API",
+            "Attacker traffic matches expected geographic/IP patterns if conditional access is used"
+          ],
+          "control_note": "Satisfies JWT bearer validation (issuer, audience, signature) because the token was legitimately minted by Okta.",
+          "transition": "",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "APT29 has leveraged compromised high-privileged on-premises accounts synced to Office 365 to move laterally into a cloud environment, including through the use of Azure AD PowerShell.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0004",
+          "name": "Data from Local System on Azure Blob Storage",
+          "description": "By exercising valid endpoints on the entry API, the attacker commands the API to fetch and return PII stored in the connected Azure Blob Storage.",
+          "sequence_order": 4,
+          "target_asset": "Azure Blob Storage",
+          "attack_technique": "Data from Local System",
+          "technique_id": "T1005",
+          "tactic": "Collection",
+          "evidence": "documented",
+          "required_access": "data_access",
+          "resulting_access": "data_access",
+          "access_source": "model",
+          "blocking_controls": [
+            "Private endpoint, public network access disabled"
+          ],
+          "detecting_controls": [
+            "Private endpoint, public network access disabled"
+          ],
+          "success_indicators": [
+            "Attacker reads PII data from the file store."
+          ],
+          "precondition": "The attacker has authenticated API access with a role or scope that permits data retrieval.",
+          "exploited_condition": "Blob storage implicitly trusts data retrieval commands originating from the authenticated entry API connection string.",
+          "assumptions": [
+            "The compromised user's role has permissions to request sensitive blobs via the API"
+          ],
+          "control_note": "Bypasses the private endpoint control because the request legitimately originates from the trusted internal entry_api container.",
+          "transition": "flow f6: entry_api -> blob_storage (https, authenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "APT29 has stolen data from compromised hosts.",
+          "state_check": "gap \u2014 needs data_access on blob_storage; the declared flow to it comes from entry_api, which no earlier step takes control of, so the path depends on entry_api acting for the attacker. Path holds service_credential, user_credential, data_access on entry_api"
+        }
+      ]
+    },
+    {
+      "path_id": "rce-to-oracle",
+      "name": "APT29 (G0016) vs Application B: rce-to-oracle",
+      "description": "Adversary exploits a vulnerability in the externally exposed GraphQL API to gain execution, extracts downstream authentication tokens, and moves laterally to compromise the on-premises Oracle database.",
+      "source_type": "actor_projection",
+      "threat_actor_profile": "APT29 (G0016)",
+      "attack_objective": "Achieve unauthorized access to regulated on-premises Oracle database records.",
+      "target_assets": [
+        "Azure Front Door",
+        "Entry-point API (REST + GraphQL)",
+        "Oracle database (on-premises)",
+        "Oracle_Int"
+      ],
+      "entry_vectors": [
+        "front_door"
+      ],
+      "security_controls": [
+        {
+          "control_id": "SC-0001",
+          "name": "WAF",
+          "control_type": "perimeter",
+          "description": "Protects Azure Front Door (front_door).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0002",
+          "name": "DDoS protection",
+          "control_type": "perimeter",
+          "description": "Protects Azure Front Door (front_door).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0003",
+          "name": "Private Link origin (Container Apps not publicly reachable)",
+          "control_type": "network",
+          "description": "Protects Azure Front Door (front_door).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0004",
+          "name": "Okta OIDC authorization code flow with PKCE",
+          "control_type": "identity",
+          "description": "Protects Application B React UI (SPA assets container) (react_ui).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0005",
+          "name": "Container Apps HTTPS ingress, Private Link from Front Door only",
+          "control_type": "perimeter",
+          "description": "Protects Application B React UI (SPA assets container) (react_ui).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0006",
+          "name": "Okta sign-on and access policies",
+          "control_type": "identity",
+          "description": "Protects Okta (okta).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "high"
+        },
+        {
+          "control_id": "SC-0007",
+          "name": "Token lifetime and audience validation",
+          "control_type": "identity",
+          "description": "Protects Okta (okta).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0008",
+          "name": "JWT bearer validation (issuer, audience, signature)",
+          "control_type": "identity",
+          "description": "Protects Entry-point API (REST + GraphQL) (entry_api).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0009",
+          "name": "Scope and role based authorization",
+          "control_type": "application",
+          "description": "Protects Entry-point API (REST + GraphQL) (entry_api).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0010",
+          "name": "GraphQL query depth and complexity limits",
+          "control_type": "application",
+          "description": "Protects Entry-point API (REST + GraphQL) (entry_api).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0011",
+          "name": "Reachable only via Front Door Private Link origin",
+          "control_type": "network",
+          "description": "Protects Entry-point API (REST + GraphQL) (entry_api).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0012",
+          "name": "Private endpoint and firewall rules",
+          "control_type": "network",
+          "description": "Protects Azure Database for PostgreSQL (entry API) (entry_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0013",
+          "name": "TLS in transit and encryption at rest",
+          "control_type": "data",
+          "description": "Protects Azure Database for PostgreSQL (entry API) (entry_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0014",
+          "name": "Private endpoint, public network access disabled",
+          "control_type": "network",
+          "description": "Protects Azure Blob Storage (blob_storage).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0015",
+          "name": "TLS-only access",
+          "control_type": "data",
+          "description": "Protects Azure Cache for Redis (redis).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0016",
+          "name": "Private endpoint",
+          "control_type": "network",
+          "description": "Protects Azure Cache for Redis (redis).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0017",
+          "name": "Shared x-auth-token header validation",
+          "control_type": "application",
+          "description": "Protects Oracle_Int (oracle_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0018",
+          "name": "Internal-only AKS ingress reachable over Private Link",
+          "control_type": "network",
+          "description": "Protects Oracle_Int (oracle_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0019",
+          "name": "Private connectivity from Azure (ExpressRoute/VPN) and network allow-list",
+          "control_type": "network",
+          "description": "Protects Oracle database (on-premises) (oracle_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0020",
+          "name": "Shared x-auth-token header validation",
+          "control_type": "application",
+          "description": "Protects Mongo_Int (mongo_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0021",
+          "name": "Internal-only AKS ingress reachable over Private Link",
+          "control_type": "network",
+          "description": "Protects Mongo_Int (mongo_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0022",
+          "name": "Private endpoint",
+          "control_type": "network",
+          "description": "Protects Azure Cosmos DB for MongoDB (documents) (mongo_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0023",
+          "name": "Shared x-auth-token header validation",
+          "control_type": "application",
+          "description": "Protects Cosmos_Int (cosmos_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": [],
+          "detection_capability": "low"
+        },
+        {
+          "control_id": "SC-0024",
+          "name": "Internal-only AKS ingress reachable over Private Link",
+          "control_type": "network",
+          "description": "Protects Cosmos_Int (cosmos_int).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        },
+        {
+          "control_id": "SC-0025",
+          "name": "Private endpoint",
+          "control_type": "network",
+          "description": "Protects Azure Cosmos DB (events) (cosmos_db).",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [],
+          "detection_capability": "medium"
+        }
+      ],
+      "attack_sequence": [
+        {
+          "event_id": "AE-0001",
+          "name": "Vulnerability Scanning on Azure Front Door",
+          "description": "The actor probes Azure Front Door endpoints for exploitable paths passing through to the Spring GraphQL entry API.",
+          "sequence_order": 1,
+          "target_asset": "Azure Front Door",
+          "attack_technique": "Vulnerability Scanning",
+          "technique_id": "T1595.002",
+          "tactic": "Reconnaissance",
+          "evidence": "documented",
+          "required_access": "network_reach",
+          "resulting_access": "network_reach",
+          "access_source": "model",
+          "blocking_controls": [
+            "WAF",
+            "DDoS protection",
+            "Private Link origin (Container Apps not publicly reachable)"
+          ],
+          "detecting_controls": [
+            "WAF",
+            "DDoS protection",
+            "Private Link origin (Container Apps not publicly reachable)"
+          ],
+          "success_indicators": [
+            "Identification of vulnerable GraphQL endpoints or injection flaws."
+          ],
+          "precondition": "Attacker has identified the target domain hosted on Azure Front Door.",
+          "exploited_condition": "The public internet routing of the Front Door CDN allowing unsolicited inbound HTTP requests.",
+          "assumptions": [
+            "Scanning traffic is distributed or low-and-slow to avoid WAF rate-limiting"
+          ],
+          "control_note": "Evades WAF blocking by blending scanning traffic with legitimate unauthenticated web requests.",
+          "transition": "entry point (internet-exposed)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "APT29 has conducted widespread scanning of target environments to identify vulnerabilities for exploit.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0002",
+          "name": "Exploit Public-Facing Application on Entry-point API (REST + GraphQL)",
+          "description": "Exploitation of a deserialization or injection vulnerability within the Spring Boot/GraphQL implementation via a crafted request passed through Front Door.",
+          "sequence_order": 2,
+          "target_asset": "Entry-point API (REST + GraphQL)",
+          "attack_technique": "Exploit Public-Facing Application",
+          "technique_id": "T1190",
+          "tactic": "Initial Access",
+          "evidence": "documented",
+          "required_access": "network_reach",
+          "resulting_access": "code_execution",
+          "access_source": "model",
+          "blocking_controls": [
+            "JWT bearer validation (issuer, audience, signature)",
+            "Scope and role based authorization",
+            "GraphQL query depth and complexity limits",
+            "Reachable only via Front Door Private Link origin"
+          ],
+          "detecting_controls": [
+            "JWT bearer validation (issuer, audience, signature)",
+            "Scope and role based authorization",
+            "GraphQL query depth and complexity limits",
+            "Reachable only via Front Door Private Link origin"
+          ],
+          "success_indicators": [
+            "Attacker achieves unauthorized code execution within the entry_api Docker container."
+          ],
+          "precondition": "A zero-day or unpatched vulnerability exists in the Spring framework or custom application logic.",
+          "exploited_condition": "The API's handling of complex GraphQL queries or REST payloads without sufficient input sanitization.",
+          "assumptions": [
+            "Vulnerability provides remote code execution rather than just denial of service"
+          ],
+          "control_note": "Bypasses GraphQL query depth/complexity limits by targeting the parsing engine itself rather than the query depth.",
+          "transition": "flow f3a: front_door -> entry_api (https, authenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "APT29 has exploited CVE-2019-19781 for Citrix, CVE-2019-11510 for Pulse Secure VPNs, CVE-2018-13379 for FortiGate VPNs, and CVE-2019-9670 in Zimbra software to gain access.",
+          "state_check": "gap \u2014 needs network_reach on entry_api; the declared flow to it comes from front_door, which no earlier step takes control of, so the path depends on front_door acting for the attacker. Path holds network_reach on front_door"
+        },
+        {
+          "event_id": "AE-0003",
+          "name": "Python on Entry-point API (REST + GraphQL)",
+          "description": "APT29 utilizes Python, commonly present in base Linux container images, to establish a functional reverse shell or execute subsequent scripts within the container.",
+          "sequence_order": 3,
+          "target_asset": "Entry-point API (REST + GraphQL)",
+          "attack_technique": "Python",
+          "technique_id": "T1059.006",
+          "tactic": "Execution",
+          "evidence": "documented",
+          "required_access": "code_execution",
+          "resulting_access": "code_execution",
+          "access_source": "model",
+          "blocking_controls": [
+            "JWT bearer validation (issuer, audience, signature)",
+            "Scope and role based authorization",
+            "GraphQL query depth and complexity limits",
+            "Reachable only via Front Door Private Link origin"
+          ],
+          "detecting_controls": [
+            "JWT bearer validation (issuer, audience, signature)",
+            "Scope and role based authorization",
+            "GraphQL query depth and complexity limits",
+            "Reachable only via Front Door Private Link origin"
+          ],
+          "success_indicators": [
+            "Attacker has interactive command and control or reliable script execution on the API container."
+          ],
+          "precondition": "Attacker has triggered the remote code execution vulnerability.",
+          "exploited_condition": "The presence of Python interpreters in the Docker container environment running the Spring Boot application.",
+          "assumptions": [
+            "The container image includes Python",
+            "Egress filtering allows the reverse shell connection out"
+          ],
+          "control_note": "",
+          "transition": "",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "APT29 has developed malware variants written in Python.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0004",
+          "name": "Data from Local System on Entry-point API (REST + GraphQL)",
+          "description": "The attacker dumps container environment variables and memory to collect the custom x-auth-token used for system-to-system communication.",
+          "sequence_order": 4,
+          "target_asset": "Entry-point API (REST + GraphQL)",
+          "attack_technique": "Data from Local System",
+          "technique_id": "T1005",
+          "tactic": "Collection",
+          "evidence": "documented",
+          "required_access": "code_execution",
+          "resulting_access": "service_credential",
+          "access_source": "model",
+          "blocking_controls": [
+            "JWT bearer validation (issuer, audience, signature)",
+            "Scope and role based authorization",
+            "GraphQL query depth and complexity limits",
+            "Reachable only via Front Door Private Link origin"
+          ],
+          "detecting_controls": [
+            "JWT bearer validation (issuer, audience, signature)",
+            "Scope and role based authorization",
+            "GraphQL query depth and complexity limits",
+            "Reachable only via Front Door Private Link origin"
+          ],
+          "success_indicators": [
+            "Attacker obtains the plaintext custom x-auth-token required for internal API communication."
+          ],
+          "precondition": "Attacker has code execution and shell access within the entry_api container.",
+          "exploited_condition": "Application configuration and authentication tokens are stored in accessible environment variables or Spring application properties.",
+          "assumptions": [
+            "The x-auth-token is stored in plaintext in the environment rather than a secure enclave"
+          ],
+          "control_note": "",
+          "transition": "",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "APT29 has stolen data from compromised hosts.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0005",
+          "name": "Cloud Services on Oracle_Int",
+          "description": "Using the stolen x-auth-token, the attacker moves laterally by sending authenticated requests directly to the oracle_int internal API over the AKS network.",
+          "sequence_order": 5,
+          "target_asset": "Oracle_Int",
+          "attack_technique": "Cloud Services",
+          "technique_id": "T1021.007",
+          "tactic": "Lateral Movement",
+          "evidence": "documented",
+          "required_access": "service_credential",
+          "resulting_access": "data_access",
+          "access_source": "model",
+          "blocking_controls": [
+            "Shared x-auth-token header validation",
+            "Internal-only AKS ingress reachable over Private Link"
+          ],
+          "detecting_controls": [
+            "Internal-only AKS ingress reachable over Private Link"
+          ],
+          "success_indicators": [
+            "Attacker can successfully instruct the Oracle integration API to process malicious or unauthorized queries."
+          ],
+          "precondition": "Attacker possesses the x-auth-token and network reachability from entry_api to oracle_int over Private Link.",
+          "exploited_condition": "The oracle_int API trusts any caller that presents the valid shared custom header.",
+          "assumptions": [
+            "The Private Link allows lateral requests not strictly generated by the application code"
+          ],
+          "control_note": "Satisfies the shared x-auth-token header validation by replaying the valid stolen token.",
+          "transition": "flow f8: entry_api -> oracle_int (https, authenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "APT29 has leveraged compromised high-privileged on-premises accounts synced to Office 365 to move laterally into a cloud environment, including through the use of Azure AD PowerShell.",
+          "state_check": "ok"
+        },
+        {
+          "event_id": "AE-0006",
+          "name": "Data from Local System on Oracle database (on-premises)",
+          "description": "The attacker proxies database queries through the compromised oracle_int API flow to extract regulated data from the on-premises database.",
+          "sequence_order": 6,
+          "target_asset": "Oracle database (on-premises)",
+          "attack_technique": "Data from Local System",
+          "technique_id": "T1005",
+          "tactic": "Collection",
+          "evidence": "documented",
+          "required_access": "data_access",
+          "resulting_access": "data_access",
+          "access_source": "model",
+          "blocking_controls": [
+            "Private connectivity from Azure (ExpressRoute/VPN) and network allow-list"
+          ],
+          "detecting_controls": [
+            "Private connectivity from Azure (ExpressRoute/VPN) and network allow-list"
+          ],
+          "success_indicators": [
+            "Attacker successfully queries and collects regulated on-premises data."
+          ],
+          "precondition": "Attacker has authorized access to the oracle_int API functions that interface with the database.",
+          "exploited_condition": "The on-premises database implicitly trusts the queries forwarded by the authenticated middle-tier oracle_int service via ExpressRoute.",
+          "assumptions": [
+            "The oracle_int API exposes endpoints capable of querying arbitrary or bulk records from the database"
+          ],
+          "control_note": "Overcomes the private connectivity and network allow-list controls by originating the traffic from the permitted AKS container.",
+          "transition": "flow f11: oracle_int -> oracle_db (oracle_tns, authenticated)",
+          "actor_support": "procedure_documented",
+          "procedure_excerpt": "APT29 has stolen data from compromised hosts.",
+          "state_check": "gap \u2014 needs data_access on oracle_db; the declared flow to it comes from oracle_int, which no earlier step takes control of, so the path depends on oracle_int acting for the attacker. Path holds service_credential, data_access on oracle_int"
+        }
+      ]
+    }
+  ]
+}

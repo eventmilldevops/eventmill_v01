@@ -8,11 +8,23 @@ Date: 2026-09-16. Extended 2026-09-17 with §1.4b (mitigation focus),
 corrected §4.1 provenance names, the `component_bound_partial` grade, and
 decisions 4 and 5. N1 is the next implementation step and its contract is
 now settled.
+**N1 is built** (`docs/change_log/2026-09-17-n1-adapters-and-identity.md`,
+commit `bbd4384`), with artifact-id input added the same day per decision 8.
 Corpus refreshed 2026-09-17 (later): three new projector runs replaced the
 three pre-provenance pairs. §1.1b, §4.3 3a, §5, §6, §7a and decision 6 are
-restated over the new 43-node corpus. The producer-side shape those counts
+restated over the new 43-node corpus. Decision 7 then settled the plugin shape
+— one plugin, `safe_for_auto_invoke: false`, §2 corrected — which was the last
+thing blocking N1 code. The producer-side shape those counts
 come from is described once, separately, in
 `docs/specs/projector_export_shapes.md`.
+**N2 is closed 2026-09-19** (decision 9): a flow map is an analyst-editable
+working document, so its hash records lineage and never gates enrichment; the
+§4.2 flow-map rows, §5 and the new §4.4 code catalogue are revised to match.
+**N3 is complete 2026-09-20. N4 is retired 2026-09-23, unbuilt** (decision 12):
+the pack is re-derived on every run rather than stored, and what N4 was for is
+covered by `validate_input`, `digest` and the shell's auto-persist. §2's pack
+artifact and the §6 N4 row are superseded; the remaining input-identity gap
+moves to G1d.
 
 ## 0. Which "phase 3" this addresses, and why both readings converge
 
@@ -312,15 +324,57 @@ downstream model an opportunity to restore `Defense Evasion`.
 
 ## 2. The deliverable: a normalized context pack, shipped before any guidance
 
+> **Superseded in part, 2026-09-23 (decision 12).** The normalized pack exists
+> and is shipped exactly as this section intended: free, deterministic, and
+> reviewable before any guidance. `validate_input` returns it and the shell
+> registers it. What was **not** built, and is retired, is the separate
+> `normalize_paths` action, the `detection_context_pack_*` artifact with its
+> own schema and `metadata.kind`, and a `generate_detections` input that takes
+> a pack id. Read the *Output artifact* paragraph and the pack-id route below
+> as history.
+
 Split the designer plan's Stage 1 into a standalone, LLM-free deliverable
 with its own artifact. This is what "complete the normalization" means
 concretely, and it is what lets detection guidance development start against
 a stable input instead of against two raw JSON dialects.
 
-**Action:** `normalize_paths` (deterministic, no LLM, `model_tier` irrelevant,
-`safe_for_auto_invoke: true`). Accepts the same primary sources as
-`generate_detections`: `attack_graph`, `scenario`, or a verified pair, plus
-optional `flow_map_artifact_id` and `telemetry_profile_artifact_id`.
+**Action:** `normalize_paths` (deterministic, no LLM, `model_tier` irrelevant).
+Accepts the same primary sources as `generate_detections`: `attack_graph`,
+`scenario`, or a verified pair, plus optional `flow_map_artifact_id` and
+`telemetry_profile_artifact_id`.
+
+**Where it lives.** `normalize_paths` and `generate_detections` are **two
+actions of one plugin**, and that plugin declares
+`safe_for_auto_invoke: false`. *(Corrected 2026-09-17: this section previously
+declared `normalize_paths` as `safe_for_auto_invoke: true`, which the manifest
+cannot express — the field is whole-plugin and there is no per-action form.
+Decision 7, §8.)*
+
+The action is still free, deterministic and provider-less; what changes is only
+that the **plugin** it sits in is not marked auto-invocable, because it also
+holds a heavy-tier generation call. `adversary_path_projector` already has this
+shape — `profile_actor` and `validate_flow_map` are free and deterministic
+while `project_paths` is a heavy call, and the plugin is `false`. Any
+documentation of `normalize_paths` should say it is safe and free to run, and
+should not claim the manifest says so.
+
+**Inputs are artifacts, and so are outputs.** Confirmed 2026-09-17 as the
+shape of the first working version and implemented in N1 — decision 8, §8. The
+registered artifact, not a file path, is how a projector export reaches this
+plugin:
+
+| Input | Meaning |
+|---|---|
+| `artifact_ids: [graph, seed]` | the normal route; one or two registered exports of the same run |
+| `artifact_id` | a single export, because the shell's own `artifact_id` handling speaks the singular and injects `file_path`/`path` beside it |
+| `sources: [path, path]` | file paths, for a local export that was never registered |
+
+A path is a convenience for local work. It is not the route that works in the
+container, where an export is auto-exported to a bucket and only the registry
+knows where it landed; resolution therefore goes through `context.artifacts`
+like every other plugin's. An artifact that is registered but whose bytes are
+not readable on this disk is reported as `ARTIFACT_UNAVAILABLE` naming its
+`storage_uri` — not as a missing file, and never as an empty result.
 
 **Output artifact:** `detection_context_pack_<timestamp>_<run_id>.json`,
 artifact type `json_events`, `metadata.kind:
@@ -337,9 +391,10 @@ warnings:       [ structured codes, never prose-only ]
 ```
 
 `generate_detections` then takes either a primary source (normalizing
-internally) **or** a context pack ID. Two benefits worth the extra action:
+internally) **or** a context pack ID — in both cases by artifact id, per the
+table above. Two benefits worth the extra action:
 
-- All four fixtures — 58 nodes across 15, 24, 10 and 9 — can be normalized,
+- All four fixtures — 43 nodes across 9, 11, 10 and 13 — can be normalized,
   diffed and reviewed today, with no provider configured and no cost.
 - A guidance run that produced a bad draft can be re-examined against the
   exact pack it was given, rather than re-derived.
@@ -361,8 +416,11 @@ source_event_id, source_pointer
 
 # engagement                                   + actor_attack_id split out
 actor_label, actor_attack_id, application, attack_version
-model_attribution: {provider, vendor,                            + §4.1
-                    model_configured, model_served}
+projection_model: {provider, vendor,                             + §4.1
+                   model_configured, model_served}
+                   # the projector's model, never the drafting one;
+                   # that is generation_model, from calls[].model_used.
+                   # aliased as model_attribution for existing consumers
 
 # placement
 component_id (nullable), asset_name, zone, exposure,            + zone/exposure
@@ -553,12 +611,46 @@ without it:
 | Present, `run_id` differs | `conflict` | Refuse the join; process the primary source alone and warn. |
 | Absent (legacy) | `derived` | Derive `projection_identity` per §4.2a — over run-invariant content, **not** over the document hash or filename, so graph-only and seed-only agree. Join a pair **only** if the operator passes `--accept_unverified_pair` and the derived identities are equal. Record `pair_join: asserted_by_operator`. |
 | Present in one document only | `conflict` | Refuse the join. A verified document and a legacy one are not comparable: the one `run_id` cannot be checked against anything. Process the primary source alone and warn. |
-| Flow map supplied, `flow_map_sha256` present and equal | `verified` | Enrich freely. |
-| Flow map supplied, hash present and different | `conflict` | Do not enrich. Report it as a blocking warning, as `summarize_run_group` already does at `tool.py:4180`. |
-| Flow map supplied, no hash in export | `asserted_by_operator` | Enrich, and stamp every flow-map-derived field's `provenance_by_field` entry with that status so it cannot later read as sourced fact. |
+Name-matching is never sufficient on its own to join a pair and never silently
+upgrades a pair status.
 
-Name-matching is never sufficient on its own and never silently upgrades a
-status.
+**Flow maps are recorded, not gated (decision 9, 2026-09-19).** A flow map is
+not a forensic copy. An analyst with inside knowledge is expected to copy a
+generated map and correct it, git is the recommended way to track those
+edits, and a tampered map is not a meaningful threat in this workflow. The
+export's `flow_map_sha256` therefore answers *is this the map the projection
+ran against, or something else?* — lineage — and never decides whether the map
+may be used:
+
+| Flow map supplied, compared with the export's `flow_map_sha256` | `flow_map_lineage` | Behaviour |
+|---|---|---|
+| Hash present and equal | `same_map` | Enrich. |
+| Hash present and different | `edited_map` | Enrich. Advisory `FLOW_MAP_EDITED`: the paths were reasoned against an earlier version of the estate; re-project if the edit changes topology or controls. |
+| No hash in the export | `unhashed` | Enrich. Supplying the map is the operator's assertion; no flag is required. Advisory `FLOW_MAP_UNHASHED`. |
+
+The hash cannot tell a descendant of the projected map from an unrelated one;
+both read `edited_map`. Two direct checks stand in for the integrity reading
+the hash used to be given, and both are advisory:
+
+- **Application.** The map's `application` against the export's. A difference
+  raises `FLOW_MAP_APPLICATION_MISMATCH` — the likeliest sign of the wrong
+  map, not of an edit.
+- **Component fit.** Every distinct `component_id` the nodes carry is looked up
+  in the map. One that does not resolve raises `FLOW_MAP_COMPONENT_UNRESOLVED`
+  and its nodes receive no flow-map enrichment in N3; they stay `asset_named`.
+  A renamed or removed component therefore surfaces per node, not as a
+  pass/fail on the whole map.
+
+Substantive contradictions between an edited map and the projection are
+already caught by §4.3 rule 4: the map only fills fields no export carries,
+and a disagreement is a conflict record with the export value kept. An edited
+map can add context; it cannot rewrite what the projection reasoned about.
+
+The lineage is recorded once on the result and, from N3, on every
+flow-map-derived field's `provenance_by_field` entry as `flow_map_lineage`, so
+a draft can say it rests on an edited map. This does **not** relax the pair
+rows above: the `run_id` join guards against merging two different runs into
+one context, which is an error whatever the trust model.
 
 ### 4.3 Field-level precedence
 
@@ -622,7 +714,55 @@ reference_data | derived`. Precedence when a pair is joined:
    U+2014 must raise an encoding warning rather than a content conflict.
 4. Flow map fills only fields neither export carries. It never overwrites an
    export value; a disagreement (asset name vs component name) is a conflict
-   record.
+   record. Each field it fills is stamped origin `flow_map` plus the
+   `flow_map_lineage` of §4.2.
+
+### 4.4 Warning, review-flag and error codes
+
+Closed sets, each code declared once in the plugin
+(`WARNING_CODES` and `REVIEW_FLAG_CODES` in `normalization.py`, `ERROR_CODES`
+in `tool.py`). Emitting an undeclared code is a programming error, not a new
+code. Every warning carries its severity.
+
+**Severity.** `blocking` means the output omits or downgrades something
+because of the condition — a document dropped, a node not merged, a join not
+reported verified, a component left unenriched. `advisory` means the output is
+complete and the reader should know why it may need a second look.
+
+| Warning | Severity | Raised when |
+|---|---|---|
+| `PAIR_REFUSED` | blocking | §4.2 refuses the pair; the primary document is processed alone. |
+| `PAIR_CONTENT_CONFLICT` | blocking | A shared field disagrees after canonicalization; the join is not reported verified. |
+| `NODE_ONLY_IN_SECONDARY` | blocking | A node the leading document lacks; it is not merged. |
+| `PATH_NOT_IN_BOTH` | advisory | A path present in one document of a pair only. |
+| `PATH_LENGTH_DIFFERS` | advisory | The two documents disagree on a path's length. |
+| `STATE_NOTE_ENCODING` | advisory | The `state_check` separator is not U+2014; the transport damaged it (§4.3 3a). |
+| `FLOW_MAP_EDITED` | advisory | The supplied map's hash differs from the export's (§4.2). |
+| `FLOW_MAP_UNHASHED` | advisory | The export records no flow map hash (§4.2). |
+| `FLOW_MAP_APPLICATION_MISMATCH` | advisory | The map names a different application from the export. |
+| `FLOW_MAP_COMPONENT_UNRESOLVED` | blocking | A node's `component_id` is not in the supplied map; its nodes are not enriched. |
+| `MITIGATION_UNRESOLVED` | advisory | An M-ID is not in the local reference data; it is reported, never named or ranked (§1.4b). |
+| `TACTIC_UNRESOLVED` | advisory | A tactic is not current in v19.2 and has no single successor this technique uses; the export value is kept (§1.6). |
+| `TECHNIQUE_RETIRED` | advisory | A retired technique id resolved to a current one; both are kept and the export value is not rewritten. |
+| `TECHNIQUE_UNRESOLVED` | advisory | A technique id is unknown to the v19.2 lookup and has no unambiguous successor. |
+
+| Review flag (per node) | Raised when |
+|---|---|
+| `UNDECLARED_TRANSITION` | The component changes with no declared flow. |
+| `TRANSITION_UNPARSED` | Transition prose matched no known form; kept verbatim. |
+
+| Error (the call fails) | Raised when |
+|---|---|
+| `NO_INPUT` | No export supplied. |
+| `ARTIFACT_NOT_FOUND` | An artifact id, export or flow map, is not registered in the session. |
+| `ARTIFACT_UNAVAILABLE` | Registered, but its bytes are not readable here; names the `storage_uri`. |
+| `INPUT_UNREADABLE` | An export is not readable JSON. |
+| `INPUT_UNRECOGNIZED` | An export is not a graph, seed or scenario. |
+| `FLOW_MAP_UNREADABLE` | The flow map is not readable JSON. Prose, Markdown and Mermaid maps are N5's job. |
+| `FLOW_MAP_NOT_OBJECT` | The flow map is not an object with a `components` list. |
+| `NORMALIZATION_FAILED` | Normalization raised on inputs that passed the checks above. |
+| `LLM_UNAVAILABLE` | `generate_detections` was asked for with no connected provider. |
+| `GENERATION_INCOMPLETE` | Fewer valid drafts than nodes. The partial output is returned with the coverage ledger; a partial run is never reported as success. |
 
 ---
 
@@ -637,18 +777,19 @@ product-specific detection. Grade it explicitly:
 
 | Grade | Condition | What guidance may claim |
 |---|---|---|
-| `component_bound` | Flow map **supplied, verified or operator-asserted, and joined**; component matched by ID; technologies **and** authentication both non-empty | Product-named log sources; `logsource.product` may be set |
+| `component_bound` | Flow map **supplied and joined**, whatever its lineage; component matched by ID; technologies **and** authentication both non-empty | Product-named log sources; `logsource.product` may be set |
 | `component_bound_partial` | Same, but the matched component has empty `technologies` or `authentication` | Zone, exposure and boundary facts may be used; `logsource.product` stays unset and the missing field is named in `telemetry_requirements[]` |
 | `asset_named` | Component ID present, no flow map supplied | Behaviour-level sources only; `logsource.definition` describes required collection, `product` stays unset |
 | `asset_text_only` | Scenario-only input, asset name but no component ID | Conditional design; the plan's existing rule that a guessed ID must not become a join key |
 | `unbound` | No component and no asset | Draft still produced, telemetry section is a declared gap |
 
-**A provenance hash alone does not grade a node `component_bound`.** All three
-conditions must hold independently: the operator supplied a map, its hash
-matched (or was explicitly asserted per §4.2), **and** the node's
-`component_id` resolved to a component in it. An export carrying a
-`flow_map_sha256` but run without the map is `asset_named` — the hash records
-which map *would* bind, not any binding that happened. Likewise a scenario-only
+**The hash neither grants nor withholds a grade** (decision 9). Two conditions
+must hold: the operator supplied a map, **and** the node's `component_id`
+resolved to a component in it. An export carrying a `flow_map_sha256` but run
+without the map is `asset_named` — the hash records which map the projection
+used, not any binding that happened. A map whose hash differs grades exactly
+as a matching one would; the difference is carried as `flow_map_lineage:
+edited_map` so a draft can say what it rests on. Likewise a scenario-only
 input stays `asset_text_only` no matter what provenance accompanies it, because
 it carries no `component_id` to join on.
 
@@ -666,7 +807,7 @@ Collapsing it into
 declares none; collapsing it into `asset_named` would discard a verified zone
 and boundary. It is its own grade because it permits a strict subset.
 
-`normalize_paths` reports the grade distribution. **Revised Stage 1 gate:**
+`validate_input` reports the grade distribution (this said `normalize_paths` before N4 was retired). **Revised Stage 1 gate:**
 graph-only and seed-only input produce the same node keys in the same order
 *and* a completeness grade per node, with a declared field-level diff between
 the two — not merely the same count. **Restated over the 2026-09-17 corpus:**
@@ -690,15 +831,23 @@ Normalization first and separately; guidance builds on the pack.
 | Stage | Deliverable | Acceptance gate |
 |---|---|---|
 | **N1. Adapters and identity** | Graph, seed and single-scenario adapters; the three identities of §4.2a; `(projection_identity, path_id, node_index)` keys; deterministic `draft_id`; union merge with the §4.3 precedence table including the 3a `state_check` **and `transition`** canonicalizations; `provenance_by_field` | All four fixtures normalize graph-only and seed-only to identical ordered node keys (9, 11, 10, 13 — **43** in all). All four carry provenance, so the `run_id` join is the normal path and §4.2's derived-identity path has no fixture — it is covered by the §7a synthetic pair. A repeated `(technique, component)` inside one path stays distinct on the §7 synthetic case; the three cross-path repeats in `124121` survive as distinct nodes. `AE-0001` recurring per path never collides. Every field carries an origin and pointer. No pair joins without `verified` or an explicit operator assertion. |
-| **N2. Provenance** | Projector `provenance` block (§4.1) — **built 2026-09-16**; designer-side legacy handling (§4.2); conflict codes | A graph from one run and a seed from another are refused as a pair. A flow map whose hash differs does not enrich. Every field carries an origin and pointer. |
-| **N3. Enrichment and grading** | Flow-map join, control catalogue, mitigation-name resolution, the §1.4b focus cut and coverage ratio, taxonomy reconciliation, completeness grades | `Stealth` survives against v19.2. `uncovered_mitigations` resolve to names locally. `mitigation_focus[]` is the 1–2 narrowest by technique breadth, deterministic and tie-broken by M-ID. Grades match §5 across all four fixtures with and without the flow map — 38 `component_bound`, 5 `component_bound_partial`, and 43 `asset_named` when the map is withheld. The two `TACTIC_CORRECTED` relabels in `124121` and the one in `022646` survive normalization. |
-| **N4. Context pack artifact** | `normalize_paths` action, pack schema, registration, CLI `show`/`export`, bounded `summarize_for_llm` | Pack round-trips; re-normalizing the same inputs is byte-identical apart from run ID and timestamp; the summary states counts, grades and conflicts without pasting node bodies. |
+| **N2. Provenance** — **closed 2026-09-19** | Projector `provenance` block (§4.1) — built 2026-09-16; designer-side pair handling (§4.2) — built in N1; flow-map lineage, application and component-fit checks (§4.2, decision 9); the §4.4 code catalogue | A graph from one run and a seed from another are refused as a pair. A supplied flow map is recorded as `same_map`, `edited_map` or `unhashed` and **never refused**; the four fixture exports reproduce their recorded `flow_map_sha256` from the repository maps. Every field carries an origin and pointer. Every emitted code is in §4.4. |
+| **N3. Enrichment and grading** — **complete**: N3a join and grades, N3b controls (2026-09-19), N3c mitigations, N3d taxonomy (2026-09-20) | Flow-map join, control catalogue, mitigation-name resolution, the §1.4b focus cut and coverage ratio, taxonomy reconciliation, completeness grades | `Stealth` survives against v19.2. `uncovered_mitigations` resolve to names locally. `mitigation_focus[]` is the 1–2 narrowest by technique breadth, deterministic and tie-broken by M-ID. Grades match §5 across all four fixtures with and without the flow map — 38 `component_bound`, 5 `component_bound_partial`, and 43 `asset_named` when the map is withheld. The two `TACTIC_CORRECTED` relabels in `124121` and the one in `022646` survive normalization. |
+| **N4. Context pack artifact** — **retired 2026-09-23, unbuilt** (decision 12) | `normalize_paths` action, pack schema, registration, CLI `show`/`export`, bounded `summarize_for_llm` | Superseded: registration, `show`/`export` and a bounded summary already hold for `validate_input`'s result; re-normalizing is byte-identical on all four pairs; the pack schema and `metadata.kind` have no consumer. Original gate, kept for the record: pack round-trips; re-normalizing the same inputs is byte-identical apart from run ID and timestamp; the summary states counts, grades and conflicts without pasting node bodies. Input by `artifact_ids` and output as a registered artifact are **done in N1** (decision 8); what N4 adds is the pack's own schema and `metadata.kind`, not persistence — the shell already auto-persists a result that registers nothing. |
 | **N5. `normalize_flow_map`** | The projector's own Phase 4 action | Prose/Markdown/Mermaid → canonical flow map JSON with a stable `_canonical_flow_map_hash`. An unstated control status becomes `partial` and is flagged, never `implemented` — the rule already recorded in `docs/change_log/2026-09-11-adversary-path-projector-phase-3.md`. This is what makes `component_bound` routinely reachable. |
-| **G1…** | Grounding, generation, workbook — designer plan stages 2–5, unchanged except that they consume a pack | As in the designer plan, with the node-count constants replaced by pack inventory. |
+| **G1…** — G1a telemetry join, G1b generation **built and live-run 2026-09-20**; G1c repair and G1d workbook outstanding | Grounding, generation, workbook — designer plan stages 2–5, unchanged except that they consume a pack, normalized in-process from the exports on every run | As in the designer plan, with the node-count constants replaced by pack inventory. G1d's sidecar also takes the input identity N4 would have implied (decision 12). |
 
-N1–N4 need no provider and no cost. N5 is projector work and can run in
+N1–N3 need no provider and no cost (N4 is retired). N5 is projector work and can run in
 parallel; the designer degrades to `asset_named` without it, which is a
 documented state rather than a failure.
+
+**Where N1's code lands.** One plugin directory under
+`plugins/threat_modeling/`, holding both `normalize_paths` and the later
+`generate_detections`, with `safe_for_auto_invoke: false` — decision 7, §8. The
+normalization library is plugin-local, not a `framework/` module, and nothing
+in it may be imported by another plugin. N1 may therefore create the plugin
+directory and manifest up front even though the action itself is N4; the
+adapters are ordinary modules beside `tool.py` until then.
 
 ### Corrections the designer plan needs
 
@@ -750,8 +899,12 @@ Beyond the designer plan's list, and all runnable without a provider:
   operator flag. `192507` and `022646` carry it; assert they join on `run_id`
   without the flag. Pairing one legacy document with one verified document is
   refused outright (§4.2).
-- **Flow map hash mismatch** blocks enrichment; a flow map with no hash in the
-  export marks every derived field `asserted_by_operator`.
+- **Flow map lineage** (decision 9). The repository maps reproduce each
+  fixture's `flow_map_sha256` and read `same_map`; an edited copy reads
+  `edited_map` with an advisory warning and is **not** refused; an export
+  stripped of its hash reads `unhashed` without any operator flag. A map for a
+  different application raises `FLOW_MAP_APPLICATION_MISMATCH`, and a
+  component missing from the map raises `FLOW_MAP_COMPONENT_UNRESOLVED`.
 - **All three transition shapes**, including both readings of `null`: a
   same-component step becomes `movement: in_place`, and a component change with
   no declared flow becomes `movement: undeclared` and raises a review flag.
@@ -868,7 +1021,8 @@ Decisions taken, 2026-09-16 (operator):
    of N2 landed the same day — see
    `docs/change_log/2026-09-16-projector-export-provenance.md`. Both exports
    now carry the `provenance` block of §4.1, sharing one `run_id` with the run
-   record. The designer-side legacy handling of §4.2 remains N2 work, and
+   record. The designer-side legacy handling of §4.2 was N2 work — it shipped
+   with N1's pair gating, and N2 closed 2026-09-19 under decision 9 — and
    remains necessary: the two fixtures existing at that date, `165537` and
    `204815`, predate the change and always will. The two added since carry the
    block.
@@ -937,15 +1091,200 @@ Decision taken, 2026-09-17 (operator), later the same day:
    committed under repository tests, and the path-presence skip the earlier
    decision contemplated is no longer needed.
 
-   **The first decision is still open**: where `normalize_paths` lives, given
-   that `safe_for_auto_invoke` is a whole-plugin manifest field. It still
-   belongs before the first line of N1 code.
+   The other decision is resolved separately, as decision 7 below.
 
    The cost of the refresh is recorded in §7a — the 10-step path, the
    three-path graph, the within-path repeats, the no-provenance case and the
    `git_worktree` code-identity branch all lose their real subject and become
    synthetic constructions — and the producer-side shape the new counts come
    from is `docs/specs/projector_export_shapes.md`.
+
+7. **`normalize_paths` and `generate_detections` are one plugin, declared
+   `safe_for_auto_invoke: false`.** This was the last decision blocking N1, and
+   it decides where the normalization library physically lives: inside a single
+   plugin directory, not in `framework/` and not duplicated across two plugins.
+   §2 is corrected accordingly.
+
+   **The constraint.** `safe_for_auto_invoke` is one boolean per plugin.
+   `docs/specs/manifest_schema.json` has no `actions` property and sets
+   `additionalProperties: false`; `framework/plugins/loader.py:67` reads a
+   single boolean. §2's original `safe_for_auto_invoke: true` for a single
+   action was therefore unimplementable as written.
+
+   **Why one plugin rather than two.** Decision 2 says `generate_detections`
+   accepts a raw export as well as a pack, so **both** actions need the
+   normalization library. No plugin in this repository imports another — the
+   loader imports each under a flat module name
+   (`eventmill_plugin_<pillar>_<tool>`) specifically to avoid parent-package
+   lookups, and plugins share code only through `framework.*`. A two-plugin
+   split would therefore force one of: moving detection-specific normalization
+   into `framework/` (which holds cross-cutting infrastructure — reference
+   data, LLM, documents — not one feature's logic), duplicating it, or
+   reversing decision 2 so generation only ever accepts a pack. None is worth
+   the flag.
+
+   **What it costs, stated plainly.** A free, deterministic, provider-less
+   action sits in a plugin the manifest does not mark auto-invocable, and the
+   router surfaces one catalog entry rather than two — so normalization is not
+   independently discoverable. **Today that cost is unobservable**: nothing in
+   the framework reads `safe_for_auto_invoke`. The only non-test reference in
+   the tree is the assignment in `loader.py`; routing scores on `capabilities`,
+   `tags`, `artifacts_consumed`, `chains_to` and `also_useful_in`. The field is
+   declarative intent, not a live gate.
+
+   **What was rejected, and what would reopen it.** Widening the manifest
+   schema for a per-action flag was rejected *for now*, not on principle: it is
+   a change to visibility and invoke policy, `additionalProperties: false`
+   means an unregistered field fails validation for every plugin at once, and
+   no caller reads the field yet, so there is no evidence to design it against
+   — the same reasoning that forbids widening the `stability` enum to silence
+   the validator. If `safe_for_auto_invoke` becomes a live gate and this action
+   is the case that proves per-action granularity is needed, that is when to
+   make the change, with a real caller to test it.
+
+   Precedent: `adversary_path_projector` already mixes free deterministic
+   actions (`profile_actor`, `validate_flow_map`) with a heavy-tier
+   `project_paths` under a single `safe_for_auto_invoke: false`.
+
+Decision taken, 2026-09-17 (operator), after N1 was built:
+
+8. **Artifacts are the input and output route for the first working version of
+   detection generation, through this plugin.** Registered artifacts, resolved
+   through `context.artifacts`, rather than file paths passed by hand.
+   Implemented in N1 and confirmed end to end in the running shell:
+
+   ```text
+   run attack_path_detection_designer --artifact_ids art_e2697614,art_2df55952
+     ✓ Completed successfully
+     Normalized 10 nodes across 2 paths.
+     Pair: run_id (provenance verified, verified=True).
+   ```
+
+   **Why this and not file paths.** In the container an export is auto-exported
+   to the common bucket and only the registry knows where it landed, so a path
+   is not a usable handle there. The artifact route is also what lets the chain
+   run without an operator in the middle: the projector registers its two
+   exports, the designer consumes them by id, and its own result is registered
+   in turn. `chains_from: adversary_path_projector` states that relationship
+   where the router can read it.
+
+   **What follows from it.** Three things are settled rather than open. File
+   paths stay supported but are a local convenience, not the contract. An
+   artifact that is registered but whose bytes are unreadable here is its own
+   reported condition — `ARTIFACT_UNAVAILABLE`, naming the `storage_uri` —
+   because on Cloud Run that is a real state and must not read as a missing
+   file or as an empty result. And the shell already auto-persists a result
+   that registers no artifact of its own, so a result is an artifact before N4
+   exists; N4's remaining work is the pack's schema and `metadata.kind`, not
+   persistence. *(2026-09-23: that remaining work is retired; decision 12.)* Adding the tool to `DEFAULT_AUTO_EXPORT_TOOLS` (currently only
+   `attack_path_visualizer`) is what makes a container run's output leave the
+   container.
+
+   **Untested:** whether `artifact.file_path` points at readable bytes on Cloud
+   Run. If it does not, the condition is reported precisely, but fetching from
+   the bucket would need the storage resolver, which plugins do not receive.
+   Change log `docs/change_log/2026-09-17-artifact-input-route.md`.
+
+Decision taken, 2026-09-19 (operator):
+
+9. **A flow map's hash is lineage, not an integrity gate.** The map is not a
+   forensic copy. An analyst with inside information is expected to copy a
+   generated map and correct it; git is the recommended way to track those
+   edits; and a tampered map passed around is not a meaningful risk in this
+   workflow. The 2026-09-16 rows of §4.2 — a mismatched hash refuses
+   enrichment, a missing hash needs an operator assertion — would have
+   penalised exactly that workflow, and §5 made a hash match a condition of
+   `component_bound`.
+
+   **What replaced them.** The lineage (`same_map` / `edited_map` /
+   `unhashed`) is recorded and warned on, never refused. The check the hash
+   had been standing in for — does this map fit this projection — is made
+   directly: the map's application against the export's, and every node's
+   `component_id` against the map's components. Both are advisory at the level
+   of the whole map; an unresolved component withholds enrichment from its own
+   nodes only. §4.3 rule 4 already keeps an edited map from overwriting an
+   export value.
+
+   **What it does not change.** The pair rows of §4.2. The `run_id` join
+   protects against merging two runs into one context, not against tampering,
+   and stays strict.
+
+   **Deliberately left out.** Recording the map's git commit or blob id when it
+   lives in a working tree would say *which* edit a draft rests on, not only
+   that it was edited. Not built; reopen when a reviewer needs to trace a draft
+   to a specific revision of the map.
+
+   Change log `docs/change_log/2026-09-19-n2-flow-map-lineage.md`.
+
+Decisions taken, 2026-09-19 (operator), when N3 was planned:
+
+10. **A control catalogue entry attaches to a node by component, and by name
+    plus component id when there is no map.** §1.4 assumes the seed's
+    `security_controls[]` can be read per node; nothing in the documents
+    supports that directly. A catalogue entry carries `control_id`, `name`,
+    `detection_capability` and a *description* — `"Protects CDN (cdn)."` — and
+    the graph's `controls_in_play` carries a name and no id. So:
+
+    - **With a flow map**, the join is structural and needs no matching: the
+      map's component owns its controls, with `detection_capability`,
+      `bypass_difficulty` and `mitre_mitigation_id` on each. Origin
+      `flow_map`, carrying the lineage of §4.2.
+    - **Without one**, a `controls_in_play` name is matched against catalogue
+      entries whose description names that node's `component_id` in
+      parentheses. The match is recorded `evidence: text` and may never
+      outrank the map — the same treatment §3 gives the seed's transition
+      prose. A name that matches no entry, or matches one written for another
+      component, is left unattached rather than guessed.
+
+    Name matching alone was rejected: control names repeat across components
+    (`WAF` protects two in Claims Portal), so it would attach one component's
+    `detection_capability` to another's node.
+
+11. **`mitigation_coverage.tag_caveat` is computed from the supplied flow map,
+    or is null.** §1.4b says it reproduces the projector's `control_tagging`
+    counts. **Neither export carries them** — they exist in the tool result and
+    the run record only, and one of the four pairs has no run record, so it can
+    never be a required input. The projector derives them from the map
+    (`tool.py:1824`), which the designer can do identically: controls on the
+    targeted components, and how many carry a `mitre_mitigation_id`. With no
+    map, `tag_caveat` is `null` with a stated reason; a null caveat must never
+    read as "every control is tagged". The counts are stamped with the map's
+    lineage, so an edited map yields the caveat for the estate the analyst
+    corrected.
+
+12. **N4 is retired, unbuilt (2026-09-23).** N4 was to persist the pack as its
+    own artifact behind a `normalize_paths` action, give it a schema and a
+    `metadata.kind`, and let `generate_detections` take a pack id. Each purpose
+    is met without it:
+
+    - *Review with no provider and no cost:* `validate_input` returns the full
+      pack and `digest` renders it for a person. The shell auto-persists and
+      registers the result as `json_events`, so `show` and `export` work on it
+      (decision 8 established that persistence).
+    - *Re-examine a draft against the exact pack it saw:* normalization is
+      byte-identical on repeat. All four fixture pairs, normalized twice with
+      their flow maps, gave identical JSON of 146k–205k characters, and the
+      pack carries no timestamps. So the pack is a function of the exports, the
+      supplied map, the telemetry library version and the code, and
+      re-deriving it reproduces what generation saw.
+    - *A pack as generation input:* no consumer needs it. Normalizing is free,
+      and a stored pack would be a second editable copy able to drift from the
+      exports. Decision 9 already makes the flow map the sanctioned place for
+      analyst edits.
+
+    **What is still owed.** Re-deriving needs to know which inputs a run used.
+    The generation result records `engagement.run_id`, the export's
+    `flow_map_sha256`, `prompt_version` and `telemetry_library_version`. It
+    does not record the supplied map's own hash or lineage, or the designer's
+    code identity. The designer plan's §8 step 8 already puts "input and
+    optional-context hashes" in the workbook sidecar, so this belongs to
+    **G1d**.
+
+    **Revive N4 if** something must consume a pack without the exports, such
+    as a catalogue import or a second tool. A schema and `metadata.kind` earn
+    their keep only when there is a reader. In code, `normalize_paths` moves
+    from `PLANNED_ACTIONS` to `RETIRED_ACTIONS` and is rejected with a message
+    naming `validate_input`.
 
 ## 9. Review status
 
@@ -993,3 +1332,94 @@ are dated to the retired corpus by §0, and their findings still stand even
 where their counts no longer do. Everything measured is set out once in
 `docs/specs/projector_export_shapes.md`. No code changed, no test run, no LLM
 call made in this revision.
+
+**After N1, 2026-09-17.** The claims in decision 8 were checked in the code
+before being written: `do_run`'s `artifact_id` handling and its injection of
+`file_path`/`path` (`framework/cli/shell.py:2925-2932`), the auto-persistence
+of a result that registers nothing (`shell.py:3105-3110`), the auto-export
+gate and its `DEFAULT_AUTO_EXPORT_TOOLS` default of `attack_path_visualizer`
+(`shell.py:932`, `1061-1072`), and `context.artifacts` as the only artifact
+handle a plugin receives (`framework/plugins/protocol.py:256-287`). The shell
+transcript quoted there is a real run against two registered fixtures. Suite
+1597 passing.
+
+**Decision 7, 2026-09-17 (later still).** Before recommending a plugin shape,
+four things were read rather than recalled: `manifest_schema.json` (38
+top-level properties, no `actions`, `additionalProperties: false`);
+`framework/plugins/loader.py:67`; a tree-wide search for `auto_invoke`, which
+returns only that assignment outside tests and the `build/` copy; and the
+routing modules' manifest field usage (`capabilities`, `tags`,
+`artifacts_consumed`, `chains_to`, `also_useful_in` — the flag is not among
+them). Cross-plugin imports were checked for and do not exist: plugins import
+shared code only from `framework.*`. The projector's own manifest was read for
+the precedent. §2 and §6 were then corrected and decision 7 recorded. **N1 is
+now unblocked.** Still no code changed, no test run, no LLM call made.
+
+**N2, 2026-09-19.** Decision 9 came from the operator; everything built on it
+was checked first. The projector's `_canonical_flow_map_hash`
+(`adversary_path_projector/tool.py:467`) was read and its serialisation
+compared with the designer's `canonical_json`; the three repository maps were
+then hashed and matched the `flow_map_sha256` recorded in all eight fixture
+documents, which is now a test. The application names and component ids of
+the three maps were read against the four exports before the fit checks were
+written. The §4.4 catalogue was taken from every code the module actually
+emitted, not written first. `framework/cli/shell.py` `_plugin_input_schema`
+was read to confirm the shell takes its flags from the input schema. Suite
+1597 → 1635. No shell run and no LLM call.
+
+**N3a and N3b, 2026-09-19.** The §5 gate was recomputed from the four fixtures
+and the three repository maps before the grading code existed — 38 / 5 with the
+map, 43 `asset_named` without, 43 `asset_text_only` seed-only — and the five
+partial components identified (`users`, `front_door`, `claims_db`,
+`doc_store`). Decisions 10 and 11 came from reading the documents rather than
+the spec: the seed's `security_controls[]` entries were checked for a component
+key and have none but the parenthesised id in their description, the graph's
+`controls_in_play` for an id and has none, the Claims Portal map for a repeated
+control name (`WAF`, on two components), and both exports for `control_tagging`,
+which is absent from each. `mitre_attack.py` was checked for the taxonomy
+helpers N3d will use, and the corpus's mitigation coverage recomputed at 6 of
+169 with no unresolvable M-ID. Suite 1635 → 1652.
+
+**Live run, 2026-09-20 (operator, Cloud Run).** A fresh projection and two
+designer runs confirmed the N2 lineage record and the N3a/N3b join on real
+artifacts: `asset_named 11` without the map, `component_bound 11` with it,
+`same_map`, 8 of 8 components resolving, 0 conflicts. The exported pack was
+verified against the flow map and the v19.2 lookup — component pointers, flow
+ports, crown jewels, an empty control list that is the map's own, and the
+covered mitigations matching the tagged controls. Two findings beyond the
+test: **`artifact.file_path` is readable in the container** for same-session
+artifacts, closing the question decision 8 left open, and a live projection
+produced a **three-path** graph, a shape §7a records as having no fixture.
+Test steps 7-10 — edited map, wrong map, error paths, cross-run refusal — are
+not yet run.
+
+**G1a and G1b, 2026-09-20 (live).** `generate_detections` ran against
+`gcp_gemini` and completed: one valid draft per node, every `draft_id`
+matched. Five live runs found five defects, every one in this repository's code
+or prompt rather than in the model - a crash on reply shape, loyalty telemetry
+sources leaking onto a telemetry SaaS warehouse (which validation would have
+*accepted*), a contract that named required keys without their shapes, and
+`logsource.product` filled with an Event Mill `source_id` instead of a vendor
+name. All fixed, each with tests. The scripted tests passed throughout, because
+the same author wrote both sides of them. Suite 1705 → 1757. No draft has been
+evaluated against real telemetry.
+
+**N3c and N3d, 2026-09-20.** Both of this document's independent mitigation
+figures were reproduced by the code rather than assumed: the §7 focus cut on
+`022646` / `web-exploit-to-db` step 1 is M1016 (breadth 5) then M1048 (14)
+with M1026 (112) excluded, and the corpus reads 6 covered of 169. Every node
+of all four pairs grades `technique:current` and `tactic:as_supplied` against
+v19.2, so §1.6's claim that the exports are already correct holds on the
+current corpus; `Stealth` is present and `Defense Evasion` appears nowhere.
+`control_tagging` was confirmed absent from both export payloads before
+decision 11's recomputation was written, and the recomputed counts on the
+telemetry map are 8 controls, 7 tagged, `ci_runner` with none. Retired-id,
+unknown-id, retired-tactic, unknown-tactic and unknown-M-ID cases are
+synthetic, because the corpus contains none. Suite 1652 → 1668. **N3 is
+complete; N4 is next.** No shell run for this slice.
+
+**N4 retired, 2026-09-23.** Decision 12. Determinism was checked before the
+decision rather than assumed: each of the four fixture pairs was normalized
+twice with its flow map and the JSON compared, and all four were identical.
+Code change limited to the action catalogue (`RETIRED_ACTIONS`), docstrings,
+the input schema's description and two contract tests.

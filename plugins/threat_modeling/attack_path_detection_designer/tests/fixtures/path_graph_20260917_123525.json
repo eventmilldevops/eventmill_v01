@@ -1,0 +1,681 @@
+{
+  "source_tool": "adversary_path_projector",
+  "status": "projected",
+  "interpretation": "Projected attack paths: not confirmed attacks, and not a likelihood assessment. An LLM placed techniques that MITRE ATT&CK documents this actor using onto the organization's own flow map, reasoning the way an adversary would. Technique ids, technique names and controls are sourced; the route, the step rationales and the access states are the model's projection. Each step's access is checked only for continuity \u2014 that an earlier step produced what the step needs \u2014 never for truth. A step that states no access falls back to a typical value for its tactic.",
+  "actor": "APT29 (G0016)",
+  "application": "Application B",
+  "provenance": {
+    "run_id": "ef9285a6-3cf7-40cc-ba46-e9975f3c3d15",
+    "run_group": "ungrouped",
+    "run_index": 1,
+    "created_at": "2026-09-17T12:35:25.469518+00:00",
+    "flow_map_path": "plugins/threat_modeling/adversary_path_projector/examples/application_b_flow_map.json",
+    "flow_map_sha256": "0187724a46f694a232b133fb960e9d7da1e28c143e1fc9152e00a5b5c9d368d3",
+    "prompt_sha256": "4ca7c2e4431c7fd746390068ad3a1678a05f3edb53620e8a089967f26b97c1a4",
+    "attack_version": "19.2",
+    "actor_attack_id": "G0016",
+    "tool_version": {
+      "manifest_version": "0.2.0",
+      "git_sha": "1c2ba74",
+      "code_id_source": "build_env"
+    },
+    "model": {
+      "provider": "gcp_gemini",
+      "vendor": "google",
+      "model_configured": "gemini-3.1-pro-preview",
+      "model_served": "gemini-3.1-pro-preview"
+    }
+  },
+  "mitre_mappings": [
+    {
+      "technique_id": "T1005",
+      "technique_name": "Data from Local System",
+      "tactic": "Collection",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1021.007",
+      "technique_name": "Cloud Services",
+      "tactic": "Lateral Movement",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1059.006",
+      "technique_name": "Python",
+      "tactic": "Execution",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1190",
+      "technique_name": "Exploit Public-Facing Application",
+      "tactic": "Initial Access",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1566.002",
+      "technique_name": "Spearphishing Link",
+      "tactic": "Initial Access",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1595.002",
+      "technique_name": "Vulnerability Scanning",
+      "tactic": "Reconnaissance",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1621",
+      "technique_name": "Multi-Factor Authentication Request Generation",
+      "tactic": "Credential Access",
+      "confidence": "high"
+    }
+  ],
+  "attack_graph": {
+    "paths": [
+      {
+        "path_id": "phishing-to-blob",
+        "description": "Adversary compromises an end user's Okta session via phishing and MFA fatigue, then uses the resulting bearer token to access sensitive PII in Azure Blob Storage via the entry API.",
+        "objective": "Access and collect regulated PII data residing in Azure Blob Storage.",
+        "steps": [
+          {
+            "technique_id": "T1566.002",
+            "technique_name": "Spearphishing Link",
+            "tactic": "Initial Access",
+            "component_id": "users",
+            "asset": "End users (internet, outside the network)",
+            "evidence": "documented",
+            "rationale": "End users accessing the SPA are targeted with malicious links to harvest their primary Okta credentials.",
+            "leads_to": [
+              "T1621"
+            ],
+            "mitigations": [
+              "M1017",
+              "M1018",
+              "M1021",
+              "M1047",
+              "M1054"
+            ],
+            "uncovered_mitigations": [
+              "M1017",
+              "M1018",
+              "M1021",
+              "M1047",
+              "M1054"
+            ],
+            "notes": [],
+            "precondition": "Attacker has established infrastructure to host a credential harvesting page masquerading as the application's login.",
+            "access_before": "network_reach",
+            "exploited_condition": "Human susceptibility to social engineering combined with the external internet exposure of the end user demographic.",
+            "result": "Attacker acquires valid Okta username and password.",
+            "access_after": "user_credential",
+            "assumptions": [
+              "Users can be identified via OSINT",
+              "Harvesting infrastructure is not blocked by threat intelligence feeds"
+            ],
+            "control_note": "Bypasses technical perimeter controls by targeting the human element outside the managed network.",
+            "transition": {
+              "entry": true,
+              "exposure": "internet"
+            },
+            "controls_in_play": [],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "APT29 has used spearphishing with a link to trick victims into clicking on a link to a zip file containing malicious files.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1621",
+            "technique_name": "Multi-Factor Authentication Request Generation",
+            "tactic": "Credential Access",
+            "component_id": "okta",
+            "asset": "Okta",
+            "evidence": "documented",
+            "rationale": "APT29 uses MFA fatigue to push repeated authentication requests to the user's device until they approve it, bypassing Okta's primary access policies.",
+            "leads_to": [
+              "T1021.007"
+            ],
+            "mitigations": [
+              "M1017",
+              "M1032",
+              "M1036"
+            ],
+            "uncovered_mitigations": [
+              "M1017",
+              "M1032",
+              "M1036"
+            ],
+            "notes": [],
+            "precondition": "Attacker possesses the user's valid primary Okta credentials.",
+            "access_before": "user_credential",
+            "exploited_condition": "The identity provider relies on push notifications or user-approved MFA prompts which can be flooded.",
+            "result": "Attacker establishes a fully authenticated Okta session and extracts the OAuth2 OIDC bearer token.",
+            "access_after": "service_credential",
+            "assumptions": [
+              "MFA rate limiting is insufficient to stop prompt bombing",
+              "User eventually approves the request out of frustration or confusion"
+            ],
+            "control_note": "Subverts Okta MFA access policies by relying on user authorization fatigue rather than technical cryptographic bypass.",
+            "transition": {
+              "flow": "f1",
+              "from": "users",
+              "to": "okta",
+              "protocol": "https",
+              "authenticated": true,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [
+              {
+                "name": "Okta sign-on and access policies",
+                "control_type": "identity",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Token lifetime and audience validation",
+                "control_type": "identity",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "APT29 has used repeated MFA requests to gain access to victim accounts.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1021.007",
+            "technique_name": "Cloud Services",
+            "tactic": "Lateral Movement",
+            "component_id": "entry_api",
+            "asset": "Entry-point API (REST + GraphQL)",
+            "evidence": "documented",
+            "rationale": "The extracted JWT is used to authenticate directly to the Spring Boot REST/GraphQL entry API over the Azure Front Door flow.",
+            "leads_to": [
+              "T1005"
+            ],
+            "mitigations": [
+              "M1026",
+              "M1032"
+            ],
+            "uncovered_mitigations": [
+              "M1026",
+              "M1032"
+            ],
+            "notes": [
+              "no declared flow from 'okta' to 'entry_api'"
+            ],
+            "precondition": "The attacker holds a valid, unexpired Okta JWT bearer token.",
+            "access_before": "service_credential",
+            "exploited_condition": "The entry API trusts the JWT issuer (Okta) and grants authorization based on the claims contained within the token.",
+            "result": "Attacker successfully invokes authenticated endpoints on the entry API.",
+            "access_after": "data_access",
+            "assumptions": [
+              "Token audience validation includes the targeted entry API",
+              "Attacker traffic matches expected geographic/IP patterns if conditional access is used"
+            ],
+            "control_note": "Satisfies JWT bearer validation (issuer, audience, signature) because the token was legitimately minted by Okta.",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "JWT bearer validation (issuer, audience, signature)",
+                "control_type": "identity",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Scope and role based authorization",
+                "control_type": "application",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "GraphQL query depth and complexity limits",
+                "control_type": "application",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Reachable only via Front Door Private Link origin",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "APT29 has leveraged compromised high-privileged on-premises accounts synced to Office 365 to move laterally into a cloud environment, including through the use of Azure AD PowerShell.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1005",
+            "technique_name": "Data from Local System",
+            "tactic": "Collection",
+            "component_id": "blob_storage",
+            "asset": "Azure Blob Storage",
+            "evidence": "documented",
+            "rationale": "By exercising valid endpoints on the entry API, the attacker commands the API to fetch and return PII stored in the connected Azure Blob Storage.",
+            "leads_to": [],
+            "mitigations": [
+              "M1057"
+            ],
+            "uncovered_mitigations": [
+              "M1057"
+            ],
+            "notes": [
+              "state gap: needs data_access on blob_storage; the declared flow to it comes from entry_api, which no earlier step takes control of, so the path depends on entry_api acting for the attacker. Path holds service_credential, user_credential, data_access on entry_api"
+            ],
+            "precondition": "The attacker has authenticated API access with a role or scope that permits data retrieval.",
+            "access_before": "data_access",
+            "exploited_condition": "Blob storage implicitly trusts data retrieval commands originating from the authenticated entry API connection string.",
+            "result": "Attacker reads PII data from the file store.",
+            "access_after": "data_access",
+            "assumptions": [
+              "The compromised user's role has permissions to request sensitive blobs via the API"
+            ],
+            "control_note": "Bypasses the private endpoint control because the request legitimately originates from the trusted internal entry_api container.",
+            "transition": {
+              "flow": "f6",
+              "from": "entry_api",
+              "to": "blob_storage",
+              "protocol": "https",
+              "authenticated": true,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [
+              {
+                "name": "Private endpoint, public network access disabled",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "APT29 has stolen data from compromised hosts.",
+            "state_check": "gap",
+            "state_note": "needs data_access on blob_storage; the declared flow to it comes from entry_api, which no earlier step takes control of, so the path depends on entry_api acting for the attacker. Path holds service_credential, user_credential, data_access on entry_api"
+          }
+        ]
+      },
+      {
+        "path_id": "rce-to-oracle",
+        "description": "Adversary exploits a vulnerability in the externally exposed GraphQL API to gain execution, extracts downstream authentication tokens, and moves laterally to compromise the on-premises Oracle database.",
+        "objective": "Achieve unauthorized access to regulated on-premises Oracle database records.",
+        "steps": [
+          {
+            "technique_id": "T1595.002",
+            "technique_name": "Vulnerability Scanning",
+            "tactic": "Reconnaissance",
+            "component_id": "front_door",
+            "asset": "Azure Front Door",
+            "evidence": "documented",
+            "rationale": "The actor probes Azure Front Door endpoints for exploitable paths passing through to the Spring GraphQL entry API.",
+            "leads_to": [
+              "T1190"
+            ],
+            "mitigations": [
+              "M1056"
+            ],
+            "uncovered_mitigations": [
+              "M1056"
+            ],
+            "notes": [],
+            "precondition": "Attacker has identified the target domain hosted on Azure Front Door.",
+            "access_before": "network_reach",
+            "exploited_condition": "The public internet routing of the Front Door CDN allowing unsolicited inbound HTTP requests.",
+            "result": "Identification of vulnerable GraphQL endpoints or injection flaws.",
+            "access_after": "network_reach",
+            "assumptions": [
+              "Scanning traffic is distributed or low-and-slow to avoid WAF rate-limiting"
+            ],
+            "control_note": "Evades WAF blocking by blending scanning traffic with legitimate unauthenticated web requests.",
+            "transition": {
+              "entry": true,
+              "exposure": "internet"
+            },
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "DDoS protection",
+                "control_type": "perimeter",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Private Link origin (Container Apps not publicly reachable)",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "APT29 has conducted widespread scanning of target environments to identify vulnerabilities for exploit.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1190",
+            "technique_name": "Exploit Public-Facing Application",
+            "tactic": "Initial Access",
+            "component_id": "entry_api",
+            "asset": "Entry-point API (REST + GraphQL)",
+            "evidence": "documented",
+            "rationale": "Exploitation of a deserialization or injection vulnerability within the Spring Boot/GraphQL implementation via a crafted request passed through Front Door.",
+            "leads_to": [
+              "T1059.006"
+            ],
+            "mitigations": [
+              "M1016",
+              "M1026",
+              "M1030",
+              "M1035",
+              "M1037",
+              "M1048",
+              "M1050",
+              "M1051"
+            ],
+            "uncovered_mitigations": [
+              "M1016",
+              "M1026",
+              "M1030",
+              "M1035",
+              "M1037",
+              "M1048",
+              "M1050",
+              "M1051"
+            ],
+            "notes": [
+              "Initial Access after the first step, but access was already gained upstream",
+              "state gap: needs network_reach on entry_api; the declared flow to it comes from front_door, which no earlier step takes control of, so the path depends on front_door acting for the attacker. Path holds network_reach on front_door"
+            ],
+            "precondition": "A zero-day or unpatched vulnerability exists in the Spring framework or custom application logic.",
+            "access_before": "network_reach",
+            "exploited_condition": "The API's handling of complex GraphQL queries or REST payloads without sufficient input sanitization.",
+            "result": "Attacker achieves unauthorized code execution within the entry_api Docker container.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "Vulnerability provides remote code execution rather than just denial of service"
+            ],
+            "control_note": "Bypasses GraphQL query depth/complexity limits by targeting the parsing engine itself rather than the query depth.",
+            "transition": {
+              "flow": "f3a",
+              "from": "front_door",
+              "to": "entry_api",
+              "protocol": "https",
+              "authenticated": true,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [
+              {
+                "name": "JWT bearer validation (issuer, audience, signature)",
+                "control_type": "identity",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Scope and role based authorization",
+                "control_type": "application",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "GraphQL query depth and complexity limits",
+                "control_type": "application",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Reachable only via Front Door Private Link origin",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "APT29 has exploited CVE-2019-19781 for Citrix, CVE-2019-11510 for Pulse Secure VPNs, CVE-2018-13379 for FortiGate VPNs, and CVE-2019-9670 in Zimbra software to gain access.",
+            "state_check": "gap",
+            "state_note": "needs network_reach on entry_api; the declared flow to it comes from front_door, which no earlier step takes control of, so the path depends on front_door acting for the attacker. Path holds network_reach on front_door"
+          },
+          {
+            "technique_id": "T1059.006",
+            "technique_name": "Python",
+            "tactic": "Execution",
+            "component_id": "entry_api",
+            "asset": "Entry-point API (REST + GraphQL)",
+            "evidence": "documented",
+            "rationale": "APT29 utilizes Python, commonly present in base Linux container images, to establish a functional reverse shell or execute subsequent scripts within the container.",
+            "leads_to": [
+              "T1005"
+            ],
+            "mitigations": [
+              "M1033",
+              "M1038",
+              "M1047",
+              "M1049"
+            ],
+            "uncovered_mitigations": [
+              "M1033",
+              "M1038",
+              "M1047",
+              "M1049"
+            ],
+            "notes": [],
+            "precondition": "Attacker has triggered the remote code execution vulnerability.",
+            "access_before": "code_execution",
+            "exploited_condition": "The presence of Python interpreters in the Docker container environment running the Spring Boot application.",
+            "result": "Attacker has interactive command and control or reliable script execution on the API container.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "The container image includes Python",
+              "Egress filtering allows the reverse shell connection out"
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "JWT bearer validation (issuer, audience, signature)",
+                "control_type": "identity",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Scope and role based authorization",
+                "control_type": "application",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "GraphQL query depth and complexity limits",
+                "control_type": "application",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Reachable only via Front Door Private Link origin",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "APT29 has developed malware variants written in Python.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1005",
+            "technique_name": "Data from Local System",
+            "tactic": "Collection",
+            "component_id": "entry_api",
+            "asset": "Entry-point API (REST + GraphQL)",
+            "evidence": "documented",
+            "rationale": "The attacker dumps container environment variables and memory to collect the custom x-auth-token used for system-to-system communication.",
+            "leads_to": [
+              "T1021.007"
+            ],
+            "mitigations": [
+              "M1057"
+            ],
+            "uncovered_mitigations": [
+              "M1057"
+            ],
+            "notes": [],
+            "precondition": "Attacker has code execution and shell access within the entry_api container.",
+            "access_before": "code_execution",
+            "exploited_condition": "Application configuration and authentication tokens are stored in accessible environment variables or Spring application properties.",
+            "result": "Attacker obtains the plaintext custom x-auth-token required for internal API communication.",
+            "access_after": "service_credential",
+            "assumptions": [
+              "The x-auth-token is stored in plaintext in the environment rather than a secure enclave"
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "JWT bearer validation (issuer, audience, signature)",
+                "control_type": "identity",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Scope and role based authorization",
+                "control_type": "application",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "GraphQL query depth and complexity limits",
+                "control_type": "application",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Reachable only via Front Door Private Link origin",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "APT29 has stolen data from compromised hosts.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1021.007",
+            "technique_name": "Cloud Services",
+            "tactic": "Lateral Movement",
+            "component_id": "oracle_int",
+            "asset": "Oracle_Int",
+            "evidence": "documented",
+            "rationale": "Using the stolen x-auth-token, the attacker moves laterally by sending authenticated requests directly to the oracle_int internal API over the AKS network.",
+            "leads_to": [
+              "T1005"
+            ],
+            "mitigations": [
+              "M1026",
+              "M1032"
+            ],
+            "uncovered_mitigations": [
+              "M1026",
+              "M1032"
+            ],
+            "notes": [],
+            "precondition": "Attacker possesses the x-auth-token and network reachability from entry_api to oracle_int over Private Link.",
+            "access_before": "service_credential",
+            "exploited_condition": "The oracle_int API trusts any caller that presents the valid shared custom header.",
+            "result": "Attacker can successfully instruct the Oracle integration API to process malicious or unauthorized queries.",
+            "access_after": "data_access",
+            "assumptions": [
+              "The Private Link allows lateral requests not strictly generated by the application code"
+            ],
+            "control_note": "Satisfies the shared x-auth-token header validation by replaying the valid stolen token.",
+            "transition": {
+              "flow": "f8",
+              "from": "entry_api",
+              "to": "oracle_int",
+              "protocol": "https",
+              "authenticated": true,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [
+              {
+                "name": "Shared x-auth-token header validation",
+                "control_type": "application",
+                "status": "implemented",
+                "on": "component"
+              },
+              {
+                "name": "Internal-only AKS ingress reachable over Private Link",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "APT29 has leveraged compromised high-privileged on-premises accounts synced to Office 365 to move laterally into a cloud environment, including through the use of Azure AD PowerShell.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1005",
+            "technique_name": "Data from Local System",
+            "tactic": "Collection",
+            "component_id": "oracle_db",
+            "asset": "Oracle database (on-premises)",
+            "evidence": "documented",
+            "rationale": "The attacker proxies database queries through the compromised oracle_int API flow to extract regulated data from the on-premises database.",
+            "leads_to": [],
+            "mitigations": [
+              "M1057"
+            ],
+            "uncovered_mitigations": [
+              "M1057"
+            ],
+            "notes": [
+              "state gap: needs data_access on oracle_db; the declared flow to it comes from oracle_int, which no earlier step takes control of, so the path depends on oracle_int acting for the attacker. Path holds service_credential, data_access on oracle_int"
+            ],
+            "precondition": "Attacker has authorized access to the oracle_int API functions that interface with the database.",
+            "access_before": "data_access",
+            "exploited_condition": "The on-premises database implicitly trusts the queries forwarded by the authenticated middle-tier oracle_int service via ExpressRoute.",
+            "result": "Attacker successfully queries and collects regulated on-premises data.",
+            "access_after": "data_access",
+            "assumptions": [
+              "The oracle_int API exposes endpoints capable of querying arbitrary or bulk records from the database"
+            ],
+            "control_note": "Overcomes the private connectivity and network allow-list controls by originating the traffic from the permitted AKS container.",
+            "transition": {
+              "flow": "f11",
+              "from": "oracle_int",
+              "to": "oracle_db",
+              "protocol": "oracle_tns",
+              "authenticated": true,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [
+              {
+                "name": "Private connectivity from Azure (ExpressRoute/VPN) and network allow-list",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "APT29 has stolen data from compromised hosts.",
+            "state_check": "gap",
+            "state_note": "needs data_access on oracle_db; the declared flow to it comes from oracle_int, which no earlier step takes control of, so the path depends on oracle_int acting for the attacker. Path holds service_credential, data_access on oracle_int"
+          }
+        ]
+      }
+    ],
+    "convergence_points": [
+      "T1021.007",
+      "T1005"
+    ],
+    "branch_points": []
+  }
+}

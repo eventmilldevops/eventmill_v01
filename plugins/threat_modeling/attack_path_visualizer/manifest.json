@@ -4,7 +4,7 @@
   "pillar": "threat_modeling",
   "display_name": "Attack Path Visualizer",
   "description_short": "Generate ASCII art, Mermaid diagrams, and compact flow visualizations of attack paths.",
-  "description_long": "Renders attack path data from risk assessments or threat models into visual formats: detailed ASCII art box-and-arrow diagrams with control effectiveness bars, Mermaid flowcharts for markdown/GitHub rendering with color-coded protection status, compact single-line flow diagrams, and control coverage matrices. Accepts structured stage data with controls, gaps, and MITRE ATT&CK technique IDs.",
+  "description_long": "Renders attack paths as Mermaid flowcharts, ASCII box-and-arrow chains or a compact one-line flow. Reads an adversary_path_projector path graph or a threat_intel_ingester json_events artifact by artifact_id, or inline stages. On a path graph, nodes are keyed by technique and tactic and are component-blind: component, controls, step state and the detection designer's assessment are not drawn, so the picture orients a reader and is not the record. Inline stages are the one route that draws controls, gaps and a control coverage matrix. No LLM.",
   "author": "Event Mill Contributors",
   "entry_point": "tool.py",
   "class_name": "AttackPathVisualizer",
@@ -27,5 +27,5 @@
   "stability": "stable",
   "tags": ["visualization", "ascii", "mermaid", "attack_path", "diagram", "controls"],
   "chains_to": [],
-  "chains_from": ["threat_model_analyzer", "risk_assessment_analyzer"]
+  "chains_from": ["adversary_path_projector", "threat_intel_ingester", "threat_model_analyzer", "risk_assessment_analyzer"]
 }

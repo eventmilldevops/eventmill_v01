@@ -81,6 +81,9 @@ and still required for `gcloud builds submit`, which cannot read the file.
 
 ## Deploy Commands
 
+For a new project, complete [GCP provisioning](#gcp-project-provisioning-first-time-only)
+and [provider and secret setup](#secret-manager-setup) before deploying.
+
 ### Production deploy (Secret Manager — recommended)
 
 ```bash
@@ -96,11 +99,18 @@ bash cloud_install/deploy-cloudrun-secrets.sh
 source ~/.eventmill/deploy.env
 export GEMINI_FLASH_API_KEY="your-flash-key"
 export GEMINI_PRO_API_KEY="your-pro-key"
+export ANTHROPIC_API_KEY="your-anthropic-key"
+export OPENAI_API_KEY="your-openai-key"
+export EVENTMILL_LLM_PROVIDERS="gcp_gemini anthropic openai"
 export TTYD_USERNAME="admin"
 export TTYD_PASSWORD="changeme"
 cd ~/eventmill_v01
 bash cloud_install/deploy-cloudrun.sh
 ```
+
+The example enables all three providers. Omit key exports for providers you do
+not use; at least one provider needs a real key. For production, use the hidden
+input and Secret Manager workflow below instead of placing keys in commands.
 
 ### CI/CD via Cloud Build
 
@@ -122,6 +132,7 @@ Substitutions:
 |---|---|---|
 | `_REGION` | **none — required** | Cloud Run region. Must match the region you provisioned in; the build fails fast if unset rather than guessing. |
 | `_BUCKET_PREFIX` | `${PROJECT_ID}-eventmill` | GCS bucket prefix — must match provisioned buckets |
+| `_LLM_PROVIDERS` | `gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue` | Space-separated provider IDs. Set to `gcp_gemini anthropic openai` for the three-provider setup in this guide. |
 
 Cloud Build cannot read `~/.eventmill/deploy.env`, so `_REGION` has to be passed
 explicitly here even though the shell scripts pick it up automatically. When
@@ -151,15 +162,17 @@ export EVENTMILL_BUCKET_PREFIX="your-prefix"   # optional; derived if unset
 # 1. Provision APIs, service account, buckets, Artifact Registry, secret entries
 bash cloud_install/provision-gcp-project.sh
 
-# 2. Set real secret values (interactive prompts, nothing in shell history)
-bash cloud_install/provision-secrets.sh
+# 2. Follow "Secret Manager Setup" below to obtain and store provider keys
+#    and set the ttyd credentials before deploying.
 ```
 
 This creates everything the project needs: APIs enabled (including
 `apikeys.googleapis.com` for key creation and `logging.googleapis.com` for
 audit logging), a dedicated service account with least-privilege IAM roles,
 GCS buckets (per-pillar + common) with lifecycle rules, Artifact Registry,
-and Secret Manager entries for dual Gemini API keys.
+and Secret Manager entries for Gemini, Anthropic, OpenAI, optional Daybreak,
+and ttyd credentials. Provisioning creates secret entries; follow
+[Secret Manager Setup](#secret-manager-setup) to supply usable credentials.
 
 Provisioning is the **only** place IAM is written. The deploy scripts merely
 verify, so the deploy path needs no `*.setIamPolicy` permission and can run
@@ -171,33 +184,29 @@ deploy scripts both read that file automatically on subsequent runs.
 
 ## LLM Models
 
-The deployed service binds two model tiers, configured declaratively in
-`framework/llm/providers/gcp_gemini.json`:
+The Cloud Run image already installs the SDKs for **Google Gemini, Anthropic
+Claude, and OpenAI**. No separate provider package installation is needed.
+Setup consists of obtaining API keys, storing them in Secret Manager, deploying,
+and selecting a provider in the Event Mill shell.
 
-| Tier | Model | Used for |
-|------|-------|----------|
-| light | `gemini-3.8-flash` | Bulk work — log pattern summarization, per-chunk IOC extraction, report chunking |
-| heavy | `gemini-3.1-pro-preview` | Deep reasoning — threat modeling, risk assessment, cross-document synthesis, `ask:` |
+Each provider has light and heavy tiers. The manifests are the source of truth
+for this checkout's configured models, limits, and capabilities:
 
-Both accept 1,048,576 input and 65,536 output tokens, so the tier is a choice
-about reasoning depth and cost, never about how much fits. Each plugin declares
-its default tier as `model_tier` in its manifest; a plugin can override per call.
+| Provider ID | Manifest | Credentials used by Event Mill |
+|---|---|---|
+| `gcp_gemini` | [gcp_gemini.json](../framework/llm/providers/gcp_gemini.json) | `GEMINI_FLASH_API_KEY` for light; `GEMINI_PRO_API_KEY` for heavy |
+| `anthropic` | [anthropic.json](../framework/llm/providers/anthropic.json) | `ANTHROPIC_API_KEY` for both tiers |
+| `openai` | [openai.json](../framework/llm/providers/openai.json) | `OPENAI_API_KEY` for both tiers |
 
-Keys are separate per tier so high-volume light-tier traffic cannot exhaust the
-heavy tier's quota. If one tier is exhausted, the dispatcher falls back to the
-other and says so in the log.
+Light is generally used for bulk extraction and summarization; heavy for threat
+modeling, synthesis, and `ask:`. Each plugin declares its default `model_tier`.
+Limits and document support vary by provider. Confirm your account can access
+the configured models using the probes below. Automatic fallback stays within
+the selected provider; it never silently sends work to another vendor.
 
-> The heavy tier is pinned to a **Preview** endpoint, which Google may retire
-> with roughly two weeks' notice. If it starts returning `NOT_FOUND`, the
-> dispatcher automatically retries against the tier's declared fallback and logs
-> the substitution. To pin a different model without a code change, set
-> `EVENTMILL_MODEL_HEAVY`.
-
-> The light tier also declares a fallback, for a different reason: 3.8 Flash's
-> id and token caps have not yet been confirmed against the live API, so a
-> wrong id lands on `gemini-3.5-flash` instead of failing the call. If you
-> repoint it with `EVENTMILL_MODEL_LIGHT`, set `EVENTMILL_MAX_OUTPUT_LIGHT`
-> too — the output cap otherwise still comes from the manifest.
+Event Mill uses separate Gemini key variables for its two tiers. Separate keys
+in the same project do **not** create independent quotas: Google's
+[rate limits apply per project](https://ai.google.dev/gemini-api/docs/rate-limits).
 
 ## Storage Architecture
 
@@ -293,53 +302,155 @@ gcloud projects add-iam-policy-binding ${GOOGLE_CLOUD_PROJECT} \
 
 ## Secret Manager Setup
 
-`provision-secrets.sh` handles this automatically — it creates restricted
-Gemini API keys via `gcloud services api-keys create` and stores them in
-Secret Manager. To manage secrets manually:
+### 1. Obtain API keys
+
+You need API access and sufficient billing/credits for each provider you intend
+to use. GCP authentication gives the deploy scripts access to cloud resources;
+it does not supply Anthropic or OpenAI API credentials.
+
+- **Gemini:** create keys for your project in Google AI Studio following
+  [Google's API key guide](https://ai.google.dev/gemini-api/docs/api-key).
+  Store a key for each of Event Mill's light and heavy tier secrets below.
+- **Anthropic:** in the Claude Console, open **Settings → API keys** and
+  create a key for the intended workspace. Event Mill uses that key for both
+  tiers. See [Anthropic authentication](https://platform.claude.com/docs/en/manage-claude/authentication).
+- **OpenAI:** create an API key in the OpenAI developer dashboard for the
+  intended project, following the [OpenAI quickstart](https://developers.openai.com/api/docs/quickstart).
+  Event Mill uses that key for both tiers.
+
+### 2. Store credentials in Secret Manager
+
+Run `provision-gcp-project.sh` first so the entries and IAM grants exist.
+These are the default mappings:
+
+| Provider / purpose | Secret Manager name | Container environment variable |
+|---|---|---|
+| Gemini light | `eventmill-gemini-flash-api` | `GEMINI_FLASH_API_KEY` |
+| Gemini heavy | `eventmill-gemini-pro-api` | `GEMINI_PRO_API_KEY` |
+| Anthropic, both tiers | `eventmill-anthropic-api` | `ANTHROPIC_API_KEY` |
+| OpenAI, both tiers | `eventmill-openai-api` | `OPENAI_API_KEY` |
+| Terminal username | `eventmill-ttyd-user` | `TTYD_USERNAME` |
+| Terminal password | `eventmill-ttyd-cred` | `TTYD_PASSWORD` |
+
+The interactive helper is available on the Linux deploy server:
 
 ```bash
-# Dual Gemini API keys (restricted to generativelanguage.googleapis.com)
-# Display names match the OS env vars for traceability:
-#   GEMINI_FLASH_API_KEY  →  eventmill-gemini-flash-api
-#   GEMINI_PRO_API_KEY    →  eventmill-gemini-pro-api
-
-# Anthropic / OpenAI keys — issued in those vendors' own consoles, so there is
-# no `gcloud services api-keys create` equivalent. One key per provider: neither
-# vendor splits keys by tier the way the Gemini pair does.
-#   ANTHROPIC_API_KEY     ->  eventmill-anthropic-api
-#   OPENAI_API_KEY        ->  eventmill-openai-api
-
-# ttyd basic auth credentials
-echo -n "analyst" | gcloud secrets versions add eventmill-ttyd-user --data-file=-
-echo -n "strong-password" | gcloud secrets versions add eventmill-ttyd-cred --data-file=-
+cd ~/eventmill_v01
+source ~/.eventmill/deploy.env
+export GOOGLE_CLOUD_PROJECT
+bash cloud_install/provision-secrets.sh
 ```
 
-### Why two secrets hold `placeholder`
+The helper attempts to create restricted Gemini keys first. It then asks
+whether to update Anthropic and OpenAI: answer `y` and paste the corresponding
+key at each hidden prompt. Answer `n` for providers you do not use. Skip the
+optional Daybreak credential unless you have separate access, and skip the GCS
+service-account JSON prompt for Cloud Run's workload identity setup. Set both
+ttyd credentials to real values.
 
-`eventmill-anthropic-api` and `eventmill-openai-api` are provisioned, IAM-bound
-and mounted for **every** deployment, holding `placeholder` until someone adopts
-that vendor. The build and the deploy are then identical for every project, and
-adopting a provider later is a new secret version plus a restart — no
-infrastructure change, no rebuild, no different deploy path.
+**Gemini helper limitation:** it currently creates standard Google API keys via
+`gcloud services api-keys create`. Google's [key migration guidance](https://ai.google.dev/gemini-api/docs/api-key)
+announces rejection of standard keys in September 2026. For a new installation,
+use AI Studio's current key creation flow and the manual entry method below.
+The helper also uses fixed secret names and does not load `deploy.env` itself;
+use the manual method for custom secret names or to configure only OpenAI or
+Anthropic without running its Gemini creation steps.
 
-`EVENTMILL_LLM_PROVIDERS` names the ones a session may bind, and every deploy
-path defaults it to all three. A provider whose key is absent or still holds
-`placeholder` is skipped at startup and reported as dormant, so naming all
-three costs nothing — and leaving one out would mean a vendor with a real key
-in Secret Manager never binds, with no error to show for it.
+Run this Bash function on the deploy server, then call it for each credential
+you want to set. Values are entered without echoing or putting them in shell
+history. Replace names if you use custom secrets.
 
-Step 4 of the deploy therefore checks the **values**, not the list: it reports
-each dormant secret, and blocks only if ttyd would deploy with the password
-`placeholder` or if no LLM provider holds a real key at all.
+```bash
+source ~/.eventmill/deploy.env
+store_eventmill_secret() {
+    local secret_value
+    read -r -s -p "Value for $1: " secret_value
+    printf '\n'
+    if [ -z "$secret_value" ]; then
+        printf 'Empty value; nothing saved.\n' >&2
+        return 1
+    fi
+    printf '%s' "$secret_value" | gcloud secrets versions add "$1" \
+        --project="${GOOGLE_CLOUD_PROJECT}" --data-file=-
+}
 
-**A mounted key is not automatically a bound provider — but a real one now is.**
-`connect` walks every provider named in `EVENTMILL_LLM_PROVIDERS` (all three by
-default) and binds each tier whose key holds a real value, so a genuine
-Anthropic key in Secret Manager appears in `models` and can be selected with
-`use anthropic for <tool>`. A key that is absent or still `placeholder` is
-skipped and reported. `providers` shows the whole picture; `providers probe
-<id>` proves a key reaches its vendor and works even before adoption. See
-`docs/specs/multi_provider_llm_clients.md`.
+store_eventmill_secret eventmill-gemini-flash-api
+store_eventmill_secret eventmill-gemini-pro-api
+store_eventmill_secret eventmill-anthropic-api
+store_eventmill_secret eventmill-openai-api
+store_eventmill_secret eventmill-ttyd-user
+store_eventmill_secret eventmill-ttyd-cred
+```
+
+Call only the provider entries you intend to use; always set the ttyd pair.
+Unused provider secrets may retain `placeholder`. Keep the provisioned entries:
+the deployment mounts them even when the provider is dormant. At least one LLM
+provider needs a real key. A non-placeholder value is not proof of API access;
+verify it after deployment.
+
+### 3. Enable providers and deploy
+
+For the three providers covered here, add this line to `~/.eventmill/deploy.env`:
+
+```bash
+export EVENTMILL_LLM_PROVIDERS="gcp_gemini anthropic openai"
+```
+
+If an older config lists only `gcp_gemini`, update it or the other providers will
+not bind. The scripts' built-in default also includes `openai_daybreak_red` and
+`openai_daybreak_blue`; those are optional OpenAI profiles using a separate
+credential, not requirements for the standard `openai` provider. Cloud Build
+uses `_LLM_PROVIDERS` instead of reading this file.
+
+```bash
+source ~/.eventmill/deploy.env
+cd ~/eventmill_v01
+bash cloud_install/deploy-cloudrun-secrets.sh
+```
+
+Use the same sequence after adding or rotating a key. A new secret version does
+not update the environment of an already-running container; redeploy and open
+a new terminal session. The normal deploy script rebuilds the image as part of
+its workflow, although changing a key requires no application code changes.
+
+### 4. Verify and select providers
+
+Open the deployed URL and sign in with your ttyd credentials. Run the following
+inside the **Event Mill shell**, not in Bash:
+
+```text
+providers
+connect
+models
+providers probe gcp_gemini
+providers probe anthropic
+providers probe openai
+```
+
+Probe only the providers you configured. `connect` constructs clients without
+making API calls; each probe performs model discovery and a small completion
+request, which can incur usage charges. Check that both tiers succeed.
+
+Choose a session default or override one tool:
+
+```text
+use openai
+use anthropic for threat_model_analyzer
+use gcp_gemini for threat_report_analyzer
+use
+```
+
+Selections last for the current session. `ask:` follows the session default;
+per-tool overrides apply to that tool only.
+
+| Symptom | Check |
+|---|---|
+| Provider is dormant or missing from `models` | Its key is missing or `placeholder`, its ID is absent from `EVENTMILL_LLM_PROVIDERS`, or the session predates the redeployment. |
+| `connect` succeeds but a probe fails | Read the probe error; check key validity, API billing/credits, permissions, and access to the manifest's models. |
+| Secret is missing or access is denied during deployment | Run project provisioning and check the configured secret name and runtime service account's access. |
+
+See the [multi-provider design](../docs/specs/multi_provider_llm_clients.md)
+for routing details.
 
 ### GCS Access (Workload Identity)
 
@@ -386,13 +497,17 @@ deleting them.
 
 ## Local Image Testing (on deploy server)
 
-Before running, set at minimum:
+For a local test with all three providers, set the following. Omit unused
+provider key exports; at least one provider needs a real key.
 
 ```bash
 export GOOGLE_CLOUD_PROJECT="your-project-id"
 export EVENTMILL_BUCKET_PREFIX="${GOOGLE_CLOUD_PROJECT}-eventmill"   # default — matches provision-gcp-project.sh
 export GEMINI_FLASH_API_KEY="your-flash-key"
 export GEMINI_PRO_API_KEY="your-pro-key"
+export ANTHROPIC_API_KEY="your-anthropic-key"
+export OPENAI_API_KEY="your-openai-key"
+export EVENTMILL_LLM_PROVIDERS="gcp_gemini anthropic openai"
 export TTYD_USERNAME="admin"
 export TTYD_PASSWORD="changeme"
 ```
@@ -430,7 +545,7 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | `EVENTMILL_BUCKET_PREFIX` | No | Bucket naming prefix — must match `provision-gcp-project.sh` (default: `${GOOGLE_CLOUD_PROJECT}-eventmill`) |
 | `CLOUD_RUN_REGION` | **Yes** | Deploy region. No default — must match the region you provisioned in, because the Artifact Registry image path embeds it. Every script refuses to guess. |
 | `GCS_LOG_BUCKET` | No | Legacy single-bucket override — leave empty for new deployments |
-| `EVENTMILL_LLM_PROVIDERS` | No | Space-separated providers a session may bind (default: **all three**). One whose key is absent or `placeholder` is skipped at startup and reported as dormant, so this normally needs no change. An unknown id is refused, not ignored |
+| `EVENTMILL_LLM_PROVIDERS` | No | Space-separated provider IDs. Script default: `gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue`. This guide explicitly selects the first three. Missing or `placeholder` keys stay dormant; unknown IDs are refused. |
 | `EVENTMILL_SECRET_GEMINI_FLASH` | No | Secret Manager name for Flash API key (default: `eventmill-gemini-flash-api`) |
 | `EVENTMILL_SECRET_GEMINI_PRO` | No | Secret Manager name for Pro API key (default: `eventmill-gemini-pro-api`) |
 | `EVENTMILL_SECRET_ANTHROPIC` | No | Secret Manager name for the Anthropic API key (default: `eventmill-anthropic-api`) |
@@ -447,7 +562,7 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | `GEMINI_PRO_API_KEY` | Gemini Pro API key — heavy tier (injected from Secret Manager) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (injected from Secret Manager; `placeholder` until adopted) |
 | `OPENAI_API_KEY` | OpenAI API key (injected from Secret Manager; `placeholder` until adopted) |
-| `EVENTMILL_LLM_PROVIDERS` | Providers this deployment may bind (all three by default; unkeyed ones stay dormant) |
+| `EVENTMILL_LLM_PROVIDERS` | Providers this deployment may bind; script defaults include the three standard providers and two optional Daybreak profiles. Unkeyed providers stay dormant. |
 | `TTYD_USERNAME` | ttyd basic auth username |
 | `TTYD_PASSWORD` | ttyd basic auth password |
 | `EVENTMILL_BUCKET_PREFIX` | Bucket prefix for pillar-based storage resolution |
