@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
+
+if TYPE_CHECKING:
+    from framework.llm.providers import OutputLimits
 
 
 # ---------------------------------------------------------------------------
@@ -236,13 +239,29 @@ class LLMQueryInterface(Protocol):
         ...
     
     def supports_native_document(self, mime_type: str) -> bool:
-        """Check if any connected model handles this MIME type natively.
-        
+        """Check if the provider serving this execution ingests a MIME type natively.
+
         Args:
             mime_type: MIME type to check (e.g. "application/pdf").
-        
+
         Returns:
-            True if at least one connected model supports native ingestion.
+            True if a connected tier of that provider supports native
+            ingestion. Another bound vendor's support does not count, because
+            a query is never routed across providers.
+        """
+        ...
+
+    def output_limits(
+        self, tier: str | None = None, thinking_level: str | None = None,
+    ) -> OutputLimits:
+        """Output cap and thinking reserve of the provider serving this execution.
+
+        Size replies from this rather than from a provider manifest read
+        directly: the plugin does not know which vendor the operator chose.
+
+        Args:
+            tier: "light" or "heavy"; defaults to the manifest's model_tier.
+            thinking_level: The level the call will request.
         """
         ...
 

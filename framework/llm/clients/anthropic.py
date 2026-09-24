@@ -16,22 +16,23 @@ than assumed (2026-09-13):
 * Thinking tokens are output tokens and come out of ``max_tokens``, exactly as
   on Gemini. A reply sized against the full cap gets cut off mid-record.
 
-Text only for now. ``query_multimodal`` and ``query_with_document`` return a
-declared failure rather than a wrong answer: the estate's two document modules
-stay on Gemini and nothing anywhere consumes multimodal, so implementing them
-against an untested path would be speculative. Stage 4 of
-docs/specs/multi_provider_llm_clients.md picks them up.
+Documents are sent inline as a base64 ``document`` block, never through the
+Files API, whose uploads are retained until deleted. Page cost does not vary
+with media_resolution here, so that hint is not mapped. ``query_multimodal``
+still returns a declared failure rather than a wrong answer: nothing anywhere
+consumes it.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import time
 from typing import Any
 
 from ...plugins.protocol import LLMResponse, QueryHints
-from ..backends.base import DocumentPart
+from ..backends.base import DocumentPart, DocumentUnavailable
 from ..model_client import PROBE_PROMPT, LLMProbeResult, compose_prompt
 from ..providers import load_tier_specs, ping_budget
 
@@ -385,7 +386,17 @@ class AnthropicClient:
             "Anthropic query: %d chars prompt, max_tokens=%d, effort=%s",
             len(full_prompt), max_tokens, effort or "default",
         )
+        return self._send(request)
 
+    def _send(
+        self, request: dict[str, Any], transport_path: str | None = None,
+    ) -> LLMResponse:
+        """Make one Messages API call and read the result.
+
+        Shared by the text and document paths, so a document reply is judged
+        by exactly the same refusal and truncation rules as text.
+        """
+        max_tokens = request["max_tokens"]
         try:
             if max_tokens > self._stream_threshold():
                 # A large non-streaming reply can outlive the HTTP timeout.
@@ -424,6 +435,7 @@ class AnthropicClient:
             model_used=self.model_id,
             model_version=getattr(message, "model", None),
             provider_id=self.provider_id,
+            transport_path=transport_path,
             token_usage=usage,
             finish_reason=stop,
             truncated=stop == "max_tokens",
@@ -458,18 +470,52 @@ class AnthropicClient:
         max_tokens: int = 8192,
         hints: QueryHints | None = None,
     ) -> LLMResponse:
-        """Not implemented for this provider yet.
+        """Send a document inline, with the prompt, as one user turn.
 
-        The model reads PDFs natively, but this provider cannot read a GCS URI
-        and the framework does not yet materialise bytes for a client that
-        lacks the remote_uri_gs capability. Both document modules stay on
-        Gemini until Stage 4 adds it.
+        Always an inline base64 source, never a Files API upload: an upload is
+        retained until deleted, and this is incident data. This provider
+        cannot read a GCS URI, so the dispatcher hands over bytes already
+        read; a part with only a file path is read here as a fallback.
+
+        Grounding data arrives folded into prompt by the dispatcher.
         """
-        return self._failure(
-            "query_with_document is not implemented for the anthropic provider "
-            "(needs dispatcher-side byte materialisation; see Stage 4)",
-            "bad_request",
+        if not self._connected or self._sdk_client is None:
+            return self._failure("Anthropic session not established", "access")
+
+        try:
+            data = doc.read_bytes(allow_remote=False)
+        except DocumentUnavailable as e:
+            return self._failure(str(e), "bad_request")
+
+        request: dict[str, Any] = {
+            "model": self.model_id,
+            "max_tokens": max_tokens,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": doc.mime_type,
+                            "data": base64.b64encode(data).decode("ascii"),
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        }
+        if system_context:
+            request["system"] = system_context
+        effort = _effort(hints)
+        if effort:
+            request["output_config"] = {"effort": effort}
+
+        logger.debug(
+            "Anthropic document query: %s, %d bytes, max_tokens=%d, effort=%s",
+            doc.mime_type, len(data), max_tokens, effort or "default",
         )
+        return self._send(request, transport_path="inline_bytes")
 
 
 __all__ = ["AnthropicClient", "PROVIDER_ID"]

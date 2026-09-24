@@ -115,7 +115,8 @@ parameter to the plugin at all.
 vendor** for model ids, token limits, per-tier capabilities and PDF page cost. Do
 not hardcode any of those elsewhere, and **never read one provider's limits for
 another** — Anthropic's output cap is 128,000 against Gemini's 65,536, and its
-PDF limits are 100 pages / 32 MB against 1000 / 50 MB. Each client reads its own.
+PDF limits are 250 pages / 24 MB at ~2400 tokens a page against Gemini's 1000 /
+50 MB at 560. Each client reads its own.
 
 Within a provider the two tiers are **capacity-identical** (Gemini: 1,048,576 in
 / 65,536 out). Tier means reasoning depth and cost, never how much fits — any

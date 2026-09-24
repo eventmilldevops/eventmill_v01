@@ -33,7 +33,7 @@ from framework.documents import (
     profile_document,
     split_pdf,
 )
-from framework.llm.providers import max_output_tokens_for_tier, thinking_reserve_tokens
+from framework.llm.providers import OutputLimits, output_limits
 from framework.plugins.protocol import ArtifactRef, QueryHints, ToolResult, ValidationResult
 from framework.reference_data.mitre_attack import LEGACY_TACTIC_ALIASES
 from framework.reference_data.mitre_attack import TACTIC_ORDER as _TACTIC_SEQUENCE
@@ -357,22 +357,39 @@ _NATIVE_CALL_DEADLINE_S: float = 180.0
 _NATIVE_MAX_EXTRA_CALLS: int = 8
 
 
-def _native_max_output_tokens() -> int:
+def _native_limits(llm_query: Any = None) -> OutputLimits:
+    """Cap and thinking reserve of the provider serving this execution.
+
+    Asked of the LLM handle, because only the framework knows which vendor the
+    operator chose. Both figures used to be read from the default provider's
+    manifest whatever was selected, so a run on OpenAI was sized with
+    Gemini's numbers. A handle that cannot answer (a test fake, or no LLM)
+    gets the default provider's figures, which is what every run used before.
+    """
+    ask = getattr(llm_query, "output_limits", None)
+    if ask is not None:
+        try:
+            limits = ask(_native_tier(), _NATIVE_THINKING_LEVEL)
+        except Exception:  # noqa: BLE001 - sizing must never fail the run
+            limits = None
+        if isinstance(limits, OutputLimits):
+            return limits
+    return output_limits(_native_tier(), _NATIVE_THINKING_LEVEL)
+
+
+def _native_max_output_tokens(llm_query: Any = None) -> int:
     """What one native call may emit — the tier's real cap, not a guess."""
-    return max_output_tokens_for_tier(_native_tier())
+    return _native_limits(llm_query).max_output_tokens
 
 
-def _native_content_budget() -> int:
+def _native_content_budget(llm_query: Any = None) -> int:
     """Of that cap, how much can go to JSON once thinking has taken its share.
 
     Sizing batches against the full cap is what truncated replies mid-record:
     the model spends thinking tokens first and the answer is cut off with no
     error from the provider.
     """
-    return max(
-        1,
-        _native_max_output_tokens() - thinking_reserve_tokens(_NATIVE_THINKING_LEVEL),
-    )
+    return _native_limits(llm_query).content_budget
 
 
 def _latency_model() -> LatencyModel:
@@ -597,13 +614,16 @@ def _build_profile(
     page_texts: list[str],
     page_iocs: list[list[RawIOC]],
     raw_iocs: list[RawIOC],
+    content_budget: int | None = None,
 ):
     """Framework DocumentProfile plus the plugin's by-type breakdown dict."""
     doc_profile = profile_document(
         artifact_type=artifact_type,
         page_chars=[len(t) for t in page_texts] or [0],
         page_candidates=[len(p) for p in page_iocs] or [0],
-        max_output_tokens=_native_content_budget(),
+        max_output_tokens=(
+            content_budget if content_budget is not None else _native_content_budget()
+        ),
     )
     by_type: dict[str, int] = {}
     for ioc in raw_iocs:
@@ -2285,9 +2305,14 @@ class ThreatIntelIngester:
         logger.info("Regex pass found %d IOC candidates", len(raw_iocs))
 
         # --- Document profile: what are we about to send to the model? ---
+        # Sized against the provider this execution will actually use, once.
+        limits = _native_limits(
+            context.llm_query if context.llm_enabled else None
+        )
         page_iocs = _page_iocs(page_texts, ioc_types)
         doc_profile, profile = _build_profile(
-            artifact.artifact_type, page_texts, page_iocs, raw_iocs
+            artifact.artifact_type, page_texts, page_iocs, raw_iocs,
+            content_budget=limits.content_budget,
         )
         logger.info(
             "[PROFILE] %s: %d page(s), %d chars, %d candidates (%s), "
@@ -2306,7 +2331,7 @@ class ThreatIntelIngester:
                 "~%d usable per call, of a %d-token cap less the %s-thinking "
                 "reserve)%s",
                 profile["candidates"], profile["estimated_output_tokens"],
-                _native_content_budget(), _native_max_output_tokens(),
+                limits.content_budget, limits.max_output_tokens,
                 _NATIVE_THINKING_LEVEL,
                 " — too much for one call, so it is split below."
                 if profile["exceeds_single_call_output"] else ".",
@@ -2322,8 +2347,8 @@ class ThreatIntelIngester:
         plan = plan_ingestion(
             doc_profile,
             native_available=native_capable,
-            max_output_tokens=_native_max_output_tokens(),
-            output_reserve_tokens=thinking_reserve_tokens(_NATIVE_THINKING_LEVEL),
+            max_output_tokens=limits.max_output_tokens,
+            output_reserve_tokens=limits.thinking_reserve_tokens,
             call_deadline_s=_NATIVE_CALL_DEADLINE_S,
             latency=_latency_model(),
         )
@@ -2439,7 +2464,7 @@ class ThreatIntelIngester:
             # --- Native PDF path: whole document, or page-range batches ---
             native_pdf_succeeded = False
             if native_capable and plan.strategy in ("native", "native_batched"):
-                native_cap = _native_max_output_tokens()
+                native_cap = limits.max_output_tokens
                 latency = _latency_model()
                 page_candidate_counts = [len(pg) for pg in page_iocs]
                 sub_paths: dict[str, str] = {}

@@ -123,6 +123,60 @@ class TestBudgetHelper:
             )
 
 
+class TestBudgetFollowsTheServingProvider:
+    """The figures come from the LLM handle, which knows the operator's
+    provider. They used to be read from the default provider's manifest, so a
+    run on OpenAI was sized with Gemini's cap."""
+
+    @dataclass
+    class _Scoped:
+        limits: Any
+        asked: list = field(default_factory=list)
+
+        def output_limits(self, tier=None, thinking_level=None):
+            self.asked.append((tier, thinking_level))
+            return self.limits
+
+    def test_the_handles_figures_are_used(self):
+        from framework.llm.providers import OutputLimits
+
+        # A cap above the default provider's: only the handle can supply it.
+        handle = self._Scoped(OutputLimits(200_000, 10))
+        assert max_output_tokens_for_tier("heavy") < 100_010
+        assert _tool_mod._budget("heavy", "high", 100_000, handle) == 100_010
+        assert handle.asked == [("heavy", "high")]
+
+    def test_a_handle_that_cannot_answer_gets_the_default_figures(self):
+        class _Broken:
+            def output_limits(self, tier=None, thinking_level=None):
+                raise RuntimeError("no")
+
+        for handle in (None, _Broken(), self._Scoped(limits="not limits")):
+            assert _tool_mod._budget("heavy", "low", 1000, handle) == (
+                1000 + thinking_reserve_tokens("low")
+            )
+
+    def test_the_native_call_is_sized_by_the_handle(
+        self, tool_instance, tmp_path, monkeypatch,
+    ):
+        from framework.llm.providers import OutputLimits
+
+        class _ScopedRecording(_RecordingLLM):
+            def output_limits(self, tier=None, thinking_level=None):
+                return OutputLimits(200_000, 7)
+
+        pdf = tmp_path / "r.pdf"
+        pdf.write_bytes(b"%PDF-fake")
+        monkeypatch.setattr(tool_instance, "_resolve_report_path", lambda *a, **k: pdf)
+        monkeypatch.setattr(tool_instance, "_get_generated_path", lambda ctx: tmp_path)
+        llm = _ScopedRecording()
+        tool_instance.execute(
+            {"action": "summarize", "report_path": "v/r.pdf", "max_words": 2000},
+            _Context(llm_query=llm),
+        )
+        assert llm.doc_calls[0]["max_tokens"] == 2000 * 8 + 7
+
+
 # ---------------------------------------------------------------------------
 # Budget and level cannot drift apart
 # ---------------------------------------------------------------------------

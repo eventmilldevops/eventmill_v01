@@ -335,11 +335,42 @@ def ping_budget(
     return min(reserve + PING_CONTENT_TOKENS, cap), level
 
 
+@dataclass(frozen=True)
+class OutputLimits:
+    """What one call may emit, and how much of that reasoning takes first.
+
+    A pair because a caller sizing a reply needs both, from the same provider:
+    a cap from one vendor's manifest with another's thinking reserve describes
+    a call nobody can make.
+    """
+
+    max_output_tokens: int
+    thinking_reserve_tokens: int
+
+    @property
+    def content_budget(self) -> int:
+        """Of the cap, what is left for the reply once thinking has its share."""
+        return max(1, self.max_output_tokens - self.thinking_reserve_tokens)
+
+
+def output_limits(
+    tier: str,
+    thinking_level: str | None = None,
+    provider_id: str = DEFAULT_PROVIDER_ID,
+) -> OutputLimits:
+    """A tier's output cap and thinking reserve, both read from one provider."""
+    return OutputLimits(
+        max_output_tokens=max_output_tokens_for_tier(tier, provider_id),
+        thinking_reserve_tokens=thinking_reserve_tokens(thinking_level, provider_id),
+    )
+
+
 __all__ = [
     "DEFAULT_MEDIA_RESOLUTION",
     "DEFAULT_THINKING_LEVEL",
     "DEFAULT_PROVIDER_ID",
     "PING_CONTENT_TOKENS",
+    "OutputLimits",
     "TierSpec",
     "accepted_thinking_levels",
     "ping_budget",
@@ -349,6 +380,7 @@ __all__ = [
     "pdf_handling",
     "default_media_resolution",
     "max_output_tokens_for_tier",
+    "output_limits",
     "thinking_reserve_tokens",
     "tokens_per_pdf_page",
     "vendor_of",

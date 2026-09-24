@@ -217,6 +217,24 @@ unregistered field fails validation for **every** plugin at once.
 | `cost_hint` | `low`, `moderate`, `high` |
 | `capabilities` | `namespace:value` pairs; the pattern currently rejects underscores in the namespace |
 
+### Provider tier capabilities
+
+Not the plugin field above: these are the bare tokens in each tier's
+`capabilities` list in `framework/llm/providers/<id>.json`. The dispatcher
+routes on them, and plugins act on what it reports, so a token must be true
+of the **client as built**, not just the model. A test fails any provider that
+declares `native_pdf` while its client refuses documents.
+
+| Token | Meaning |
+|---|---|
+| `text` | Text in, text out |
+| `multimodal_image` | The model accepts images (no plugin calls `query_multimodal` yet) |
+| `native_pdf` | The client sends a PDF to the model natively; the plugins plan page-range batches on it |
+| `remote_uri_gs` | The client reads a `gs://` URI itself. **Absent** means the dispatcher reads the bytes first (OpenAI, Anthropic) |
+| `structured_output` | JSON-mode capable |
+| `function_calling` | Tool calls |
+| `deep_reasoning` | Heavy-tier reasoning model |
+
 ---
 
 ## 8. Identifier prefixes

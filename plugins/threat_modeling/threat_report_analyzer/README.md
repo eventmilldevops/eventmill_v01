@@ -236,7 +236,7 @@ in `framework/llm/providers/<id>.json` and is enforced by the dispatcher's PDF
 guard against the provider actually routed to.
 
 > They previously held 50 MB / 1000 pages, which are Gemini's figures — wrong for
-> two of the three vendors (Anthropic and OpenAI accept 100 pages / 32 MB) and
+> two of the three vendors (Anthropic and OpenAI have lower limits of their own) and
 > phrased as though the plugin were setting provider policy.
 
 ## Output Persistence

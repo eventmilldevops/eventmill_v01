@@ -60,21 +60,21 @@
   },
   "file_handling": {
     "application/pdf": {
-      "max_pages": 100,
-      "max_size_mb": 32,
-      "tokens_per_page": 1500,
+      "max_pages": 250,
+      "max_size_mb": 24,
+      "tokens_per_page": 2407,
       "tokens_per_page_by_resolution": {
-        "low": 1500,
-        "medium": 1500,
-        "high": 1500
+        "low": 2407,
+        "medium": 2407,
+        "high": 2407
       },
       "default_media_resolution": "medium",
       "ingestion_paths": [
-        "inline_bytes",
-        "files_api"
+        "inline_bytes"
       ],
       "preferred_ingestion": "inline_bytes",
-      "_note": "Tightest PDF limits of the three providers, and the reason the dispatcher's PDF guard must read the ACTIVE provider's limits rather than Gemini's 1000 pages / 50 MB. No gs_uri path: this provider cannot read a GCS URI, so the framework must materialise bytes first. Page cost does not vary by media_resolution here — the per-resolution block is filled uniformly so a caller reading it gets a usable number rather than a KeyError. Unused until Stage 4 wires the document path."
+      "_verified": "2026-09-24, both tiers (claude-sonnet-5, claude-opus-5), inline base64 document block. tokens_per_page MEASURED: (document-call input_tokens - same prompt as text) / pages on the 3-page probe PDF; identical on both tiers, and 60% above the 1500 placeholder it replaces. Page cost does not vary with media_resolution here, so the per-resolution block is filled uniformly. max_pages is the LARGEST COUNT VERIFIED, not a refusal: 101 and 250 pages were accepted and counted correctly; the 1,000,000-token context window binds at ~415 pages. max_size_mb is MEASURED against the decoded file: the documented 32 MB limit covers the request including base64, so a 20 MB PDF (27 MB encoded) was accepted and a 25 MB PDF (33 MB encoded) was refused twice. The refusal arrives as a dropped connection, which the client classifies as transient, so this guard must stop an oversized document before it is sent.",
+      "_note": "Inline only, never the Files API: an upload is retained provider-side until deleted. No gs_uri path: this provider cannot read a GCS URI, so the dispatcher reads the bytes first (no remote_uri_gs capability)."
     }
   },
   "output_budget": {

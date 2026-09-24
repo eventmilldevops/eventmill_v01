@@ -458,7 +458,8 @@ The profile and timings are also in `summary.document_profile` and
 - Requires a keyed, connected provider; `connect` first
 - The chunked fallback may lose table formatting and cross-page context
 - Provider page limits apply and are enforced before the call: `gcp_gemini`
-  1000 pages / 50 MB, `anthropic` and `openai` 100 pages / 32 MB
+  1000 pages / 50 MB, `openai` 600 / 50 MB, `anthropic` 250 / 24 MB (read
+  from `framework/llm/providers/<id>.json`)
 - The latency model is pessimistic and over-splits documents (see above)
 - STIX 2.1 parsing not yet implemented
 - **Verified on `gcp_gemini` light only.** Truncation behaviour and thinking

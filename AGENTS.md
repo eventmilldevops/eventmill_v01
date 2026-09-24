@@ -39,8 +39,11 @@ Stage E).
 **PDF page limits — fixed 2026-09-14, and how they work now:**
 
 - The guard reads **the provider actually routed to**
-  (`_pdf_context_overflow`). Gemini takes 1000 pages / 50 MB; Anthropic and
-  OpenAI take 100 / 32 MB and cost pages at 1500 tokens against Gemini's 560.
+  (`_pdf_context_overflow`). Gemini takes 1000 pages / 50 MB at 560 tokens a
+  page. Measured 2026-09-24: OpenAI 600 pages / 50 MB at ~605 tokens, and
+  Anthropic 250 pages / 24 MB at ~2400 tokens. Anthropic's documented 32 MB
+  includes the base64 encoding, and an oversized request arrives as a dropped
+  connection. Each manifest's `_verified` note says which figures are measured.
 - Over a provider's limit the call is **refused up front** with both ways out
   named: run it on Gemini, or split the document. That is the intended
   behaviour for a triage tool, not a gap to close.

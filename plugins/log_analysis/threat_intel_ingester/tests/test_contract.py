@@ -1560,6 +1560,97 @@ class TestBatchedNativeIngestion:
     def test_manifest_budget_covers_batched_runs(self, manifest):
         assert manifest["timeout_class"] == "long"
 
+
+class TestPlanFollowsTheOperatorsProvider:
+    """Plan and budgets follow the provider the operator chose, not whatever
+    else happens to be bound.
+
+    Reproduces the live run that prompted this: ingester on OpenAI, Gemini
+    also bound. The ingester planned nine native batches, OpenAI refused all
+    nine, and the plan was sized with Gemini's output cap. Uses the real
+    dispatcher and wrapper, because the defect was in how they answered, not
+    in the plugin.
+    """
+
+    @staticmethod
+    def _stack(operator_provider: str):
+        from framework.llm.dispatcher import LLMDispatcher, TierScopedLLMClient
+        from framework.llm.providers import TierSpec
+        from framework.plugins.protocol import LLMResponse
+        from tests.framework.test_provider_seam import PublicOnlyClient
+
+        class _JsonClient(PublicOnlyClient):
+            """Answers text calls the way _NativeLLM does, so the run completes."""
+
+            def query_text(self, prompt, system_context=None, max_tokens=4096,
+                           grounding_data=None, hints=None):
+                self.calls.append({"kind": "text", "max_tokens": max_tokens})
+                values = _NativeLLM._candidates_from_prompt(prompt)
+                return LLMResponse(
+                    ok=True, text=_NativeLLM()._reply(values, "chunk"),
+                    model_used=self.model_id,
+                )
+
+        clients, specs = {}, {}
+        for provider_id, caps in (
+            ("gcp_gemini", ("text", "native_pdf")),
+            ("openai", ("text", "multimodal_image")),
+        ):
+            for tier in ("light", "heavy"):
+                clients[(provider_id, tier)] = _JsonClient(
+                    f"{provider_id}-{tier}", tier, provider_id,
+                )
+                specs[(provider_id, tier)] = TierSpec(
+                    tier=tier, model_id=f"{provider_id}-{tier}", api_key_env="KEY",
+                    max_output_tokens=65536, max_context_tokens=1_000_000,
+                    cost_tier="low", capabilities=caps, provider_id=provider_id,
+                )
+        dispatcher = LLMDispatcher(clients=clients, tier_specs=specs)
+        assert dispatcher.default_provider == "gcp_gemini"
+        scoped = TierScopedLLMClient(
+            dispatcher, default_tier="light", default_provider=operator_provider,
+        )
+        return scoped, clients
+
+    def test_openai_plans_text_and_never_attempts_a_native_call(
+        self, tool_instance, batched_run,
+    ):
+        scoped, clients = self._stack("openai")
+        result = tool_instance.execute(
+            {"artifact_id": "art_dense"}, batched_run["make_context"](scoped),
+        )
+        assert result.ok, result.message
+        plan = result.result["summary"]["ingestion_plan"]
+        assert plan["strategy"] == "chunked_text"
+        assert not batched_run["written"], "no PDF should be cut for a text plan"
+        calls = {name: c.calls for (name, _), c in clients.items() if c.calls}
+        assert all(k["kind"] == "text" for c in calls.values() for k in c)
+        assert set(calls) == {"openai"}
+
+    def test_openai_plan_is_sized_with_openais_cap(
+        self, tool_instance, batched_run,
+    ):
+        from framework.llm.providers import output_limits
+
+        scoped, _ = self._stack("openai")
+        result = tool_instance.execute(
+            {"artifact_id": "art_dense"}, batched_run["make_context"](scoped),
+        )
+        cap = result.result["summary"]["ingestion_plan"]["output_cap_per_call"]
+        openai = output_limits("light", _tool_mod._NATIVE_THINKING_LEVEL, "openai")
+        gemini = output_limits("light", _tool_mod._NATIVE_THINKING_LEVEL, "gcp_gemini")
+        assert cap > gemini.content_budget, "sized with Gemini's cap"
+        assert cap <= openai.content_budget
+
+    def test_gemini_still_plans_native(self, tool_instance, batched_run):
+        scoped, _ = self._stack("gcp_gemini")
+        result = tool_instance.execute(
+            {"artifact_id": "art_dense"}, batched_run["make_context"](scoped),
+        )
+        plan = result.result["summary"]["ingestion_plan"]
+        assert plan["strategy"] in ("native", "native_batched")
+
+
 class TestPageCoverageIsReported:
     """A PDF read in part must never be reported as a PDF read whole.
 

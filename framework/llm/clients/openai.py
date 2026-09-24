@@ -27,19 +27,22 @@ the current SDK leads with. ``store=False`` is sent on every request: this
 platform handles incident data, so a no-retention posture is a declared
 property of the client, not an incidental default.
 
-Text only for now. ``query_multimodal`` and ``query_with_document`` return a
-declared failure rather than a wrong answer — no module consumes either path.
+Documents are sent inline as base64 ``input_file`` parts and never through
+the Files API: an uploaded file is retained provider-side until deleted, which
+would undo ``store=False``. ``query_multimodal`` still returns a declared
+failure rather than a wrong answer — no module consumes it.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import time
 from typing import Any
 
 from ...plugins.protocol import LLMResponse, QueryHints
-from ..backends.base import DocumentPart
+from ..backends.base import DocumentPart, DocumentUnavailable
 from ..model_client import PROBE_PROMPT, LLMProbeResult, compose_prompt
 from ..providers import accepted_thinking_levels, load_tier_specs, ping_budget
 
@@ -64,6 +67,27 @@ _EFFORT_BY_LEVEL = {
 }
 
 _ASSUMED_CAPABILITIES = ("text", "multimodal_image")
+
+# QueryHints.media_resolution -> input_file "detail" for PDFs. The page text is
+# sent at every setting; detail sets only the fidelity, and so the token cost,
+# of each page image. "medium" maps to the provider's own "auto" rather than a
+# guess at which fixed setting it resembles.
+_DETAIL_BY_RESOLUTION = {
+    "low": "low",
+    "medium": "auto",
+    "high": "high",
+}
+
+
+def _detail(hints: QueryHints | None) -> str | None:
+    """Map portable hints onto input_file detail, or None for the default."""
+    res = hints.media_resolution if hints else None
+    if res is None:
+        return None
+    detail = _DETAIL_BY_RESOLUTION.get(res)
+    if detail is None:
+        logger.warning("Ignoring unknown media_resolution %r", res)
+    return detail
 
 
 def _effort(
@@ -384,7 +408,16 @@ class OpenAIClient:
             "OpenAI query: %d chars prompt, max_output_tokens=%d, effort=%s",
             len(full_prompt), max_tokens, effort or "default",
         )
+        return self._send(request)
 
+    def _send(
+        self, request: dict[str, Any], transport_path: str | None = None,
+    ) -> LLMResponse:
+        """Make one Responses API call and read the result.
+
+        Shared by the text and document paths, so a document reply is judged
+        by exactly the same failure, filter and truncation rules as text.
+        """
         try:
             response = self._sdk_client.responses.create(**request)
         except Exception as e:
@@ -426,6 +459,7 @@ class OpenAIClient:
             model_used=self.model_id,
             model_version=getattr(response, "model", None),
             provider_id=self.provider_id,
+            transport_path=transport_path,
             token_usage=usage,
             finish_reason=reason or status,
             # "max_output_tokens" is this provider's spelling of Gemini's
@@ -462,17 +496,59 @@ class OpenAIClient:
         max_tokens: int = 8192,
         hints: QueryHints | None = None,
     ) -> LLMResponse:
-        """Not implemented for this provider yet.
+        """Send a document inline, with the prompt, as one user turn.
 
-        This provider cannot read a GCS URI and the framework does not yet
-        materialise bytes for a client lacking the remote_uri_gs capability.
-        Both document modules stay on Gemini until Stage 3 adds it.
+        Always inline base64, never a Files API upload: an uploaded file is
+        retained until deleted, which would undo store=False for exactly the
+        data it exists to protect. This provider cannot read a GCS URI, so the
+        dispatcher hands over bytes already read; a part with only a file
+        path is read here as a fallback.
+
+        Grounding data arrives folded into prompt by the dispatcher.
         """
-        return self._failure(
-            "query_with_document is not implemented for the openai provider "
-            "(needs dispatcher-side byte materialisation; see Stage 3)",
-            "bad_request",
+        if not self._connected or self._sdk_client is None:
+            return self._failure("OpenAI session not established", "access")
+
+        try:
+            data = doc.read_bytes(allow_remote=False)
+        except DocumentUnavailable as e:
+            return self._failure(str(e), "bad_request")
+
+        filename = os.path.basename(doc.file_path or "") or "document.pdf"
+        file_part: dict[str, Any] = {
+            "type": "input_file",
+            "filename": filename,
+            "file_data": (
+                f"data:{doc.mime_type};base64,"
+                + base64.b64encode(data).decode("ascii")
+            ),
+        }
+        detail = _detail(hints) if doc.mime_type == "application/pdf" else None
+        if detail:
+            file_part["detail"] = detail
+
+        request: dict[str, Any] = {
+            "model": self.model_id,
+            "input": [{
+                "role": "user",
+                "content": [file_part, {"type": "input_text", "text": prompt}],
+            }],
+            "max_output_tokens": max_tokens,
+            "store": False,
+        }
+        if system_context:
+            request["instructions"] = system_context
+        effort = _effort(hints, self.tier, self.provider_id)
+        if effort:
+            request["reasoning"] = {"effort": effort}
+
+        logger.debug(
+            "OpenAI document query: %s, %d bytes, detail=%s, "
+            "max_output_tokens=%d, effort=%s",
+            doc.mime_type, len(data), detail or "default", max_tokens,
+            effort or "default",
         )
+        return self._send(request, transport_path="inline_bytes")
 
 
 __all__ = ["OpenAIClient", "PROVIDER_ID"]

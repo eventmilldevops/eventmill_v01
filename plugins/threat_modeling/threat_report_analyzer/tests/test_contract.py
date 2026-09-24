@@ -99,7 +99,7 @@ class TestNoProviderLimitsInPluginCode:
 
     The plugin used to carry MAX_PDF_SIZE_BYTES = 50 MB and
     MAX_PDF_PAGES = 1000 — Gemini's numbers, wrong for Anthropic and OpenAI
-    (100 pages / 32 MB) and applied whichever provider was routed to.
+    (far fewer pages, fewer MB) and applied whichever provider was routed to.
     """
 
     def test_the_old_provider_shaped_constants_are_gone(self, tool_instance):
@@ -121,9 +121,11 @@ class TestNoProviderLimitsInPluginCode:
         """The numbers the plugin no longer hardcodes live here, per vendor."""
         from framework.llm.providers import pdf_handling
 
-        assert pdf_handling("gcp_gemini")["max_pages"] == 1000
-        assert pdf_handling("anthropic")["max_pages"] == 100
-        assert pdf_handling("anthropic")["max_size_mb"] == 32
+        # Each vendor's own figures, which differ; not a copy of Gemini's.
+        gemini, anthropic = pdf_handling("gcp_gemini"), pdf_handling("anthropic")
+        assert gemini["max_pages"] == 1000
+        assert anthropic["max_pages"] < gemini["max_pages"]
+        assert anthropic["max_size_mb"] < gemini["max_size_mb"]
 
 
 # ---------------------------------------------------------------------------

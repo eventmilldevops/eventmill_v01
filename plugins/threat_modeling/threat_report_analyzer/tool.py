@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from framework.llm.providers import max_output_tokens_for_tier, thinking_reserve_tokens
+from framework.llm.providers import OutputLimits, output_limits
 from framework.logging.structured import log_llm_interaction
 from framework.plugins.protocol import ArtifactRef, QueryHints
 
@@ -120,15 +120,32 @@ UNSUMMARISED_NOTICE = {
 }
 
 
-def _budget(tier: str, thinking_level: str, content_tokens: int) -> int:
+def _budget(
+    tier: str, thinking_level: str, content_tokens: int, llm_query: Any = None,
+) -> int:
     """Output budget that leaves room for both thinking and content.
 
     Gemini spends thinking from the reply budget, so a bare content figure is
     silently a thinking cap. Ask for the content plus the reserve the provider
     declares for the level actually requested, bounded by the tier cap.
+
+    Both figures come from the provider serving this execution, asked of the
+    LLM handle. They used to be read from the default provider's manifest
+    whatever the operator had selected. A handle that cannot answer gets the
+    default provider's figures, as before.
     """
-    cap = max_output_tokens_for_tier(tier)
-    return min(cap, content_tokens + thinking_reserve_tokens(thinking_level))
+    limits = None
+    ask = getattr(llm_query, "output_limits", None)
+    if ask is not None:
+        try:
+            limits = ask(tier, thinking_level)
+        except Exception:  # noqa: BLE001 - sizing must never fail the run
+            limits = None
+    if not isinstance(limits, OutputLimits):
+        limits = output_limits(tier, thinking_level)
+    return min(
+        limits.max_output_tokens, content_tokens + limits.thinking_reserve_tokens,
+    )
 
 
 SUMMARIZATION_PROMPT_TEMPLATE = """You are a Senior Threat Intelligence Analyst creating a concise reference document.
@@ -345,8 +362,8 @@ class ThreatReportAnalyzer:
     #
     # They previously held 50 MB / 1000 pages, which are Gemini's figures, and
     # read as though the plugin were deciding provider policy. Anthropic and
-    # OpenAI accept 100 pages / 32 MB, so the numbers were also wrong for two
-    # of the three vendors.
+    # OpenAI have lower limits of their own, so the numbers were also wrong for
+    # two of the three vendors.
     MAX_LOCAL_PDF_BYTES = 200 * 1024 * 1024
     MAX_LOCAL_PDF_PAGES = 2000
     MAX_PAGES_PER_CHUNK = 100
@@ -615,7 +632,10 @@ class ThreatReportAnalyzer:
                             "You are a Senior Threat Intelligence Analyst. "
                             "Produce a well-structured markdown summary."
                         ),
-                        max_tokens=_budget("heavy", native_level, max_words * 8),
+                        max_tokens=_budget(
+                            "heavy", native_level, max_words * 8,
+                            context.llm_query,
+                        ),
                         hints=QueryHints(
                             tier="heavy",
                             thinking_level=native_level,
@@ -1591,7 +1611,9 @@ class ThreatReportAnalyzer:
                 content=chunk.content,
                 attack_grounding=attack_grounding(),
             )
-            out_tokens = _budget("light", "low", max_words * 8)  # ~8 chars/token
+            out_tokens = _budget(  # ~8 chars/token
+                "light", "low", max_words * 8, getattr(context, "llm_query", None),
+            )
         else:
             prompt = CHUNK_SUMMARIZATION_PROMPT_TEMPLATE.format(
                 attack_grounding=attack_grounding(),
@@ -1601,7 +1623,9 @@ class ThreatReportAnalyzer:
                 focus_areas=", ".join(focus_areas) if focus_areas else "General threat overview",
                 content=chunk.content,
             )
-            out_tokens = _budget("light", "low", 3072)
+            out_tokens = _budget(
+                "light", "low", 3072, getattr(context, "llm_query", None),
+            )
         # None until a genuine reply sets it. The raw excerpt is kept, but in
         # its own key: putting it in "summary" is what let 3,000 characters of
         # pypdf output be persisted to a file named ".summary.md" and fed to
@@ -1711,7 +1735,9 @@ class ThreatReportAnalyzer:
                 # the pass that earns the heavy tier (the manifest default).
                 response = context.llm_query.query_text(
                     prompt=prompt,
-                    max_tokens=_budget("heavy", "high", max_words * 8),
+                    max_tokens=_budget(
+                        "heavy", "high", max_words * 8, context.llm_query,
+                    ),
                     hints=QueryHints(tier="heavy", thinking_level="high"),
                 )
                 log_llm_interaction(

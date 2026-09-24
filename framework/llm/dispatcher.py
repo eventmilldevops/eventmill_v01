@@ -22,7 +22,7 @@ from dataclasses import replace
 from typing import Any
 
 from ..plugins.protocol import LLMQueryInterface, LLMResponse, QueryHints, ArtifactRef
-from .backends.base import DocumentPart
+from .backends.base import DocumentPart, DocumentUnavailable
 from .model_client import (
     TIER_CHANGE_KINDS,
     LLMModelClient,
@@ -30,9 +30,11 @@ from .model_client import (
 )
 from .providers import (
     DEFAULT_PROVIDER_ID,
+    OutputLimits,
     TierSpec,
     default_media_resolution,
     load_tier_specs,
+    output_limits,
     pdf_handling,
     tokens_per_pdf_page,
     vendor_of,
@@ -730,6 +732,21 @@ class LLMDispatcher:
             storage_uri=artifact.storage_uri,
             file_path=artifact.file_path,
         )
+        # A provider that cannot read a gs:// URI gets bytes, read here rather
+        # than in its client: fetching from storage is a framework concern,
+        # and a document that cannot be read is refused before any call is
+        # made, never sent empty.
+        if self._needs_document_bytes(client):
+            try:
+                doc.inline_bytes = doc.read_bytes()
+            except DocumentUnavailable as e:
+                return LLMResponse(
+                    ok=False,
+                    error=str(e),
+                    error_kind="bad_request",
+                    model_used=client.model_id,
+                    fallback_reason="document bytes could not be read",
+                )
 
         # Grounding data is folded in here rather than passed along: the
         # document signature stays about the document, and composing it is
@@ -771,10 +788,11 @@ class LLMDispatcher:
         error partway through the call.
 
         Every limit is read from the provider that was routed to, never from
-        the default. Anthropic and OpenAI accept 100 pages / 32 MB against
-        Gemini's 1000 / 50 MB, so reading Gemini's numbers for an Anthropic
-        call passes a 150-page document straight through to a vendor rejection
-        — which is the opaque failure this guard exists to replace.
+        the default. The providers differ in both directions — Anthropic takes
+        24 MB against Gemini's 50 and costs ~2400 tokens a page against
+        Gemini's 560 — and Anthropic reports an oversized request as a dropped
+        connection, so the provider's own rejection is the opaque failure this
+        guard exists to replace.
 
         Returns None when the request fits, or when the page count is unknown.
         """
@@ -900,16 +918,54 @@ class LLMDispatcher:
                 return None
         return None
 
-    def supports_native_document(self, mime_type: str) -> bool:
-        """Check if any connected model handles this MIME type natively."""
+    def supports_native_document(
+        self, mime_type: str, provider: str | None = None,
+    ) -> bool:
+        """Check if the provider that would serve can ingest this MIME type natively.
+
+        Scoped to one provider, the same one query_with_document routes to:
+        the named provider, else the session default. It used to answer for
+        any connected client, so a bound Gemini told a plugin pinned to OpenAI
+        that native PDF was available. The plugin then planned page-range
+        batches that the routed provider refused one by one — and since
+        routing never crosses providers, "some other vendor could" is never
+        the question a caller is asking.
+        """
         if mime_type not in _NATIVE_CAPABILITY_BY_MIME:
             return False
+        selected = provider or self.default_provider
         return any(
             c.connected and self._model_supports_native_doc(c, mime_type)
-            for c in self._clients.values()
+            for (provider_id, _), c in self._clients.items()
+            if provider_id == selected
         )
 
+    def output_limits(
+        self,
+        tier: str,
+        thinking_level: str | None = None,
+        provider: str | None = None,
+    ) -> OutputLimits:
+        """Output cap and thinking reserve of the provider that would serve.
+
+        Resolved like routing: the named provider, else the session default.
+        Within a provider the tiers are capacity-identical, so a tier fallback
+        at call time cannot make this wrong.
+        """
+        selected = provider or self.default_provider or DEFAULT_PROVIDER_ID
+        return output_limits(tier, thinking_level, selected)
+
     # --- Internal helpers ------------------------------------------------------
+
+    def _needs_document_bytes(self, client: LLMModelClient) -> bool:
+        """Whether this client's tier must be handed bytes rather than a URI.
+
+        True unless the tier declares remote_uri_gs (Gemini, which reads GCS
+        zero-copy). A client with no manifest keeps the old behaviour and
+        reads its own sources.
+        """
+        spec = self._spec_of(client)
+        return spec is not None and "remote_uri_gs" not in spec.capabilities
 
     def _model_supports_native_doc(
         self, client: LLMModelClient, mime_type: str,
@@ -1080,8 +1136,29 @@ class TierScopedLLMClient:
         )
 
     def supports_native_document(self, mime_type: str) -> bool:
+        # The operator's provider goes inward, so the answer is about the
+        # vendor this execution will actually use.
         checker = getattr(self._inner, "supports_native_document", None)
-        return bool(checker(mime_type)) if checker else False
+        if checker is None:
+            return False
+        return bool(checker(mime_type, **self._provider_kwargs()))
+
+    def output_limits(
+        self, tier: str | None = None, thinking_level: str | None = None,
+    ) -> OutputLimits:
+        """Output cap and thinking reserve for this execution's provider.
+
+        Lets a plugin size a reply against the model that will run without
+        learning or choosing which vendor that is. The tier defaults to the
+        manifest's, like a query with no hints. A bare client answers for its
+        own provider; a fake that declares none gets the default provider's
+        figures, which is what the plugins used before this existed.
+        """
+        resolved_tier = tier if tier in ("light", "heavy") else self.default_tier
+        limits = getattr(self._inner, "output_limits", None)
+        if limits is not None and getattr(self._inner, "accepts_provider_scope", False):
+            return limits(resolved_tier, thinking_level, **self._provider_kwargs())
+        return output_limits(resolved_tier, thinking_level, _provider_of(self._inner))
 
 
 class ContextBuilder:

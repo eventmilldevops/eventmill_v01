@@ -417,7 +417,11 @@ went straight to current stable (`>=3.13.0,<4.0.0`), so the "1.58.1 has no
 `client.responses`" constraint that shaped the original plan no longer applies.
 
 **Outstanding:** structured output (`text.format`), documents (`input_file`
-plus the dispatcher-side byte materialisation below), and images. Nothing
+plus the dispatcher-side byte materialisation below), and images. The document
+work is planned in `docs/specs/openai_document_path_plan.md` (2026-09-24). That
+plan also covers Anthropic's matching stub, and records that
+`LLMQueryInterface.output_limits()` has landed in place of the proposed
+`output_budget()` / `max_output_tokens()` pair. Nothing
 consumes `query_multimodal`, so it stays last and nothing is gated on it. Both
 unimplemented methods currently return a declared `bad_request` naming this
 stage rather than a wrong answer.

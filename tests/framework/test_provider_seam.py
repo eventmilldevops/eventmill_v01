@@ -142,7 +142,7 @@ class PublicOnlyClient:
 
 
 def _specs() -> dict[str, TierSpec]:
-    """Two capacity-identical tiers, both native-PDF capable.
+    """Two capacity-identical tiers, both native-PDF capable and gs://-reading.
 
     The light tier declares a fallback so the retired-model path is reachable
     without depending on which tier the real Gemini manifest happens to give
@@ -150,11 +150,12 @@ def _specs() -> dict[str, TierSpec]:
     """
     return {
         "light": TierSpec("light", "fake-light", "K_LIGHT", 65536, 1_048_576,
-                          "low", ("text", "multimodal_image", "native_pdf"),
+                          "low", ("text", "multimodal_image", "native_pdf",
+                           "remote_uri_gs"),
                           fallback_model_id="fake-light-ga"),
         "heavy": TierSpec("heavy", "fake-heavy", "K_HEAVY", 65536, 1_048_576,
                           "high", ("text", "multimodal_image", "native_pdf",
-                                   "deep_reasoning")),
+                                   "remote_uri_gs", "deep_reasoning")),
     }
 
 

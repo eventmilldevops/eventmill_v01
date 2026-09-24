@@ -21,6 +21,7 @@
         "text",
         "multimodal_image",
         "native_pdf",
+        "remote_uri_gs",
         "structured_output",
         "function_calling"
       ],
@@ -45,6 +46,7 @@
         "text",
         "multimodal_image",
         "native_pdf",
+        "remote_uri_gs",
         "structured_output",
         "function_calling",
         "deep_reasoning"

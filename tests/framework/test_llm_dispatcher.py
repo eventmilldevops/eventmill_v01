@@ -93,9 +93,10 @@ def _specs() -> dict[str, TierSpec]:
     """
     return {
         "light": TierSpec("light", "flash", "K_LIGHT", 65536, 1_048_576, "low",
-                          ("text", "native_pdf")),
+                          ("text", "native_pdf", "remote_uri_gs")),
         "heavy": TierSpec("heavy", "pro", "K_HEAVY", 65536, 1_048_576, "high",
-                          ("text", "native_pdf", "deep_reasoning"),
+                          ("text", "native_pdf", "remote_uri_gs",
+                           "deep_reasoning"),
                           fallback_model_id="flash"),
     }
 
@@ -725,23 +726,33 @@ class TestPdfContextGuard:
         """Gemini takes 1000 pages, so the operator's 150-page report is fine."""
         assert self._check_on(dispatcher, "gcp_gemini", 150) is None
 
-    def test_150_pages_refused_on_anthropic(self, dispatcher):
+    @staticmethod
+    def _over_limit(provider: str) -> int:
+        from framework.llm.providers import pdf_handling
+        return pdf_handling(provider)["max_pages"] + 1
+
+    def test_over_the_page_limit_refused_on_anthropic(self, dispatcher):
         """Regression: the guard read Gemini's 1000-page cap for every provider,
-        so a 150-page PDF passed here and was rejected by the vendor mid-call."""
-        r = self._check_on(dispatcher, "anthropic", 150)
+        so a PDF over Anthropic's limit passed here and failed at the vendor."""
+        from framework.llm.providers import pdf_handling
+        pages = self._over_limit("anthropic")
+        assert pages < 1000, "must be a page count Gemini's cap would pass"
+        r = self._check_on(dispatcher, "anthropic", pages)
         assert r is not None and not r.ok
         assert r.fallback_reason == "pdf_exceeds_provider_page_limit"
-        assert "100" in r.error, "must name the limit that was exceeded"
+        assert f"{pdf_handling('anthropic')['max_pages']:,}" in r.error, (
+            "must name the limit that was exceeded"
+        )
         assert "anthropic" in r.error, "must name the provider that imposes it"
 
-    def test_150_pages_refused_on_openai(self, dispatcher):
-        r = self._check_on(dispatcher, "openai", 150)
+    def test_over_the_page_limit_refused_on_openai(self, dispatcher):
+        r = self._check_on(dispatcher, "openai", self._over_limit("openai"))
         assert r is not None and not r.ok
         assert r.fallback_reason == "pdf_exceeds_provider_page_limit"
 
     def test_refusal_offers_the_two_ways_out(self, dispatcher):
         """Triage tool: a limit is acceptable, an unexplained one is not."""
-        r = self._check_on(dispatcher, "anthropic", 150)
+        r = self._check_on(dispatcher, "anthropic", self._over_limit("anthropic"))
         assert "gcp_gemini" in r.error, "must point at the provider that can"
         assert "split" in r.error.lower(), "must offer splitting as the other way"
 
@@ -752,7 +763,7 @@ class TestPdfContextGuard:
         assert r.fallback_reason == "pdf_exceeds_provider_page_limit"
 
     def test_size_limit_read_from_the_selected_provider(self, dispatcher):
-        """40 MB: inside Gemini's 50 MB, outside Anthropic's 32 MB."""
+        """40 MB: inside Gemini's 50 MB, outside Anthropic's 24 MB."""
         art = ArtifactRef(
             "a1", "pdf_report", "",
             metadata={
@@ -769,17 +780,18 @@ class TestPdfContextGuard:
         )
         assert r is not None and not r.ok
         assert r.fallback_reason == "pdf_exceeds_provider_size_limit"
-        assert "32 MB" in r.error
+        from framework.llm.providers import pdf_handling
+        assert f"{pdf_handling('anthropic')['max_size_mb']} MB" in r.error
 
     def test_page_cost_uses_the_selected_provider_rate(self, dispatcher):
-        """Anthropic bills 1500 tokens/page against Gemini's 560 at medium.
+        """Anthropic bills ~2400 tokens/page (measured) against Gemini's 560.
 
-        Costing an Anthropic call at Gemini's rate understates it by ~2.7x,
+        Costing an Anthropic call at Gemini's rate understates it by ~4x,
         which is the same class of error as reading the wrong page cap.
         """
         from framework.llm.providers import tokens_per_pdf_page
         assert tokens_per_pdf_page("medium", "gcp_gemini") == 560
-        assert tokens_per_pdf_page("medium", "anthropic") == 1500
+        assert tokens_per_pdf_page("medium", "anthropic") > 4 * 560
 
     def test_unknown_provider_client_still_defaults(self, dispatcher):
         """A fake declaring no provider_id must not crash the guard."""
