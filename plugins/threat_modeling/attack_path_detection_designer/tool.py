@@ -1,31 +1,37 @@
 """Attack Path Detection Designer.
 
 Turns adversary_path_projector exports into a normalized per-node detection
-context. Stages N1 and N2 of `docs/specs/attack_path_detection_normalization.md`.
+context, then drafts one detection per node. Stages N1-N3 and G1a-G1b of
+`docs/specs/attack_path_detection_normalization.md`.
 
 Actions:
-    validate_input   Deterministic. Normalizes the supplied sources and reports
-                     the node inventory, the identities, the pair decision,
-                     every field-level conflict and, when a flow map is
-                     supplied, its lineage and fit - without writing an
-                     artifact and without calling a model.
+    validate_input       Deterministic. Normalizes the supplied sources and
+                         returns the context pack: node inventory, identities,
+                         pair decision, field-level conflicts, flow-map lineage
+                         and fit, grades, controls, mitigations, taxonomy,
+                         assessment and telemetry join. No model call. The
+                         shell saves the result as a registered artifact.
+    digest               The same run, three readable lines per node.
+    generate_detections  Normalizes, then drafts one detection per node at
+                         heavy tier. It is why this plugin declares
+                         safe_for_auto_invoke: false, which is a whole-plugin
+                         field with no per-action form (spec decision 7).
 
-Planned:
-    normalize_paths       stage N4 - the same normalization, persisted as a
-                          detection_context_pack artifact.
-    generate_detections   the guidance stage - reasons over a pack, costs a
-                          heavy-tier call. It is why this plugin declares
-                          safe_for_auto_invoke: false, which is a whole-plugin
-                          field with no per-action form (spec section 8,
-                          decision 7).
+Retired:
+    normalize_paths      Stage N4, retired 2026-09-23 before it was built.
+                         Normalization is byte-identical on repeat, so the pack
+                         is re-derived rather than stored; validate_input and
+                         digest cover what the action was for.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,8 +61,14 @@ nz = _load_sibling("normalization.py", "attack_path_detection_designer_normaliza
 
 ACTIONS = ("validate_input", "digest", "generate_detections")
 
-# Named so validate_inputs can say so rather than failing obscurely.
-PLANNED_ACTIONS = ("normalize_paths",)
+# Named so validate_inputs can say what replaced them rather than failing
+# obscurely.
+RETIRED_ACTIONS = {
+    "normalize_paths": (
+        "retired with stage N4 on 2026-09-23; 'validate_input' returns the same "
+        "context pack and the shell saves it as an artifact"
+    ),
+}
 
 gen = _load_sibling("generation.py", "attack_path_detection_designer_generation")
 
@@ -254,7 +266,7 @@ def _load_flow_map(payload: dict[str, Any], context: Any) -> tuple[Any, ToolResu
 
 
 class AttackPathDetectionDesigner:
-    """Normalize projected attack paths into reviewable node contexts."""
+    """Normalize projected attack paths and draft a detection per node."""
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -262,17 +274,17 @@ class AttackPathDetectionDesigner:
             "version": "0.1.0",
             "pillar": "threat_modeling",
             "actions": list(ACTIONS),
-            "planned_actions": list(PLANNED_ACTIONS),
+            "retired_actions": sorted(RETIRED_ACTIONS),
         }
 
     def validate_inputs(self, payload: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []
 
         action = payload.get("action", "validate_input")
-        if action in PLANNED_ACTIONS:
+        if action in RETIRED_ACTIONS:
             errors.append(
-                f"Action '{action}' is planned but not implemented; "
-                f"available now: {', '.join(ACTIONS)}"
+                f"Action '{action}' is {RETIRED_ACTIONS[action]}. "
+                f"Valid actions: {', '.join(ACTIONS)}"
             )
         elif action not in ACTIONS:
             errors.append(
@@ -423,7 +435,8 @@ class AttackPathDetectionDesigner:
                 error_code="LLM_UNAVAILABLE",
                 message=(
                     "generate_detections needs a connected provider. Run 'connect', "
-                    "and 'use threat_modeling <provider>' to choose one."
+                    "and 'use <provider> for attack_path_detection_designer' to "
+                    "choose one."
                 ),
             )
 
@@ -558,11 +571,16 @@ class AttackPathDetectionDesigner:
         }
         if ledger["generation_status"] != "complete":
             # Never report drafts that do not exist: a partial result is an
-            # error with its partial output attached, not a success.
+            # error with its partial output attached, not a success. The shell
+            # persists only a successful result, so the partial one is written
+            # here - otherwise the drafts already paid for are lost.
+            result["partial_file"] = _persist_partial(result, context)
             return ToolResult(
                 ok=False,
                 error_code="GENERATION_INCOMPLETE",
-                message=_incomplete_message(ledger, problems, calls),
+                message=_incomplete_message(
+                    ledger, problems, calls, result["partial_file"]
+                ),
                 result=result,
             )
         return ToolResult(ok=True, result=result)
@@ -647,8 +665,45 @@ class AttackPathDetectionDesigner:
         return "\n".join(lines)
 
 
+def _persist_partial(result: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Write an incomplete generation result and register it.
+
+    Returns where it went, or why it did not. A write failure is reported in
+    the message and never replaces GENERATION_INCOMPLETE as the error.
+    """
+    workspace = Path(os.environ.get("EVENTMILL_WORKSPACE", "./workspace"))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    path = workspace / "artifacts" / f"attack_path_detection_designer_partial_{stamp}.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - reported, never raised
+        return {"path": None, "artifact_id": None, "error": f"{type(exc).__name__}: {exc}"}
+
+    saved: dict[str, Any] = {"path": str(path), "artifact_id": None, "error": None}
+    register = getattr(context, "register_artifact", None)
+    if callable(register):
+        try:
+            ref = register(
+                "json_events",
+                str(path),
+                "attack_path_detection_designer",
+                {
+                    "kind": "detection_drafts_partial",
+                    "generation_status": result["coverage"]["generation_status"],
+                },
+            )
+            saved["artifact_id"] = getattr(ref, "artifact_id", None)
+        except Exception as exc:  # noqa: BLE001 - the file is still on disk
+            saved["error"] = f"written but not registered: {type(exc).__name__}: {exc}"
+    return saved
+
+
 def _incomplete_message(
-    ledger: dict[str, Any], problems: list[dict[str, Any]], calls: list[dict[str, Any]]
+    ledger: dict[str, Any],
+    problems: list[dict[str, Any]],
+    calls: list[dict[str, Any]],
+    partial_file: dict[str, Any] | None = None,
 ) -> str:
     """Say why, not only that.
 
@@ -659,6 +714,14 @@ def _incomplete_message(
         f"{ledger['generated_drafts']} of {ledger['expected_nodes']} nodes produced "
         f"a valid draft ({ledger['generation_status']})."
     ]
+    if partial_file:
+        if partial_file.get("path"):
+            lines.append(
+                f"  Partial result saved: {partial_file.get('artifact_id') or '(unregistered)'} "
+                f"{partial_file['path']}"
+            )
+        if partial_file.get("error"):
+            lines.append(f"  Partial result not fully saved: {partial_file['error']}")
     for call in calls:
         lines.append(
             f"  call {call['path_id']} ({call['nodes']} nodes): ok={call['ok']}, "

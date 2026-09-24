@@ -67,6 +67,27 @@ class FakeContext:
     artifacts: list = field(default_factory=list)
 
 
+@dataclass
+class FakeRef:
+    artifact_id: str
+
+
+@dataclass
+class RegisteringContext(FakeContext):
+    registered: list = field(default_factory=list)
+
+    def register_artifact(self, artifact_type, file_path, source_tool, metadata):
+        self.registered.append((artifact_type, file_path, source_tool, metadata))
+        return FakeRef(artifact_id="art_partial1")
+
+
+@pytest.fixture(autouse=True)
+def _workspace(tmp_path, monkeypatch):
+    """A partial run writes its result; keep that out of the repository."""
+    monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path))
+    return tmp_path
+
+
 @pytest.fixture
 def tool():
     return _tool_mod.AttackPathDetectionDesigner()
@@ -201,6 +222,8 @@ def test_without_a_provider_it_says_so_rather_than_inventing(tool):
     )
     assert result.ok is False
     assert result.error_code == "LLM_UNAVAILABLE"
+    # The shell's syntax; 'use threat_modeling <provider>' is rejected by it.
+    assert "use <provider> for attack_path_detection_designer" in result.message
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +243,69 @@ def test_a_missing_node_makes_the_run_incomplete(tool, nodes):
     assert len(ledger["missing_draft_ids"]) == 2  # one per path
     # The partial output is still returned rather than discarded.
     assert result.result["drafts"]
+
+
+def test_a_partial_run_is_saved_because_the_shell_saves_only_successes(
+    tool, nodes, _workspace
+):
+    llm = FakeLLM(_responder(nodes, mutate=lambda drafts, i: drafts[:-1]))
+    context = RegisteringContext(llm_query=llm)
+    result = tool.execute(
+        {"action": "generate_detections", "sources": [GRAPH, SEED], "flow_map_path": MAP},
+        context,
+    )
+    assert result.error_code == "GENERATION_INCOMPLETE"
+    saved = result.result["partial_file"]
+    path = Path(saved["path"])
+    assert path.parent == _workspace / "artifacts"
+    assert path.name.startswith("attack_path_detection_designer_partial_")
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert len(on_disk["drafts"]) == len(result.result["drafts"])
+    assert on_disk["coverage"]["generation_status"] == "partial"
+
+    [(artifact_type, file_path, source_tool, metadata)] = context.registered
+    assert (artifact_type, file_path, source_tool) == (
+        "json_events", str(path), "attack_path_detection_designer"
+    )
+    assert metadata["kind"] == "detection_drafts_partial"
+    assert saved["artifact_id"] == "art_partial1"
+    assert "Partial result saved: art_partial1" in result.message
+
+
+def test_a_partial_run_without_a_registry_still_writes_the_file(tool, nodes):
+    llm = FakeLLM(_responder(nodes, mutate=lambda drafts, i: drafts[:-1]))
+    result = tool.execute(
+        {"action": "generate_detections", "sources": [GRAPH, SEED], "flow_map_path": MAP},
+        FakeContext(llm_query=llm),
+    )
+    saved = result.result["partial_file"]
+    assert Path(saved["path"]).exists()
+    assert saved["artifact_id"] is None
+    assert "(unregistered)" in result.message
+
+
+def test_a_failed_partial_write_is_reported_not_raised(tool, nodes, _workspace):
+    # A file where the artifacts directory should be makes the write fail.
+    (_workspace / "artifacts").write_text("not a directory", encoding="utf-8")
+    llm = FakeLLM(_responder(nodes, mutate=lambda drafts, i: drafts[:-1]))
+    result = tool.execute(
+        {"action": "generate_detections", "sources": [GRAPH, SEED], "flow_map_path": MAP},
+        FakeContext(llm_query=llm),
+    )
+    assert result.error_code == "GENERATION_INCOMPLETE"
+    assert result.result["partial_file"]["path"] is None
+    assert "Partial result not fully saved" in result.message
+    assert result.result["drafts"]
+
+
+def test_a_complete_run_writes_no_partial_file(tool, nodes, _workspace):
+    result = tool.execute(
+        {"action": "generate_detections", "sources": [GRAPH, SEED], "flow_map_path": MAP},
+        RegisteringContext(llm_query=FakeLLM(_responder(nodes))),
+    )
+    assert result.ok is True
+    assert "partial_file" not in result.result
+    assert not (_workspace / "artifacts").exists()
 
 
 def test_a_duplicate_draft_cannot_pass_as_coverage(tool, nodes):

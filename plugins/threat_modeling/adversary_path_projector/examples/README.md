@@ -9,16 +9,19 @@ Given both halves the projector answers a question nothing else in the repo
 answers: *given this named actor and this architecture, what would they actually
 do?*
 
-This directory holds five worked examples. Read one, copy it, change it into
-your own estate.
+This directory holds six worked examples. Read one, copy it, change it into
+your own estate. The plugin's own [README](../README.md) covers the actions,
+the outputs, and the end-to-end workflow through the visualizer and the
+detection designer.
 
 ---
 
-## The five examples
+## The six examples
 
 | File | Estate | Why it is here |
 |---|---|---|
 | `claims_portal_flow_map.json` | Internet-facing claims portal, 7 components | The simplest shape: a classic three-tier web app. Start here. |
+| `application_b_flow_map.json` | Containerized React SPA and Spring Boot API behind Azure Front Door, Okta OIDC, three integration services on AKS, five data stores, 14 components | An **identity-fronted cloud** shape. Every request carries an Okta token, the integration tier trusts a shared system-to-system header, and five crown jewels sit behind one entry API. The worked example in the plugin README. It validates with four known warnings (`private_link` exposure coerced to `internal`, two duplicate flows) |
 | `telemetry_saas_flow_map.json` | Multi-tenant telemetry SaaS with its own build pipeline, 10 components | A **supply-chain** shape — the build path runs parallel to the runtime path and re-enters it at the cluster. |
 | `plant_ot_flow_map.json` | Bottling plant with corporate IT, an IT/OT DMZ and a control network, 10 components | A **segmented** shape — five trust zones, unauthenticated industrial protocols, and a dual-homed workstation that bypasses the DMZ. |
 | `branch_physical_flow_map.json` | Staffed branch office, 10 components | A **physical** shape — the path starts at a meeting-room wall port and leaves over cellular, so it never meets an egress control. Most of what would catch it is not a security tool: an escort procedure, a manual asset audit, CCTV nobody watches. |
@@ -32,9 +35,12 @@ convention:** physical movement is modelled as a flow with
 validate as unreachable crown jewels, because the entry surface is otherwise
 network-only and a break-in has no vocabulary in the schema.
 
-All five deliberately contain findings. That is the point: a flow map with no
-weaknesses projects nothing interesting. Each file's `description` field says
-what was planted in it.
+The other five deliberately contain findings. That is the point: a flow map
+with no weaknesses projects nothing interesting. Each of those files'
+`description` field says what was planted in it. `application_b` is different:
+its `description` records the architecture as its owners would describe it,
+not a list of planted findings. That makes it the closest of the six to a map
+you would write yourself.
 
 ## Running them
 
@@ -68,6 +74,7 @@ projection:
 | Map | Try |
 |---|---|
 | `claims_portal_flow_map.json` | `Scattered Spider`, `FIN7`, `APT29` |
+| `application_b_flow_map.json` | `Scattered Spider`, `APT29` |
 | `telemetry_saas_flow_map.json` | `APT29`, `Sandworm Team`, `Lazarus Group` |
 | `plant_ot_flow_map.json` | `Volt Typhoon`, `Sandworm Team`, `Dragonfly` |
 

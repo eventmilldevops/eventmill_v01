@@ -10,8 +10,10 @@ export's ``flow_map_sha256`` and checked for fit, but never refused, because a
 map is an analyst-editable working document (spec decision 9). It also closes
 the warning and review-flag codes into the section 4.4 catalogue.
 
-No LLM, no network. Enrichment and grading are stage N3; the
-``normalize_paths`` action and the context pack artifact are stage N4.
+Stage N3 adds enrichment and grading. No LLM, no network. Stage N4, a
+separately persisted context pack behind a ``normalize_paths`` action, was
+retired on 2026-09-23: this module is byte-identical on repeat, so the pack is
+re-derived from the exports rather than stored.
 
 This module is plugin-local by decision 7 of the spec. It is loaded as a
 sibling of ``tool.py`` by file location, because the loader imports a plugin
@@ -1335,7 +1337,7 @@ def digest_lines(result: NormalizationResult) -> list[str]:
 
 
 def _coverage_totals(nodes: list[NormalizedNode]) -> dict[str, Any]:
-    """Estate-level mitigation counts, for the summary and the N4 pack."""
+    """Estate-level mitigation counts, for the summary and the context pack."""
     unresolved: list[str] = []
     covered = total = with_focus = 0
     for node in nodes:

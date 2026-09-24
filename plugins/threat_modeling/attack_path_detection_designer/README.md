@@ -21,7 +21,8 @@ node occurrence key, a deterministic `draft_id`, the union merge and
 catalogue (N2); the flow-map join and the five completeness grades (N3a);
 controls per node and `monitoring_claim` (N3b); mitigation names, the focus
 cut and the coverage ratio (N3c); taxonomy status against ATT&CK v19.2 (N3d).
-The context pack's own schema is N4. Normalization uses no LLM and no network.
+Normalization uses no LLM and no network. **N4 was retired** before it was
+built; see *Stage N4: retired, and what does its job*.
 
 **Stages G1a and G1b are implemented and live-run on four vendors.** The
 telemetry library joins to each node (G1a); `generate_detections` drafts one
@@ -29,14 +30,33 @@ detection per node, batched per path with the full path outline (G1b). G1c
 (repair) and G1d (the rendered workbook) are outstanding — drafts are returned
 as JSON today.
 
+## Where this sits
+
+This is step 3 of three:
+
+| # | Tool | Produces |
+|---|---|---|
+| 1 | `adversary_path_projector` | a path graph and scenario seed per projection |
+| 2 | `attack_path_visualizer` | a picture of the path graph |
+| 3 | **`attack_path_detection_designer`** | one detection draft per path step |
+
+The complete walkthrough, from a leader asking *"how exposed is Application B
+to Scattered Spider?"* to drafts compared across several models, is in
+[the projector's README](../adversary_path_projector/README.md#from-a-leaders-question-to-detection-drafts).
+Two points from it matter most here. First, the **projection model** (which
+paths) and the **generation model** (which detections) are separate choices,
+recorded as `engagement.projection_model` and `generation_model`. Second,
+drafting the same pair under two generation models gives identical
+`draft_id`s, so the two sets compare step by step.
+
 ## Actions
 
 | Action | Status | What it does |
 |---|---|---|
-| `validate_input` | implemented | Normalizes the supplied sources and returns the node inventory, identities, pair decision and every field conflict. Writes nothing. |
+| `validate_input` | implemented | Normalizes the supplied sources and returns the context pack: node inventory, identities, pair decision, every field conflict, grades, controls, mitigations, taxonomy, assessment and telemetry join. The plugin writes nothing itself; the shell saves the result as a registered artifact. |
 | `digest` | implemented | The same run, three readable lines per node. A troubleshooting aid for a person; the pack itself is machine-facing. |
-| `normalize_paths` | planned, stage N4 | The same normalization, persisted as a `detection_context_pack` artifact. |
-| `generate_detections` | implemented, **costs a heavy-tier call per batch** | Drafts one detection per node, batched by path. Returns `ok: false` with `GENERATION_INCOMPLETE` and the partial output whenever fewer valid drafts exist than nodes. |
+| `normalize_paths` | **retired** (stage N4) | Rejected with a message naming `validate_input`, which returns the same pack. See below. |
+| `generate_detections` | implemented, **costs a heavy-tier call per batch** | Drafts one detection per node, batched by path. Returns `ok: false` with `GENERATION_INCOMPLETE` whenever fewer valid drafts exist than nodes, and saves the partial output as `attack_path_detection_designer_partial_<stamp>.json`, because the shell persists only a successful result. |
 
 ## Inputs: artifacts first
 
@@ -195,8 +215,8 @@ scm-to-vault  1  T1059 Command and Scripting Interpreter  ci_runner
 
 The pack is ~187k characters on a 13-node pair and **58% of it is
 `provenance_by_field`** — the audit trail that makes a draft defensible and
-that nobody reads in bulk. The digest is how a person checks a run; the pack is
-what the next stage consumes. A long corpus is cut on a node boundary with the
+that nobody reads in bulk. The digest is how a person checks a run. The pack
+is what generation reads, re-derived on each run. A long corpus is cut on a node boundary with the
 remainder stated, never mid-node.
 
 ## Grounding: the assessment tuple
@@ -545,11 +565,38 @@ should not be read as saying so.
   told apart by whether the component changed; `undeclared` raises a review
   flag, `in_place` is ordinary and must not read as missing data.
 
+## Stage N4: retired, and what does its job
+
+N4 was going to add a `normalize_paths` action that saved the context pack as
+its own artifact, with a pack schema and a `metadata.kind`. `generate_detections`
+would then accept either raw exports or a stored pack. It was retired on
+2026-09-23, before any of it was built, because each thing it was for is
+already done another way:
+
+| N4 was for | What does it now |
+|---|---|
+| Normalizing and reviewing the fixtures with no provider and no cost | `validate_input` returns the full pack and `digest` gives a readable version. Both are free, and the shell saves the result as a registered `json_events` artifact, which `show` and `export` handle like any other |
+| Persisting the pack as an artifact | The shell already persists any successful result that registers nothing of its own (the N1 artifact route) |
+| Re-examining a bad draft against the exact pack it was given | Normalization is **byte-identical on repeat**. All four fixture pairs, run twice with their flow maps, produce identical output (146k–205k characters each) with no timestamps in it. So the pack is a pure function of the exports, the supplied flow map, the telemetry library version and the code, and re-deriving it gives back exactly what generation saw |
+| Letting `generate_detections` take a pack instead of exports | Nothing needs this. Normalizing costs nothing, and a stored pack would be a second editable copy that could drift from the exports. The flow map is already the sanctioned place for an analyst's edits (decision 9) |
+
+**What is still owed, and where it went.** Re-deriving a pack needs to know
+*which* inputs a generation run used. The result records the projection
+(`engagement.run_id`, `flow_map_sha256`), `prompt_version` and
+`telemetry_library_version`. It does **not** yet record the hash of the flow
+map that was actually supplied, or the designer's own code identity. The
+designer plan already puts both in the workbook's JSON sidecar ("input and
+optional-context hashes", §8 step 8), so they belong to **G1d**, not to a
+revived N4.
+
+Revive N4 only if something appears that has to consume a pack without the
+exports, such as a catalogue import or another tool. That would be the point
+to give the pack a schema and a `metadata.kind`.
+
 ## What it deliberately does not do
 
-- No context pack schema or `metadata.kind` — **stage N4**. The shell already
-  persists and registers a result, so N4 is about the pack's format.
-- No artifact, no CLI `show`/`export` — **stage N4**.
+- No stored context pack as an input to generation. `generate_detections`
+  normalizes the exports itself on every run (see *Stage N4* below).
 - No `DS####` data components: no local ATT&CK reference carries them, so any
   that appeared would be invented.
 - No re-deciding of the projector's own work. A reconciled tactic, a

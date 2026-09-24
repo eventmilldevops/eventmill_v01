@@ -104,17 +104,17 @@ def test_entry_point_and_class_name_resolve():
 # Protocol surface
 # ---------------------------------------------------------------------------
 
-def test_metadata_names_the_implemented_and_planned_actions(tool):
+def test_metadata_names_the_implemented_and_retired_actions(tool):
     metadata = tool.metadata()
     assert metadata["tool_name"] == "attack_path_detection_designer"
     assert metadata["actions"] == ["validate_input", "digest", "generate_detections"]
-    assert metadata["planned_actions"] == ["normalize_paths"]
+    assert metadata["retired_actions"] == ["normalize_paths"]
 
 
-def test_a_planned_action_says_so(tool):
+def test_a_retired_action_names_its_replacement(tool):
     result = tool.validate_inputs({"action": "normalize_paths", "sources": ["x"]})
     assert result.ok is False
-    assert any("planned" in error for error in result.errors)
+    assert any("retired" in e and "validate_input" in e for e in result.errors)
 
 
 def test_an_unknown_action_is_rejected(tool):
@@ -261,7 +261,7 @@ def test_an_unrecognized_document_is_an_error(tool, tmp_path):
 
 
 def test_execute_writes_no_artifact_at_this_stage(tool, graph_path, seed_path):
-    """The context pack artifact is stage N4."""
+    """The shell persists the pack; the plugin writes nothing of its own."""
     result = tool.execute({"sources": [graph_path, seed_path]}, context=None)
     assert result.output_artifacts is None
 

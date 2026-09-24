@@ -10,7 +10,7 @@
         "generate_detections"
       ],
       "default": "validate_input",
-      "description": "'validate_input' returns the full context pack and 'digest' the same run as three readable lines per node - both deterministic and free. 'generate_detections' drafts one detection per node and costs a heavy-tier call per batch. 'normalize_paths' (stage N4, the pack's own schema) is planned and is rejected with a message naming it."
+      "description": "'validate_input' returns the full context pack and 'digest' the same run as three readable lines per node - both deterministic and free. 'generate_detections' drafts one detection per node and costs a heavy-tier call per batch. 'normalize_paths' (stage N4) was retired and is rejected with a message naming validate_input."
     },
     "max_nodes_per_call": {
       "type": "integer",

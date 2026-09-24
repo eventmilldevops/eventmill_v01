@@ -20,6 +20,11 @@ come from is described once, separately, in
 **N2 is closed 2026-09-19** (decision 9): a flow map is an analyst-editable
 working document, so its hash records lineage and never gates enrichment; the
 §4.2 flow-map rows, §5 and the new §4.4 code catalogue are revised to match.
+**N3 is complete 2026-09-20. N4 is retired 2026-09-23, unbuilt** (decision 12):
+the pack is re-derived on every run rather than stored, and what N4 was for is
+covered by `validate_input`, `digest` and the shell's auto-persist. §2's pack
+artifact and the §6 N4 row are superseded; the remaining input-identity gap
+moves to G1d.
 
 ## 0. Which "phase 3" this addresses, and why both readings converge
 
@@ -318,6 +323,15 @@ downstream model an opportunity to restore `Defense Evasion`.
 ---
 
 ## 2. The deliverable: a normalized context pack, shipped before any guidance
+
+> **Superseded in part, 2026-09-23 (decision 12).** The normalized pack exists
+> and is shipped exactly as this section intended: free, deterministic, and
+> reviewable before any guidance. `validate_input` returns it and the shell
+> registers it. What was **not** built, and is retired, is the separate
+> `normalize_paths` action, the `detection_context_pack_*` artifact with its
+> own schema and `metadata.kind`, and a `generate_detections` input that takes
+> a pack id. Read the *Output artifact* paragraph and the pack-id route below
+> as history.
 
 Split the designer plan's Stage 1 into a standalone, LLM-free deliverable
 with its own artifact. This is what "complete the normalization" means
@@ -793,7 +807,7 @@ Collapsing it into
 declares none; collapsing it into `asset_named` would discard a verified zone
 and boundary. It is its own grade because it permits a strict subset.
 
-`normalize_paths` reports the grade distribution. **Revised Stage 1 gate:**
+`validate_input` reports the grade distribution (this said `normalize_paths` before N4 was retired). **Revised Stage 1 gate:**
 graph-only and seed-only input produce the same node keys in the same order
 *and* a completeness grade per node, with a declared field-level diff between
 the two — not merely the same count. **Restated over the 2026-09-17 corpus:**
@@ -819,11 +833,11 @@ Normalization first and separately; guidance builds on the pack.
 | **N1. Adapters and identity** | Graph, seed and single-scenario adapters; the three identities of §4.2a; `(projection_identity, path_id, node_index)` keys; deterministic `draft_id`; union merge with the §4.3 precedence table including the 3a `state_check` **and `transition`** canonicalizations; `provenance_by_field` | All four fixtures normalize graph-only and seed-only to identical ordered node keys (9, 11, 10, 13 — **43** in all). All four carry provenance, so the `run_id` join is the normal path and §4.2's derived-identity path has no fixture — it is covered by the §7a synthetic pair. A repeated `(technique, component)` inside one path stays distinct on the §7 synthetic case; the three cross-path repeats in `124121` survive as distinct nodes. `AE-0001` recurring per path never collides. Every field carries an origin and pointer. No pair joins without `verified` or an explicit operator assertion. |
 | **N2. Provenance** — **closed 2026-09-19** | Projector `provenance` block (§4.1) — built 2026-09-16; designer-side pair handling (§4.2) — built in N1; flow-map lineage, application and component-fit checks (§4.2, decision 9); the §4.4 code catalogue | A graph from one run and a seed from another are refused as a pair. A supplied flow map is recorded as `same_map`, `edited_map` or `unhashed` and **never refused**; the four fixture exports reproduce their recorded `flow_map_sha256` from the repository maps. Every field carries an origin and pointer. Every emitted code is in §4.4. |
 | **N3. Enrichment and grading** — **complete**: N3a join and grades, N3b controls (2026-09-19), N3c mitigations, N3d taxonomy (2026-09-20) | Flow-map join, control catalogue, mitigation-name resolution, the §1.4b focus cut and coverage ratio, taxonomy reconciliation, completeness grades | `Stealth` survives against v19.2. `uncovered_mitigations` resolve to names locally. `mitigation_focus[]` is the 1–2 narrowest by technique breadth, deterministic and tie-broken by M-ID. Grades match §5 across all four fixtures with and without the flow map — 38 `component_bound`, 5 `component_bound_partial`, and 43 `asset_named` when the map is withheld. The two `TACTIC_CORRECTED` relabels in `124121` and the one in `022646` survive normalization. |
-| **N4. Context pack artifact** | `normalize_paths` action, pack schema, registration, CLI `show`/`export`, bounded `summarize_for_llm` | Pack round-trips; re-normalizing the same inputs is byte-identical apart from run ID and timestamp; the summary states counts, grades and conflicts without pasting node bodies. Input by `artifact_ids` and output as a registered artifact are **done in N1** (decision 8); what N4 adds is the pack's own schema and `metadata.kind`, not persistence — the shell already auto-persists a result that registers nothing. |
+| **N4. Context pack artifact** — **retired 2026-09-23, unbuilt** (decision 12) | `normalize_paths` action, pack schema, registration, CLI `show`/`export`, bounded `summarize_for_llm` | Superseded: registration, `show`/`export` and a bounded summary already hold for `validate_input`'s result; re-normalizing is byte-identical on all four pairs; the pack schema and `metadata.kind` have no consumer. Original gate, kept for the record: pack round-trips; re-normalizing the same inputs is byte-identical apart from run ID and timestamp; the summary states counts, grades and conflicts without pasting node bodies. Input by `artifact_ids` and output as a registered artifact are **done in N1** (decision 8); what N4 adds is the pack's own schema and `metadata.kind`, not persistence — the shell already auto-persists a result that registers nothing. |
 | **N5. `normalize_flow_map`** | The projector's own Phase 4 action | Prose/Markdown/Mermaid → canonical flow map JSON with a stable `_canonical_flow_map_hash`. An unstated control status becomes `partial` and is flagged, never `implemented` — the rule already recorded in `docs/change_log/2026-09-11-adversary-path-projector-phase-3.md`. This is what makes `component_bound` routinely reachable. |
-| **G1…** — G1a telemetry join, G1b generation **built and live-run 2026-09-20**; G1c repair and G1d workbook outstanding | Grounding, generation, workbook — designer plan stages 2–5, unchanged except that they consume a pack | As in the designer plan, with the node-count constants replaced by pack inventory. |
+| **G1…** — G1a telemetry join, G1b generation **built and live-run 2026-09-20**; G1c repair and G1d workbook outstanding | Grounding, generation, workbook — designer plan stages 2–5, unchanged except that they consume a pack, normalized in-process from the exports on every run | As in the designer plan, with the node-count constants replaced by pack inventory. G1d's sidecar also takes the input identity N4 would have implied (decision 12). |
 
-N1–N4 need no provider and no cost. N5 is projector work and can run in
+N1–N3 need no provider and no cost (N4 is retired). N5 is projector work and can run in
 parallel; the designer degrades to `asset_named` without it, which is a
 documented state rather than a failure.
 
@@ -1162,7 +1176,7 @@ Decision taken, 2026-09-17 (operator), after N1 was built:
    file or as an empty result. And the shell already auto-persists a result
    that registers no artifact of its own, so a result is an artifact before N4
    exists; N4's remaining work is the pack's schema and `metadata.kind`, not
-   persistence. Adding the tool to `DEFAULT_AUTO_EXPORT_TOOLS` (currently only
+   persistence. *(2026-09-23: that remaining work is retired; decision 12.)* Adding the tool to `DEFAULT_AUTO_EXPORT_TOOLS` (currently only
    `attack_path_visualizer`) is what makes a container run's output leave the
    container.
 
@@ -1237,6 +1251,40 @@ Decisions taken, 2026-09-19 (operator), when N3 was planned:
     read as "every control is tagged". The counts are stamped with the map's
     lineage, so an edited map yields the caveat for the estate the analyst
     corrected.
+
+12. **N4 is retired, unbuilt (2026-09-23).** N4 was to persist the pack as its
+    own artifact behind a `normalize_paths` action, give it a schema and a
+    `metadata.kind`, and let `generate_detections` take a pack id. Each purpose
+    is met without it:
+
+    - *Review with no provider and no cost:* `validate_input` returns the full
+      pack and `digest` renders it for a person. The shell auto-persists and
+      registers the result as `json_events`, so `show` and `export` work on it
+      (decision 8 established that persistence).
+    - *Re-examine a draft against the exact pack it saw:* normalization is
+      byte-identical on repeat. All four fixture pairs, normalized twice with
+      their flow maps, gave identical JSON of 146k–205k characters, and the
+      pack carries no timestamps. So the pack is a function of the exports, the
+      supplied map, the telemetry library version and the code, and
+      re-deriving it reproduces what generation saw.
+    - *A pack as generation input:* no consumer needs it. Normalizing is free,
+      and a stored pack would be a second editable copy able to drift from the
+      exports. Decision 9 already makes the flow map the sanctioned place for
+      analyst edits.
+
+    **What is still owed.** Re-deriving needs to know which inputs a run used.
+    The generation result records `engagement.run_id`, the export's
+    `flow_map_sha256`, `prompt_version` and `telemetry_library_version`. It
+    does not record the supplied map's own hash or lineage, or the designer's
+    code identity. The designer plan's §8 step 8 already puts "input and
+    optional-context hashes" in the workbook sidecar, so this belongs to
+    **G1d**.
+
+    **Revive N4 if** something must consume a pack without the exports, such
+    as a catalogue import or a second tool. A schema and `metadata.kind` earn
+    their keep only when there is a reader. In code, `normalize_paths` moves
+    from `PLANNED_ACTIONS` to `RETIRED_ACTIONS` and is rejected with a message
+    naming `validate_input`.
 
 ## 9. Review status
 
@@ -1369,3 +1417,9 @@ telemetry map are 8 controls, 7 tagged, `ci_runner` with none. Retired-id,
 unknown-id, retired-tactic, unknown-tactic and unknown-M-ID cases are
 synthetic, because the corpus contains none. Suite 1652 → 1668. **N3 is
 complete; N4 is next.** No shell run for this slice.
+
+**N4 retired, 2026-09-23.** Decision 12. Determinism was checked before the
+decision rather than assumed: each of the four fixture pairs was normalized
+twice with its flow map and the JSON compared, and all four were identical.
+Code change limited to the action catalogue (`RETIRED_ACTIONS`), docstrings,
+the input schema's description and two contract tests.

@@ -170,7 +170,10 @@ identity, `path_id`, and `node_index`; a technique ID alone is not a join key.
 > `authentication` and `zone` appear in no export, adds the provenance the
 > exports do not yet carry, and splits normalization into a deterministic
 > `normalize_paths` action that runs with no provider. Read it alongside this
-> section; the node-identity rule stated here is unchanged.
+> section; the node-identity rule stated here is unchanged. *(2026-09-23: that
+> separate action was retired unbuilt. Normalization runs as `validate_input`,
+> and inside `generate_detections` on every run. See the normalization spec,
+> decision 12.)*
 
 Build a typed internal `DetectionNodeContext` before generation:
 
