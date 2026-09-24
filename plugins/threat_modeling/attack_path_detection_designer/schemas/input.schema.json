@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "validate_input",
+        "digest",
+        "generate_detections"
+      ],
+      "default": "validate_input",
+      "description": "'validate_input' returns the full context pack and 'digest' the same run as three readable lines per node - both deterministic and free. 'generate_detections' drafts one detection per node and costs a heavy-tier call per batch. 'normalize_paths' (stage N4) was retired and is rejected with a message naming validate_input."
+    },
+    "max_nodes_per_call": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 12,
+      "default": 6,
+      "description": "Content-budget guard for generate_detections: how many steps go in one call. Batching is by path, and the whole path's outline travels with every batch, so a split never costs predecessor context."
+    },
+    "thinking_level": {
+      "type": "string",
+      "enum": ["minimal", "low", "medium", "high"],
+      "default": "medium",
+      "description": "Reasoning depth for generate_detections, stated rather than left to the client, which resolves an unset level to 'high' whenever reasoning is requested. Thinking time is what runs a call into the transport deadline; raise it deliberately."
+    },
+    "artifact_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": {
+        "type": "string"
+      },
+      "description": "Registered artifact ids for adversary_path_projector exports: one path graph, one scenario seed, or both documents of the same projection run. The usual route, and the only one that works when the export lives in cloud storage."
+    },
+    "artifact_id": {
+      "type": "string",
+      "description": "A single registered artifact id. Accepted because the shell speaks the singular; a pair needs artifact_ids."
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": {
+        "type": "string"
+      },
+      "description": "File paths to projector exports, as an alternative to artifact_ids. Local paths only."
+    },
+    "file_path": {
+      "type": "string",
+      "description": "Injected by the shell when a singular artifact_id is resolved; treated as a source path."
+    },
+    "path": {
+      "type": "string",
+      "description": "Injected by the shell alongside file_path; treated as a source path."
+    },
+    "accept_unverified_pair": {
+      "type": "boolean",
+      "default": false,
+      "description": "Join two documents that carry no provenance block, on equal derived projection identity. The join is recorded as asserted_by_operator and never as verified."
+    },
+    "flow_map_artifact_id": {
+      "type": "string",
+      "description": "Registered artifact id of a JSON flow map. Its lineage against the export's flow_map_sha256 is recorded as same_map, edited_map or unhashed and is never grounds for refusal: an analyst's edited copy is an expected input."
+    },
+    "flow_map_path": {
+      "type": "string",
+      "description": "Local path to a JSON flow map, as an alternative to flow_map_artifact_id."
+    }
+  },
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "required": [
+        "artifact_ids"
+      ]
+    },
+    {
+      "required": [
+        "artifact_id"
+      ]
+    },
+    {
+      "required": [
+        "sources"
+      ]
+    },
+    {
+      "required": [
+        "file_path"
+      ]
+    }
+  ]
+}

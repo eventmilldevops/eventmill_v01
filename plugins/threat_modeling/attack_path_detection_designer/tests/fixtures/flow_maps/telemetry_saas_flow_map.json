@@ -1,0 +1,280 @@
+{
+  "application": "Fleet Telemetry Platform",
+  "description": "Example flow map: a multi-tenant telemetry SaaS whose build pipeline deploys into the same estate it serves. Deliberately contains findings — a partner API with no credential rotation, a self-hosted CI runner with no isolation, unsigned container images pulled straight into the cluster, missing namespace network policies, and an unauthenticated runner-to-vault flow that reaches a crown jewel in two hops.",
+  "zones": [
+    {"id": "edge", "name": "Internet edge", "trust_level": "untrusted"},
+    {"id": "saas", "name": "Product runtime", "trust_level": "semi_trusted"},
+    {"id": "build", "name": "Build and release", "trust_level": "semi_trusted"},
+    {"id": "data", "name": "Data and secrets", "trust_level": "restricted"}
+  ],
+  "components": [
+    {
+      "id": "alb",
+      "name": "Application load balancer",
+      "type": "load_balancer",
+      "zone": "edge",
+      "exposure": "internet",
+      "authentication": "none",
+      "data_classification": "public",
+      "controls": [
+        {
+          "name": "DDoS protection",
+          "control_type": "perimeter",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "high"
+        }
+      ]
+    },
+    {
+      "id": "web_console",
+      "name": "Customer console",
+      "type": "web_app",
+      "zone": "saas",
+      "exposure": "internet",
+      "technologies": ["nodejs", "react"],
+      "authentication": "oidc",
+      "data_classification": "confidential",
+      "controls": [
+        {
+          "name": "WAF",
+          "control_type": "perimeter",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "high",
+          "mitre_mitigation_id": "M1050"
+        },
+        {
+          "name": "Workforce MFA",
+          "control_type": "identity",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium",
+          "mitre_mitigation_id": "M1032"
+        }
+      ]
+    },
+    {
+      "id": "partner_api",
+      "name": "Partner ingest API",
+      "type": "api",
+      "zone": "saas",
+      "exposure": "partner",
+      "technologies": ["go", "grpc"],
+      "authentication": "api_key",
+      "data_classification": "confidential",
+      "description": "Fleet operators push telemetry here using long-lived API keys.",
+      "controls": [
+        {
+          "name": "API rate limiting",
+          "control_type": "application",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "low"
+        },
+        {
+          "name": "Partner credential rotation",
+          "control_type": "identity",
+          "implementation_status": "missing",
+          "bypass_difficulty": "trivial",
+          "detection_capability": "none",
+          "mitre_mitigation_id": "M1027"
+        }
+      ]
+    },
+    {
+      "id": "event_bus",
+      "name": "Telemetry event bus",
+      "type": "queue",
+      "zone": "saas",
+      "exposure": "internal",
+      "technologies": ["kafka"],
+      "authentication": "sasl_scram",
+      "data_classification": "confidential",
+      "controls": [
+        {
+          "name": "Broker topic ACLs",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low",
+          "mitre_mitigation_id": "M1035"
+        }
+      ]
+    },
+    {
+      "id": "k8s",
+      "name": "Workload cluster",
+      "type": "container_platform",
+      "zone": "saas",
+      "exposure": "internal",
+      "technologies": ["kubernetes", "containerd"],
+      "authentication": "rbac",
+      "data_classification": "confidential",
+      "controls": [
+        {
+          "name": "Pod security admission",
+          "control_type": "application",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium",
+          "mitre_mitigation_id": "M1048"
+        },
+        {
+          "name": "Namespace network policies",
+          "control_type": "network",
+          "implementation_status": "missing",
+          "bypass_difficulty": "trivial",
+          "detection_capability": "none",
+          "mitre_mitigation_id": "M1030"
+        }
+      ]
+    },
+    {
+      "id": "scm",
+      "name": "Source control and pipeline definitions",
+      "type": "external_service",
+      "zone": "build",
+      "exposure": "internet",
+      "technologies": ["git", "github-actions"],
+      "authentication": "sso_mfa",
+      "data_classification": "internal",
+      "controls": [
+        {
+          "name": "Branch protection and required review",
+          "control_type": "application",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium"
+        },
+        {
+          "name": "Commit signing enforcement",
+          "control_type": "application",
+          "implementation_status": "planned",
+          "bypass_difficulty": "low",
+          "detection_capability": "low",
+          "mitre_mitigation_id": "M1045"
+        }
+      ]
+    },
+    {
+      "id": "ci_runner",
+      "name": "Self-hosted build runner",
+      "type": "ci_cd",
+      "zone": "build",
+      "exposure": "internal",
+      "technologies": ["ubuntu", "docker", "github-actions-runner"],
+      "authentication": "oidc_federation",
+      "data_classification": "internal",
+      "description": "Persistent runner shared by every repository; jobs are not isolated from one another.",
+      "controls": []
+    },
+    {
+      "id": "artifact_reg",
+      "name": "Container registry",
+      "type": "file_store",
+      "zone": "build",
+      "exposure": "internal",
+      "authentication": "iam",
+      "data_classification": "internal",
+      "controls": [
+        {
+          "name": "Image signature enforcement",
+          "control_type": "application",
+          "implementation_status": "planned",
+          "bypass_difficulty": "low",
+          "detection_capability": "low",
+          "mitre_mitigation_id": "M1045"
+        }
+      ]
+    },
+    {
+      "id": "vault",
+      "name": "Secrets manager",
+      "type": "secrets_manager",
+      "zone": "data",
+      "exposure": "internal",
+      "technologies": ["hashicorp-vault"],
+      "authentication": "mtls",
+      "data_classification": "secret",
+      "controls": [
+        {
+          "name": "Short-lived secret leases",
+          "control_type": "identity",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "very_high",
+          "detection_capability": "high",
+          "mitre_mitigation_id": "M1026"
+        },
+        {
+          "name": "Secret access audit logging",
+          "control_type": "monitoring",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "high",
+          "mitre_mitigation_id": "M1047"
+        }
+      ]
+    },
+    {
+      "id": "telemetry_db",
+      "name": "Telemetry warehouse",
+      "type": "database",
+      "zone": "data",
+      "exposure": "internal",
+      "technologies": ["postgres", "timescaledb"],
+      "authentication": "mtls",
+      "data_classification": "regulated",
+      "controls": [
+        {
+          "name": "Database firewall",
+          "control_type": "network",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium",
+          "mitre_mitigation_id": "M1030"
+        },
+        {
+          "name": "Column-level encryption",
+          "control_type": "data",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low",
+          "mitre_mitigation_id": "M1041"
+        }
+      ]
+    }
+  ],
+  "flows": [
+    {"id": "f1", "from": "alb", "to": "web_console", "protocol": "https", "port": 443, "authenticated": false, "encrypted": true},
+    {"id": "f2", "from": "alb", "to": "partner_api", "protocol": "https", "port": 443, "authenticated": false, "encrypted": true},
+    {"id": "f3", "from": "web_console", "to": "telemetry_db", "protocol": "postgres", "port": 5432, "authenticated": true, "encrypted": true},
+    {"id": "f4", "from": "partner_api", "to": "event_bus", "protocol": "kafka", "port": 9093, "authenticated": true, "encrypted": true},
+    {"id": "f5", "from": "event_bus", "to": "k8s", "protocol": "kafka", "port": 9093, "authenticated": true, "encrypted": true, "bidirectional": true},
+    {"id": "f6", "from": "k8s", "to": "telemetry_db", "protocol": "postgres", "port": 5432, "authenticated": true, "encrypted": true},
+    {"id": "f7", "from": "k8s", "to": "vault", "protocol": "https", "port": 8200, "authenticated": true, "encrypted": true},
+    {"id": "f8", "from": "scm", "to": "ci_runner", "protocol": "https", "port": 443, "authenticated": true, "encrypted": true},
+    {"id": "f9", "from": "ci_runner", "to": "artifact_reg", "protocol": "https", "port": 443, "authenticated": true, "encrypted": true},
+    {"id": "f10", "from": "artifact_reg", "to": "k8s", "protocol": "https", "port": 443, "authenticated": true, "encrypted": true, "crosses_boundary": true, "description": "Image pull. Signatures are not verified."},
+    {"id": "f11", "from": "ci_runner", "to": "vault", "protocol": "http", "port": 8200, "authenticated": false, "encrypted": false, "crosses_boundary": true, "description": "Deploy jobs read release secrets over an unauthenticated internal listener."}
+  ],
+  "crown_jewels": ["vault", "telemetry_db"],
+  "controls": [
+    {
+      "name": "Centralised SIEM alerting",
+      "control_type": "monitoring",
+      "implementation_status": "partial",
+      "bypass_difficulty": "medium",
+      "detection_capability": "medium",
+      "mitre_mitigation_id": "M1047"
+    },
+    {
+      "name": "Quarterly access review",
+      "control_type": "identity",
+      "implementation_status": "implemented",
+      "bypass_difficulty": "medium",
+      "detection_capability": "low",
+      "mitre_mitigation_id": "M1018"
+    }
+  ]
+}

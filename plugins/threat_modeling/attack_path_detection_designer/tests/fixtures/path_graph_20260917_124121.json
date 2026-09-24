@@ -1,0 +1,754 @@
+{
+  "source_tool": "adversary_path_projector",
+  "status": "projected",
+  "interpretation": "Projected attack paths: not confirmed attacks, and not a likelihood assessment. An LLM placed techniques that MITRE ATT&CK documents this actor using onto the organization's own flow map, reasoning the way an adversary would. Technique ids, technique names and controls are sourced; the route, the step rationales and the access states are the model's projection. Each step's access is checked only for continuity \u2014 that an earlier step produced what the step needs \u2014 never for truth. A step that states no access falls back to a typical value for its tactic.",
+  "actor": "Volt Typhoon (G1017)",
+  "application": "Claims Portal",
+  "provenance": {
+    "run_id": "7b70c391-6cf9-47c5-8187-abb182052558",
+    "run_group": "ungrouped",
+    "run_index": 1,
+    "created_at": "2026-09-17T12:41:21.424097+00:00",
+    "flow_map_path": "plugins/threat_modeling/adversary_path_projector/examples/claims_portal_flow_map.json",
+    "flow_map_sha256": "03dbb641ee79a3522ca4a8327e2bf625704bd417089df23a42b900778c181d60",
+    "prompt_sha256": "b7bfc05eea5b83011f1c5eff80606d74bccd60b96c8288ab2924a0cf2aa37504",
+    "attack_version": "19.2",
+    "actor_attack_id": "G1017",
+    "tool_version": {
+      "manifest_version": "0.2.0",
+      "git_sha": "1c2ba74",
+      "code_id_source": "build_env"
+    },
+    "model": {
+      "provider": "gcp_gemini",
+      "vendor": "google",
+      "model_configured": "gemini-3.1-pro-preview",
+      "model_served": "gemini-3.1-pro-preview"
+    }
+  },
+  "mitre_mappings": [
+    {
+      "technique_id": "T1046",
+      "technique_name": "Network Service Discovery",
+      "tactic": "Discovery",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1059.004",
+      "technique_name": "Unix Shell",
+      "tactic": "Execution",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1074.001",
+      "technique_name": "Local Data Staging",
+      "tactic": "Collection",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1078",
+      "technique_name": "Valid Accounts",
+      "tactic": "Stealth",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1083",
+      "technique_name": "File and Directory Discovery",
+      "tactic": "Discovery",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1090.001",
+      "technique_name": "Internal Proxy",
+      "tactic": "Command and Control",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1190",
+      "technique_name": "Exploit Public-Facing Application",
+      "tactic": "Initial Access",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1505.003",
+      "technique_name": "Web Shell",
+      "tactic": "Persistence",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1552",
+      "technique_name": "Unsecured Credentials",
+      "tactic": "Credential Access",
+      "confidence": "high"
+    },
+    {
+      "technique_id": "T1572",
+      "technique_name": "Protocol Tunneling",
+      "tactic": "Command and Control",
+      "confidence": "medium"
+    }
+  ],
+  "attack_graph": {
+    "paths": [
+      {
+        "path_id": "portal-api-docstore",
+        "description": "Volt Typhoon exploits the internet-facing portal, steals API credentials, establishes a proxy, and accesses the unauthenticated document store.",
+        "objective": "Exfiltrate PII from the unauthenticated S3 document store.",
+        "steps": [
+          {
+            "technique_id": "T1190",
+            "technique_name": "Exploit Public-Facing Application",
+            "tactic": "Initial Access",
+            "component_id": "portal",
+            "asset": "Claims portal",
+            "evidence": "documented",
+            "rationale": "The Claims portal is exposed to the internet and runs Django, making it vulnerable to web application exploits that target business logic or framework flaws.",
+            "leads_to": [
+              "T1059.004"
+            ],
+            "mitigations": [
+              "M1016",
+              "M1026",
+              "M1030",
+              "M1035",
+              "M1037",
+              "M1048",
+              "M1050",
+              "M1051"
+            ],
+            "uncovered_mitigations": [
+              "M1016",
+              "M1026",
+              "M1030",
+              "M1035",
+              "M1037",
+              "M1048",
+              "M1051"
+            ],
+            "notes": [],
+            "precondition": "The attacker can route malicious HTTP requests to the public portal.",
+            "access_before": "network_reach",
+            "exploited_condition": "The portal runs complex application code with a public interface that accepts untrusted input.",
+            "result": "The attacker achieves arbitrary code execution on the portal server.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "The application contains an exploitable RCE vulnerability."
+            ],
+            "control_note": "The implemented WAF only provides partial protection with a low bypass difficulty, easily circumvented using payload obfuscation.",
+            "transition": {
+              "entry": true,
+              "exposure": "internet"
+            },
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "partial",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon has gained initial access through exploitation of multiple vulnerabilities in internet-facing software and appliances such as Fortinet, Ivanti (formerly Pulse Secure), NETGEAR, Citrix,\u2026",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1059.004",
+            "technique_name": "Unix Shell",
+            "tactic": "Execution",
+            "component_id": "portal",
+            "asset": "Claims portal",
+            "evidence": "documented",
+            "rationale": "Volt Typhoon heavily utilizes built-in command interpreters; a Unix shell allows them to interact natively with the portal's underlying Linux OS.",
+            "leads_to": [
+              "T1552"
+            ],
+            "mitigations": [
+              "M1038"
+            ],
+            "uncovered_mitigations": [
+              "M1038"
+            ],
+            "notes": [],
+            "precondition": "The attacker has successfully executed an initial exploit payload.",
+            "access_before": "code_execution",
+            "exploited_condition": "The web application runs in an environment with standard Unix utilities and shell binaries available.",
+            "result": "The attacker gains interactive command execution capabilities on the host.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "The web service account has sufficient OS permissions to spawn a shell."
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "partial",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon has used Brightmetricagent.exe which contains a command- line interface (CLI) library that can leverage command shells including Z Shell (zsh).",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1552",
+            "technique_name": "Unsecured Credentials",
+            "tactic": "Credential Access",
+            "component_id": "portal",
+            "asset": "Claims portal",
+            "evidence": "documented",
+            "rationale": "To move laterally to the internal API, the attacker searches the Django configuration files and environment variables for plaintext API tokens.",
+            "leads_to": [
+              "T1090.001"
+            ],
+            "mitigations": [
+              "M1015",
+              "M1017",
+              "M1022",
+              "M1026",
+              "M1027",
+              "M1028",
+              "M1035",
+              "M1037",
+              "M1041",
+              "M1047",
+              "M1051"
+            ],
+            "uncovered_mitigations": [
+              "M1015",
+              "M1017",
+              "M1022",
+              "M1026",
+              "M1027",
+              "M1028",
+              "M1035",
+              "M1037",
+              "M1041",
+              "M1047",
+              "M1051"
+            ],
+            "notes": [],
+            "precondition": "The attacker can read configuration files on the portal's filesystem.",
+            "access_before": "code_execution",
+            "exploited_condition": "The portal stores OAuth2 credentials required for authenticating to the Claims API in a recoverable format.",
+            "result": "The attacker possesses valid OAuth2 credentials for the backend API.",
+            "access_after": "service_credential",
+            "assumptions": [
+              "OAuth2 tokens or client secrets are stored unencrypted on disk or in the environment."
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "partial",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon has obtained credentials insecurely stored on targeted network appliances.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1090.001",
+            "technique_name": "Internal Proxy",
+            "tactic": "Command and Control",
+            "component_id": "portal",
+            "asset": "Claims portal",
+            "evidence": "documented",
+            "rationale": "By setting up an internal proxy, Volt Typhoon creates a reliable C2 tunnel to route traffic securely into the restricted internal network.",
+            "leads_to": [
+              "T1078"
+            ],
+            "mitigations": [
+              "M1031"
+            ],
+            "uncovered_mitigations": [
+              "M1031"
+            ],
+            "notes": [],
+            "precondition": "The attacker has OS access and needs to direct traffic to internal components.",
+            "access_before": "code_execution",
+            "exploited_condition": "The portal is explicitly permitted to route HTTPS traffic to the internal claims_api.",
+            "result": "The attacker has an active network tunnel into the internal app zone.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "Egress and ingress filtering on the edge zone permits the proxy connection to persist."
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "partial",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon has used the built-in netsh `port proxy` command to create proxies on compromised systems to facilitate access.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1078",
+            "technique_name": "Valid Accounts",
+            "tactic": "Stealth",
+            "component_id": "claims_api",
+            "asset": "Claims API",
+            "evidence": "documented",
+            "rationale": "Routing traffic through the portal proxy, the attacker presents the stolen OAuth2 tokens to authenticate to the Claims API.",
+            "leads_to": [
+              "T1083"
+            ],
+            "mitigations": [
+              "M1013",
+              "M1015",
+              "M1017",
+              "M1018",
+              "M1026",
+              "M1027",
+              "M1032",
+              "M1036"
+            ],
+            "uncovered_mitigations": [
+              "M1013",
+              "M1015",
+              "M1017",
+              "M1018",
+              "M1026",
+              "M1027",
+              "M1032",
+              "M1036"
+            ],
+            "notes": [
+              "tactic 'Initial Access' after the first step corrected to 'Stealth', which ATT&CK also documents for this technique \u2014 the entry point is earlier in the path"
+            ],
+            "precondition": "The attacker holds the valid OAuth2 token and can route to the API via the proxy.",
+            "access_before": "network_reach",
+            "exploited_condition": "The API relies entirely on the OAuth2 token for trust and does not restrict requests to specific trusted IP origins.",
+            "result": "The attacker gains authenticated application-level access to the internal API.",
+            "access_after": "service_credential",
+            "assumptions": [
+              "The OAuth2 token is valid and lacks sender-constrained binding."
+            ],
+            "control_note": "",
+            "transition": {
+              "flow": "f3",
+              "from": "portal",
+              "to": "claims_api",
+              "protocol": "https",
+              "authenticated": true,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon relies primarily on valid credentials for persistence.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1083",
+            "technique_name": "File and Directory Discovery",
+            "tactic": "Discovery",
+            "component_id": "doc_store",
+            "asset": "Document store",
+            "evidence": "documented",
+            "rationale": "Using the authenticated API session, the attacker queries API endpoints that interact with the unauthenticated S3 document store to map out available files.",
+            "leads_to": [
+              "T1074.001"
+            ],
+            "mitigations": [],
+            "uncovered_mitigations": [],
+            "notes": [
+              "state gap: needs network_reach on doc_store; no earlier step reaches it. Path holds service_credential"
+            ],
+            "precondition": "The attacker is authenticated to the API which has direct unauthenticated access to the document store.",
+            "access_before": "network_reach",
+            "exploited_condition": "The internal network allows the API to read from the document store without requiring individual user authentication.",
+            "result": "The attacker successfully discovers the directory structure and locations of PII files.",
+            "access_after": "network_reach",
+            "assumptions": [
+              "The API exposes functionality that can be manipulated to list backend file directories."
+            ],
+            "control_note": "",
+            "transition": {
+              "flow": "f5",
+              "from": "claims_api",
+              "to": "doc_store",
+              "protocol": "s3",
+              "authenticated": false,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon has enumerated directories containing vulnerability testing and cyber related content and facilities data such as construction drawings.",
+            "state_check": "gap",
+            "state_note": "needs network_reach on doc_store; no earlier step reaches it. Path holds service_credential"
+          },
+          {
+            "technique_id": "T1074.001",
+            "technique_name": "Local Data Staging",
+            "tactic": "Collection",
+            "component_id": "doc_store",
+            "asset": "Document store",
+            "evidence": "documented",
+            "rationale": "Volt Typhoon initiates reads of the targeted PII documents from the S3 bucket, staging them temporarily for exfiltration.",
+            "leads_to": [],
+            "mitigations": [],
+            "uncovered_mitigations": [],
+            "notes": [],
+            "precondition": "The attacker knows the specific file paths of the sensitive PII documents.",
+            "access_before": "network_reach",
+            "exploited_condition": "The document store lacks data-level access controls for the unauthenticated requests coming from the API.",
+            "result": "The attacker successfully accesses and collects the PII data.",
+            "access_after": "data_access",
+            "assumptions": [
+              "The API can be coerced into returning the raw contents of the documents to the portal."
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon has saved stolen files including the `ntds.dit` database and the `SYSTEM` and `SECURITY` Registry hives locally to the `C:\\Windows\\Temp\\` directory.",
+            "state_check": "ok",
+            "state_note": ""
+          }
+        ]
+      },
+      {
+        "path_id": "portal-api-claimsdb",
+        "description": "Volt Typhoon drops a web shell on the portal, initiates protocol tunneling, and leverages the API to discover the regulated claims database.",
+        "objective": "Map out and access the restricted claims database by pivoting through the application tier.",
+        "steps": [
+          {
+            "technique_id": "T1190",
+            "technique_name": "Exploit Public-Facing Application",
+            "tactic": "Initial Access",
+            "component_id": "portal",
+            "asset": "Claims portal",
+            "evidence": "documented",
+            "rationale": "Exploiting the public-facing Django portal provides the initial foothold required to bypass perimeter security.",
+            "leads_to": [
+              "T1505.003"
+            ],
+            "mitigations": [
+              "M1016",
+              "M1026",
+              "M1030",
+              "M1035",
+              "M1037",
+              "M1048",
+              "M1050",
+              "M1051"
+            ],
+            "uncovered_mitigations": [
+              "M1016",
+              "M1026",
+              "M1030",
+              "M1035",
+              "M1037",
+              "M1048",
+              "M1051"
+            ],
+            "notes": [],
+            "precondition": "The attacker can send crafted HTTP payloads to the public portal.",
+            "access_before": "network_reach",
+            "exploited_condition": "The portal has an internet-exposed web application vulnerable to exploitation.",
+            "result": "The attacker achieves initial code execution on the web server.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "An exploitable vulnerability exists in the Django application or its dependencies."
+            ],
+            "control_note": "The low bypass WAF fails to identify and block the initial exploitation vector.",
+            "transition": {
+              "entry": true,
+              "exposure": "internet"
+            },
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "partial",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon has gained initial access through exploitation of multiple vulnerabilities in internet-facing software and appliances such as Fortinet, Ivanti (formerly Pulse Secure), NETGEAR, Citrix,\u2026",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1505.003",
+            "technique_name": "Web Shell",
+            "tactic": "Persistence",
+            "component_id": "portal",
+            "asset": "Claims portal",
+            "evidence": "documented",
+            "rationale": "Volt Typhoon frequently relies on web shells for persistence; installing one ensures reliable re-entry to the compromised portal.",
+            "leads_to": [
+              "T1552"
+            ],
+            "mitigations": [
+              "M1018",
+              "M1042"
+            ],
+            "uncovered_mitigations": [
+              "M1018",
+              "M1042"
+            ],
+            "notes": [],
+            "precondition": "The attacker has code execution and can write files to the web directory.",
+            "access_before": "code_execution",
+            "exploited_condition": "The Django web server processes executable files or templates dropped into web-accessible directories.",
+            "result": "The attacker secures long-term persistent access to the portal.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "The web server configuration allows the execution of dropped shell scripts."
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "partial",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon has used webshells, including ones named AuditReport.jspx and iisstart.aspx, in compromised environments.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1552",
+            "technique_name": "Unsecured Credentials",
+            "tactic": "Credential Access",
+            "component_id": "portal",
+            "asset": "Claims portal",
+            "evidence": "documented",
+            "rationale": "Extracting the configured API OAuth2 tokens from the portal's configuration is necessary to traverse the semi-trusted zone boundary.",
+            "leads_to": [
+              "T1572"
+            ],
+            "mitigations": [
+              "M1015",
+              "M1017",
+              "M1022",
+              "M1026",
+              "M1027",
+              "M1028",
+              "M1035",
+              "M1037",
+              "M1041",
+              "M1047",
+              "M1051"
+            ],
+            "uncovered_mitigations": [
+              "M1015",
+              "M1017",
+              "M1022",
+              "M1026",
+              "M1027",
+              "M1028",
+              "M1035",
+              "M1037",
+              "M1041",
+              "M1047",
+              "M1051"
+            ],
+            "notes": [],
+            "precondition": "The attacker has persistent shell access to the portal.",
+            "access_before": "code_execution",
+            "exploited_condition": "The application relies on static or long-lived tokens stored locally to talk to the API.",
+            "result": "The attacker extracts the OAuth2 token required for the Claims API.",
+            "access_after": "service_credential",
+            "assumptions": [
+              "The credentials are left in plain text within reachable configuration files."
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "partial",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon has obtained credentials insecurely stored on targeted network appliances.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1572",
+            "technique_name": "Protocol Tunneling",
+            "tactic": "Command and Control",
+            "component_id": "portal",
+            "asset": "Claims portal",
+            "evidence": "via_software",
+            "rationale": "Using tools like FRP, the attacker tunnels custom protocols over the HTTP C2 channel to orchestrate the internal network pivot.",
+            "leads_to": [
+              "T1078"
+            ],
+            "mitigations": [
+              "M1031",
+              "M1037"
+            ],
+            "uncovered_mitigations": [
+              "M1031",
+              "M1037"
+            ],
+            "notes": [],
+            "precondition": "The attacker has deployed a persistence mechanism and has execution rights.",
+            "access_before": "code_execution",
+            "exploited_condition": "The portal supports outgoing network connections and complex data payloads over standard web ports.",
+            "result": "The attacker establishes a protocol tunnel to proxy tools deep into the architecture.",
+            "access_after": "code_execution",
+            "assumptions": [
+              "Firewalls do not deeply inspect or block non-standard traffic tunneled via HTTP."
+            ],
+            "control_note": "",
+            "transition": null,
+            "controls_in_play": [
+              {
+                "name": "WAF",
+                "control_type": "perimeter",
+                "status": "partial",
+                "on": "component"
+              }
+            ],
+            "actor_support": "via_software",
+            "procedure_excerpt": "FRP can tunnel SSH and Unix Domain Socket communications over TCP between external nodes and exposed resources behind firewalls or NAT.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1078",
+            "technique_name": "Valid Accounts",
+            "tactic": "Stealth",
+            "component_id": "claims_api",
+            "asset": "Claims API",
+            "evidence": "documented",
+            "rationale": "Passing the stolen API tokens through the established protocol tunnel grants authenticated access to the internal Claims API.",
+            "leads_to": [
+              "T1046"
+            ],
+            "mitigations": [
+              "M1013",
+              "M1015",
+              "M1017",
+              "M1018",
+              "M1026",
+              "M1027",
+              "M1032",
+              "M1036"
+            ],
+            "uncovered_mitigations": [
+              "M1013",
+              "M1015",
+              "M1017",
+              "M1018",
+              "M1026",
+              "M1027",
+              "M1032",
+              "M1036"
+            ],
+            "notes": [
+              "tactic 'Initial Access' after the first step corrected to 'Stealth', which ATT&CK also documents for this technique \u2014 the entry point is earlier in the path"
+            ],
+            "precondition": "The protocol tunnel is active and the attacker has the OAuth2 credentials.",
+            "access_before": "network_reach",
+            "exploited_condition": "The Claims API exposes sensitive internal functions via HTTPS and trusts valid OAuth2 tokens.",
+            "result": "The attacker successfully authenticates to the Claims API.",
+            "access_after": "service_credential",
+            "assumptions": [
+              "API token validation does not require multi-factor authentication or source IP verification."
+            ],
+            "control_note": "",
+            "transition": {
+              "flow": "f3",
+              "from": "portal",
+              "to": "claims_api",
+              "protocol": "https",
+              "authenticated": true,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon relies primarily on valid credentials for persistence.",
+            "state_check": "ok",
+            "state_note": ""
+          },
+          {
+            "technique_id": "T1046",
+            "technique_name": "Network Service Discovery",
+            "tactic": "Discovery",
+            "component_id": "claims_db",
+            "asset": "Claims database",
+            "evidence": "documented",
+            "rationale": "Operating through the API, the attacker enumerates the restricted database schemas and connectivity to locate the regulated data.",
+            "leads_to": [],
+            "mitigations": [
+              "M1030",
+              "M1031",
+              "M1042"
+            ],
+            "uncovered_mitigations": [
+              "M1030",
+              "M1031",
+              "M1042"
+            ],
+            "notes": [
+              "state gap: needs network_reach on claims_db; no earlier step reaches it. Path holds service_credential"
+            ],
+            "precondition": "The attacker is fully authenticated to the API which has Postgres access to the claims database.",
+            "access_before": "network_reach",
+            "exploited_condition": "The database uses mTLS with the API, allowing any API-driven logic flaw to interact directly with the database.",
+            "result": "The attacker maps the claims database structure and confirms access to regulated data tables.",
+            "access_after": "network_reach",
+            "assumptions": [
+              "The API allows arbitrary SQL injection or expansive data querying."
+            ],
+            "control_note": "The database firewall has a medium bypass rating, which the attacker circumvents by hiding within the legitimate mTLS tunnel from the API.",
+            "transition": {
+              "flow": "f4",
+              "from": "claims_api",
+              "to": "claims_db",
+              "protocol": "postgres",
+              "authenticated": true,
+              "crosses_boundary": true
+            },
+            "controls_in_play": [
+              {
+                "name": "Database firewall",
+                "control_type": "network",
+                "status": "implemented",
+                "on": "component"
+              }
+            ],
+            "actor_support": "procedure_documented",
+            "procedure_excerpt": "Volt Typhoon has used commercial tools, LOTL utilities, and appliances already present on the system for network service discovery.",
+            "state_check": "gap",
+            "state_note": "needs network_reach on claims_db; no earlier step reaches it. Path holds service_credential"
+          }
+        ]
+      }
+    ],
+    "convergence_points": [
+      "T1190",
+      "T1552",
+      "T1078"
+    ],
+    "branch_points": [
+      "T1552"
+    ]
+  }
+}

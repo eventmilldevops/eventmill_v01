@@ -1,0 +1,3042 @@
+{
+  "library_version": "0.3.0",
+  "reviewed": "2026-09-20",
+  "attack_version_reviewed": "19.2",
+  "spec": "docs/specs/telemetry_reference_library.md",
+  "description": "Seed telemetry reference library. One entry per observation source: what it emits, which fields it carries, what it costs to collect, how often the evidence arrives, who owns it, and what it observes. Limited to the five estates in plugins/threat_modeling/adversary_path_projector/examples/. Collection status is 'unknown' throughout because no real estate has been surveyed against it: the entries describe what these products and processes emit, not what any organization currently collects.",
+  "namespaces": {
+    "EM-PHYS": "Physical access and tamper",
+    "EM-OT": "Process and safety",
+    "EM-FRAUD": "Value and business logic",
+    "EM-PROC": "Human procedure and duty separation",
+    "EM-INSIDER": "Authorised-actor misuse"
+  },
+  "sources": [
+    {
+      "source_id": "nginx.access",
+      "name": "nginx access log",
+      "category": "log",
+      "vendor_product": "nginx",
+      "version_scope": ">=1.18",
+      "applies_to": {
+        "technologies": [
+          "nginx"
+        ],
+        "component_types": [
+          "web_app",
+          "gateway",
+          "load_balancer"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "access log line",
+          "mapping_status": "description_only",
+          "description": "One line per HTTP request, format set by log_format."
+        }
+      ],
+      "fields": {
+        "native": [
+          "remote_addr",
+          "request",
+          "status",
+          "body_bytes_sent",
+          "http_user_agent",
+          "request_time"
+        ],
+        "derived": [],
+        "absent_without_enrichment": [
+          "authenticated_principal",
+          "tenant_id",
+          "request_id"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects request-shaped behaviour reaching the application."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "log_format includes the fields above",
+          "shipping to a central store"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Platform engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "public_application_exploitation",
+          "attack_relation": "exact",
+          "attack_id": "T1190",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "web_shell_interaction",
+          "attack_relation": "adjacent",
+          "attack_id": "T1505.003",
+          "relation_kind": "narrower",
+          "matrix": "enterprise",
+          "rationale": "The request to a planted endpoint is visible; installation of the shell is not."
+        }
+      ],
+      "estates": [
+        "claims_portal",
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "https://nginx.org/en/docs/http/ngx_http_log_module.html",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "postgres.session",
+      "name": "PostgreSQL connection and session log",
+      "category": "log",
+      "vendor_product": "PostgreSQL",
+      "version_scope": ">=13",
+      "applies_to": {
+        "technologies": [
+          "postgres",
+          "timescaledb"
+        ],
+        "component_types": [
+          "database"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "connection authorized",
+          "mapping_status": "description_only",
+          "description": "Session start with user, database and client address."
+        },
+        {
+          "event_ref": "disconnection",
+          "mapping_status": "description_only",
+          "description": "Session end with duration."
+        }
+      ],
+      "fields": {
+        "native": [
+          "user",
+          "database",
+          "client_addr",
+          "application_name",
+          "session_id",
+          "duration"
+        ],
+        "derived": [],
+        "absent_without_enrichment": [
+          "statement_text",
+          "relation_touched",
+          "tenant_id"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects who connected, never what they read. Statement detail needs pgaudit."
+      },
+      "collection": {
+        "necessity": "alternative",
+        "status": "unknown",
+        "prerequisites": [
+          "log_connections = on",
+          "log_disconnections = on"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Database engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "credentialed_database_access",
+          "attack_relation": "exact",
+          "attack_id": "T1078",
+          "matrix": "enterprise"
+        }
+      ],
+      "estates": [
+        "claims_portal",
+        "telemetry_saas",
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "https://www.postgresql.org/docs/18/runtime-config-logging.html",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "pgaudit.object_access",
+      "name": "pgAudit object access records",
+      "category": "audit",
+      "vendor_product": "PostgreSQL + pgAudit",
+      "version_scope": ">=13",
+      "applies_to": {
+        "technologies": [
+          "postgres",
+          "pgaudit",
+          "timescaledb"
+        ],
+        "component_types": [
+          "database"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "AUDIT: OBJECT",
+          "mapping_status": "native_identifier",
+          "description": "Statement-level record naming the relation and command tag."
+        },
+        {
+          "event_ref": "AUDIT: SESSION",
+          "mapping_status": "native_identifier",
+          "description": "Session-class statements including DDL."
+        }
+      ],
+      "fields": {
+        "native": [
+          "session_id",
+          "statement_id",
+          "object_name",
+          "command_tag",
+          "statement"
+        ],
+        "derived": [
+          "rows_touched_estimate"
+        ],
+        "absent_without_enrichment": [
+          "tenant_id",
+          "application_request_id",
+          "end_user_principal"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects which relation a statement touched."
+      },
+      "supports": [
+        {
+          "control": "Row level security by tenant",
+          "effect": "verifies_operation",
+          "without_it": "a scoping failure is invisible until a customer reports it"
+        }
+      ],
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "pgaudit.log = 'read,write'",
+          "shared_preload_libraries includes pgaudit",
+          "log volume budget agreed"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Database engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "bulk_data_read",
+          "attack_relation": "exact",
+          "attack_id": "T1005",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "data_staged_in_table",
+          "attack_relation": "exact",
+          "attack_id": "T1074",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "destructive_overwrite",
+          "attack_relation": "adjacent",
+          "attack_id": "T1486",
+          "relation_kind": "precursor",
+          "matrix": "enterprise",
+          "rationale": "Mass UPDATE is visible as statements; encryption of the underlying store is not a database event."
+        }
+      ],
+      "estates": [
+        "claims_portal",
+        "telemetry_saas",
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "https://github.com/pgaudit/pgaudit",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "saml_idp.authentication",
+      "name": "SAML identity provider sign-in events",
+      "category": "audit",
+      "vendor_product": "SAML IdP (generic)",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "saml",
+          "okta",
+          "auth0"
+        ],
+        "component_types": [
+          "identity_provider"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "user authentication",
+          "mapping_status": "description_only",
+          "description": "Sign-in attempt with outcome and factor used."
+        },
+        {
+          "event_ref": "factor enrolment",
+          "mapping_status": "description_only",
+          "description": "Registration of a new authentication factor."
+        }
+      ],
+      "fields": {
+        "native": [
+          "principal",
+          "outcome",
+          "factor_type",
+          "client_ip",
+          "user_agent",
+          "session_id"
+        ],
+        "derived": [
+          "impossible_travel"
+        ],
+        "absent_without_enrichment": [
+          "device_posture",
+          "downstream_application_action"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects authentication outcomes and factor changes."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "system log export enabled"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Identity team"
+      },
+      "observes": [
+        {
+          "behaviour": "valid_account_use",
+          "attack_relation": "exact",
+          "attack_id": "T1078",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "mfa_factor_added_by_attacker",
+          "attack_relation": "exact",
+          "attack_id": "T1556.006",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "credential_stuffing",
+          "attack_relation": "exact",
+          "attack_id": "T1110",
+          "matrix": "enterprise"
+        }
+      ],
+      "estates": [
+        "claims_portal",
+        "telemetry_saas",
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "https://attack.mitre.org/techniques/T1556/006/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "object_store.access",
+      "name": "Object store access log",
+      "category": "log",
+      "vendor_product": "S3-compatible object storage",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "s3",
+          "blob-storage",
+          "azure_storage"
+        ],
+        "component_types": [
+          "file_store",
+          "datastore"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "GetObject",
+          "mapping_status": "native_identifier"
+        },
+        {
+          "event_ref": "PutObject",
+          "mapping_status": "native_identifier"
+        },
+        {
+          "event_ref": "ListBucket",
+          "mapping_status": "native_identifier"
+        }
+      ],
+      "fields": {
+        "native": [
+          "principal",
+          "operation",
+          "bucket",
+          "key",
+          "bytes",
+          "source_ip"
+        ],
+        "derived": [
+          "egress_volume_per_principal"
+        ],
+        "absent_without_enrichment": [
+          "business_justification",
+          "end_user_on_whose_behalf"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects object reads and writes by principal."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "access logging enabled per bucket"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Cloud platform"
+      },
+      "observes": [
+        {
+          "behaviour": "cloud_storage_collection",
+          "attack_relation": "exact",
+          "attack_id": "T1530",
+          "matrix": "enterprise"
+        }
+      ],
+      "estates": [
+        "claims_portal",
+        "application_b"
+      ],
+      "provenance": {
+        "reference": "https://attack.mitre.org/techniques/T1530/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "kafka.authorizer",
+      "name": "Kafka authorizer decisions",
+      "category": "log",
+      "vendor_product": "Apache Kafka",
+      "version_scope": ">=3.0",
+      "applies_to": {
+        "technologies": [
+          "kafka"
+        ],
+        "component_types": [
+          "queue"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "authorizer decision",
+          "mapping_status": "description_only",
+          "description": "Allow or deny for a principal, operation and resource. Whether allows are logged depends on the configured authorizer and its log level."
+        }
+      ],
+      "fields": {
+        "native": [
+          "principal",
+          "operation",
+          "resource_type",
+          "resource_name",
+          "decision"
+        ],
+        "derived": [
+          "first_time_principal_topic_pair"
+        ],
+        "absent_without_enrichment": [
+          "message_payload",
+          "producing_application_identity"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects authorisation decisions, not message content."
+      },
+      "supports": [
+        {
+          "control": "Broker topic ACLs",
+          "effect": "verifies_operation",
+          "without_it": "ACL existence is asserted and never observed"
+        }
+      ],
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "authorizer logger set to INFO for allows",
+          "distribution actually emits successful authorisations"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Streaming platform"
+      },
+      "observes": [
+        {
+          "behaviour": "unexpected_topic_write",
+          "attack_relation": "adjacent",
+          "attack_id": "T1021.007",
+          "relation_kind": "narrower",
+          "matrix": "enterprise",
+          "rationale": "A write to an internal topic is one mechanism of lateral movement through cloud services; the authorizer sees the write, not the movement."
+        }
+      ],
+      "estates": [
+        "telemetry_saas"
+      ],
+      "provenance": {
+        "reference": "https://kafka.apache.org/38/security/authorization-and-acls/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "vault.audit_device",
+      "name": "HashiCorp Vault audit device records",
+      "category": "audit",
+      "vendor_product": "HashiCorp Vault",
+      "version_scope": ">=1.12",
+      "applies_to": {
+        "technologies": [
+          "hashicorp-vault"
+        ],
+        "component_types": [
+          "secrets_manager"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "request",
+          "mapping_status": "native_identifier",
+          "description": "Request record; pairs with its response by request.id."
+        },
+        {
+          "event_ref": "response",
+          "mapping_status": "native_identifier"
+        }
+      ],
+      "fields": {
+        "native": [
+          "request.id",
+          "auth.display_name",
+          "auth.policies",
+          "request.path",
+          "request.operation",
+          "response.status"
+        ],
+        "derived": [
+          "secret_read_rate_per_principal"
+        ],
+        "absent_without_enrichment": [
+          "secret_value",
+          "requesting_workload_identity"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects secret reads by principal and path. Identifiers are hashed within the audit device's scope; raw tokens are never required."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "an audit device enabled",
+          "log sink reachable or Vault seals"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Secrets platform"
+      },
+      "observes": [
+        {
+          "behaviour": "secret_extraction",
+          "attack_relation": "exact",
+          "attack_id": "T1552.001",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "staged_secret_collection",
+          "attack_relation": "exact",
+          "attack_id": "T1074",
+          "matrix": "enterprise"
+        }
+      ],
+      "estates": [
+        "telemetry_saas"
+      ],
+      "provenance": {
+        "reference": "https://developer.hashicorp.com/vault/docs/audit/schema",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "kubernetes.api_audit",
+      "name": "Kubernetes API server audit events",
+      "category": "audit",
+      "vendor_product": "Kubernetes",
+      "version_scope": ">=1.26",
+      "applies_to": {
+        "technologies": [
+          "kubernetes",
+          "containerd"
+        ],
+        "component_types": [
+          "container_platform"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "audit.k8s.io/v1 Event",
+          "mapping_status": "native_identifier",
+          "description": "One record per API request, at the configured audit level."
+        }
+      ],
+      "fields": {
+        "native": [
+          "user.username",
+          "verb",
+          "objectRef.resource",
+          "objectRef.namespace",
+          "responseStatus.code",
+          "sourceIPs"
+        ],
+        "derived": [
+          "exec_into_pod_rate"
+        ],
+        "absent_without_enrichment": [
+          "in_container_process_activity",
+          "file_reads_inside_the_container"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects API requests only. A process reading a mounted service-account token produces no API audit event; that needs container or host file telemetry."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "audit policy configured beyond Metadata for request bodies",
+          "audit backend shipping off-cluster"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Cluster platform"
+      },
+      "observes": [
+        {
+          "behaviour": "pod_exec",
+          "attack_relation": "adjacent",
+          "attack_id": "T1059.004",
+          "relation_kind": "narrower",
+          "matrix": "enterprise",
+          "rationale": "An exec API call is one route to shell execution; execution from a compromised workload process is invisible here."
+        },
+        {
+          "behaviour": "cluster_resource_discovery",
+          "attack_relation": "exact",
+          "attack_id": "T1613",
+          "matrix": "enterprise"
+        }
+      ],
+      "estates": [
+        "telemetry_saas"
+      ],
+      "provenance": {
+        "reference": "https://kubernetes.io/docs/tasks/debug/debug-cluster/audit/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "container.file_access",
+      "name": "Container and host file access telemetry",
+      "category": "log",
+      "vendor_product": "eBPF or host agent (generic)",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "kubernetes",
+          "containerd",
+          "docker",
+          "ubuntu"
+        ],
+        "component_types": [
+          "container_platform",
+          "server",
+          "ci_cd"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "file open",
+          "mapping_status": "description_only",
+          "description": "Process-level file access inside a container or on the host."
+        },
+        {
+          "event_ref": "process exec",
+          "mapping_status": "description_only"
+        }
+      ],
+      "fields": {
+        "native": [
+          "process_path",
+          "process_args",
+          "file_path",
+          "container_id",
+          "user_id"
+        ],
+        "derived": [
+          "token_file_read_by_unexpected_process"
+        ],
+        "absent_without_enrichment": [
+          "kubernetes_workload_identity",
+          "image_provenance"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "The source that actually sees a mounted-token read, which the API audit cannot."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "an agent or eBPF collector deployed to every node",
+          "container-to-workload mapping available"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Cluster platform"
+      },
+      "observes": [
+        {
+          "behaviour": "credentials_in_files_read",
+          "attack_relation": "exact",
+          "attack_id": "T1552.001",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "shell_execution_in_workload",
+          "attack_relation": "exact",
+          "attack_id": "T1059.004",
+          "matrix": "enterprise"
+        }
+      ],
+      "estates": [
+        "telemetry_saas"
+      ],
+      "provenance": {
+        "reference": "https://attack.mitre.org/techniques/T1552/001/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "github_actions.workflow_run",
+      "name": "CI workflow run records",
+      "category": "audit",
+      "vendor_product": "GitHub Actions",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "github-actions",
+          "github-actions-runner"
+        ],
+        "component_types": [
+          "ci_cd"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "workflow_run",
+          "mapping_status": "native_identifier"
+        },
+        {
+          "event_ref": "workflow_job",
+          "mapping_status": "native_identifier",
+          "description": "Includes the runner that executed the job."
+        }
+      ],
+      "fields": {
+        "native": [
+          "actor",
+          "repository",
+          "ref",
+          "workflow_path",
+          "runner_name",
+          "conclusion"
+        ],
+        "derived": [
+          "workflow_changed_and_run_by_same_actor"
+        ],
+        "absent_without_enrichment": [
+          "commands_executed_inside_the_job",
+          "secrets_accessed"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects what ran and who triggered it, not what the job did."
+      },
+      "supports": [
+        {
+          "control": "Branch protection and required review",
+          "effect": "verifies_operation",
+          "without_it": "a workflow change reaching a runner unreviewed is invisible"
+        }
+      ],
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "audit log streaming enabled",
+          "self-hosted runner logs collected separately"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Developer platform"
+      },
+      "observes": [
+        {
+          "behaviour": "pipeline_execution_by_attacker",
+          "attack_relation": "adjacent",
+          "attack_id": "T1059.004",
+          "relation_kind": "precursor",
+          "matrix": "enterprise",
+          "rationale": "The job's existence and trigger are visible; the shell commands it ran are not."
+        }
+      ],
+      "estates": [
+        "telemetry_saas"
+      ],
+      "provenance": {
+        "reference": "https://docs.github.com/en/actions",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "windows.security_events",
+      "name": "Windows security event log",
+      "category": "audit",
+      "vendor_product": "Microsoft Windows",
+      "version_scope": ">=Server 2019",
+      "applies_to": {
+        "technologies": [
+          "windows",
+          "windows-server"
+        ],
+        "component_types": [
+          "workstation",
+          "server",
+          "admin_console"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "4624",
+          "mapping_status": "native_identifier",
+          "description": "Successful logon, with logon type."
+        },
+        {
+          "event_ref": "4625",
+          "mapping_status": "native_identifier",
+          "description": "Failed logon."
+        },
+        {
+          "event_ref": "4688",
+          "mapping_status": "native_identifier",
+          "description": "Process creation; command line only if that policy is enabled."
+        }
+      ],
+      "fields": {
+        "native": [
+          "SubjectUserName",
+          "TargetUserName",
+          "LogonType",
+          "IpAddress",
+          "NewProcessName",
+          "CommandLine"
+        ],
+        "derived": [
+          "interactive_logon_outside_shift"
+        ],
+        "absent_without_enrichment": [
+          "physical_presence",
+          "badge_event_correlation"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects logon and process activity on the host."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "command line auditing enabled for 4688",
+          "forwarding to a central collector"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Endpoint engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "valid_account_use",
+          "attack_relation": "exact",
+          "attack_id": "T1078",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "remote_service_exploitation",
+          "attack_relation": "adjacent",
+          "attack_id": "T1210",
+          "relation_kind": "consequence",
+          "matrix": "enterprise",
+          "rationale": "The resulting session or process is visible; the exploitation itself is not."
+        }
+      ],
+      "estates": [
+        "plant_ot",
+        "branch_physical"
+      ],
+      "provenance": {
+        "reference": "https://learn.microsoft.com/en-us/windows/security/threat-protection/auditing/basic-audit-logon-events",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "ad.authentication",
+      "name": "Active Directory authentication events",
+      "category": "audit",
+      "vendor_product": "Microsoft Active Directory",
+      "version_scope": ">=Server 2019",
+      "applies_to": {
+        "technologies": [
+          "active-directory",
+          "windows-server"
+        ],
+        "component_types": [
+          "identity_provider"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "4768",
+          "mapping_status": "native_identifier",
+          "description": "Kerberos TGT requested."
+        },
+        {
+          "event_ref": "4769",
+          "mapping_status": "native_identifier",
+          "description": "Service ticket requested."
+        }
+      ],
+      "fields": {
+        "native": [
+          "TargetUserName",
+          "ServiceName",
+          "IpAddress",
+          "TicketEncryptionType",
+          "Status"
+        ],
+        "derived": [
+          "service_ticket_burst"
+        ],
+        "absent_without_enrichment": [
+          "originating_physical_location",
+          "device_trust_state"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects ticket issuance, the domain-wide view of account use."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "Kerberos auditing enabled on every domain controller"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Identity team"
+      },
+      "observes": [
+        {
+          "behaviour": "domain_account_use",
+          "attack_relation": "exact",
+          "attack_id": "T1078",
+          "matrix": "enterprise"
+        }
+      ],
+      "estates": [
+        "branch_physical"
+      ],
+      "provenance": {
+        "reference": "https://attack.mitre.org/techniques/T1078/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "smb.object_access",
+      "name": "SMB file share object access auditing",
+      "category": "audit",
+      "vendor_product": "Windows File Server",
+      "version_scope": ">=Server 2019",
+      "applies_to": {
+        "technologies": [
+          "smb",
+          "windows-server"
+        ],
+        "component_types": [
+          "file_store"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "5145",
+          "mapping_status": "native_identifier",
+          "description": "Network share object access check."
+        },
+        {
+          "event_ref": "4663",
+          "mapping_status": "native_identifier",
+          "description": "Attempt to access an object, with the access mask."
+        }
+      ],
+      "fields": {
+        "native": [
+          "SubjectUserName",
+          "ShareName",
+          "RelativeTargetName",
+          "AccessMask",
+          "IpAddress"
+        ],
+        "derived": [
+          "read_volume_per_principal_per_hour"
+        ],
+        "absent_without_enrichment": [
+          "file_sensitivity_label",
+          "business_justification"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects share reads per principal. Enabled per share, so coverage is a property of configuration, not of the product."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "object access auditing enabled on each share (two of eleven in the branch estate)",
+          "SACLs set on the directories that matter"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Endpoint engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "bulk_share_read",
+          "attack_relation": "exact",
+          "attack_id": "T1005",
+          "matrix": "enterprise"
+        }
+      ],
+      "estates": [
+        "branch_physical"
+      ],
+      "provenance": {
+        "reference": "https://learn.microsoft.com/en-us/windows/security/threat-protection/auditing/event-5145",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "netflow.records",
+      "name": "NetFlow or IPFIX records",
+      "category": "log",
+      "vendor_product": "Network flow exporter (generic)",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "netflow",
+          "cisco-ios"
+        ],
+        "component_types": [
+          "network_device"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "flow record",
+          "mapping_status": "description_only",
+          "description": "Aggregated conversation with byte and packet counts."
+        }
+      ],
+      "fields": {
+        "native": [
+          "src_addr",
+          "dst_addr",
+          "src_port",
+          "dst_port",
+          "protocol",
+          "bytes",
+          "packets",
+          "start",
+          "end"
+        ],
+        "derived": [
+          "new_device_on_vlan",
+          "beaconing_interval"
+        ],
+        "absent_without_enrichment": [
+          "payload",
+          "user_identity",
+          "device_ownership"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects that a conversation happened. Cannot see an out-of-band cellular path, which does not traverse the exporter at all."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "export configured on the access layer, not only the core",
+          "collector retention beyond incident-only querying"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Network engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "unexpected_device_conversation",
+          "attack_relation": "adjacent",
+          "attack_id": "T1200",
+          "relation_kind": "consequence",
+          "matrix": "enterprise",
+          "rationale": "A hardware implant is observed by the traffic it generates, never by its insertion."
+        },
+        {
+          "behaviour": "network_service_discovery",
+          "attack_relation": "exact",
+          "attack_id": "T1046",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "alternative_protocol_egress",
+          "attack_relation": "adjacent",
+          "attack_id": "T1048",
+          "relation_kind": "narrower",
+          "matrix": "enterprise",
+          "rationale": "Only egress that crosses this exporter is visible; a cellular modem is not."
+        }
+      ],
+      "estates": [
+        "branch_physical"
+      ],
+      "provenance": {
+        "reference": "https://attack.mitre.org/techniques/T1200/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "network_device.aaa",
+      "name": "Network device AAA and configuration accounting",
+      "category": "audit",
+      "vendor_product": "TACACS+ / network OS",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "cisco-ios",
+          "tacacs"
+        ],
+        "component_types": [
+          "network_device"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "command accounting",
+          "mapping_status": "description_only",
+          "description": "Administrative command executed on the device, with the authenticated operator."
+        },
+        {
+          "event_ref": "link state change",
+          "mapping_status": "description_only",
+          "description": "Port up or down, including a port that has been unused for months."
+        }
+      ],
+      "fields": {
+        "native": [
+          "operator",
+          "device",
+          "command",
+          "interface",
+          "link_state",
+          "timestamp"
+        ],
+        "derived": [
+          "dormant_port_activation"
+        ],
+        "absent_without_enrichment": [
+          "physical_identity_of_the_person_at_the_device"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "A dormant port coming up is the earliest network-side sign of an implant."
+      },
+      "collection": {
+        "necessity": "alternative",
+        "status": "unknown",
+        "prerequisites": [
+          "command accounting enabled",
+          "syslog forwarded and retained"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Network engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "unexpected_port_activation",
+          "attack_relation": "adjacent",
+          "attack_id": "T1200",
+          "relation_kind": "precursor",
+          "matrix": "enterprise",
+          "rationale": "A port coming up precedes any traffic the implant generates."
+        }
+      ],
+      "estates": [
+        "branch_physical"
+      ],
+      "provenance": {
+        "reference": "https://attack.mitre.org/techniques/T1200/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "badge.door_event",
+      "name": "Badge reader grant and deny events",
+      "category": "alert_feed",
+      "vendor_product": "Physical access control system",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "hid-access-control",
+          "door-controller",
+          "access-control-server"
+        ],
+        "component_types": [
+          "network_device",
+          "service"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "access granted",
+          "mapping_status": "description_only"
+        },
+        {
+          "event_ref": "access denied",
+          "mapping_status": "description_only"
+        },
+        {
+          "event_ref": "door forced",
+          "mapping_status": "description_only"
+        }
+      ],
+      "fields": {
+        "native": [
+          "credential_id",
+          "holder_name",
+          "door_id",
+          "outcome",
+          "timestamp"
+        ],
+        "derived": [
+          "out_of_hours_grant",
+          "deny_streak",
+          "antipassback_violation"
+        ],
+        "absent_without_enrichment": [
+          "logical_account_of_the_same_person",
+          "visitor_escort_compliance"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects physical presence. Owned by facilities and, in most estates, ingested by no security tool."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "export from the access control server",
+          "identity join between badge holder and directory account"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Facilities"
+      },
+      "observes": [
+        {
+          "behaviour": "physical_presence_at_a_controlled_door",
+          "attack_relation": "unmapped",
+          "local_id": "EM-PHYS-0001",
+          "rationale": "Physical entry is not an ATT&CK technique. Labelling it T1078 would conflate a person walking through a door with account use."
+        },
+        {
+          "behaviour": "presence_preceding_logical_access",
+          "attack_relation": "adjacent",
+          "attack_id": "T1078",
+          "relation_kind": "precursor",
+          "matrix": "enterprise",
+          "rationale": "A badge grant before an interactive logon corroborates that the account holder was present; absence of a grant is the interesting case."
+        }
+      ],
+      "estates": [
+        "branch_physical"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "badge.door_contact_alarm",
+      "name": "Door contact alarm",
+      "category": "alert_feed",
+      "vendor_product": "Building alarm system",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "door-controller"
+        ],
+        "component_types": [
+          "network_device",
+          "server"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "contact opened outside change window",
+          "mapping_status": "description_only"
+        }
+      ],
+      "fields": {
+        "native": [
+          "door_id",
+          "opened_at",
+          "closed_at",
+          "change_window_flag"
+        ],
+        "derived": [
+          "open_duration"
+        ],
+        "absent_without_enrichment": [
+          "who_opened_it",
+          "what_was_done_inside"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects entry to the comms closet. Alerts to facilities, not to security."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "alarm panel export",
+          "change window calendar available for comparison"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Facilities"
+      },
+      "observes": [
+        {
+          "behaviour": "restricted_space_entry",
+          "attack_relation": "unmapped",
+          "local_id": "EM-PHYS-0002",
+          "rationale": "Entry to a locked room has no ATT&CK equivalent; it is the enabling act for a hardware implant, not the implant itself."
+        }
+      ],
+      "estates": [
+        "branch_physical"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "cctv.retention_index",
+      "name": "CCTV recorder index",
+      "category": "physical_record",
+      "vendor_product": "NVR",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "nvr",
+          "onvif"
+        ],
+        "component_types": [
+          "server"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "recorded segment",
+          "mapping_status": "description_only",
+          "description": "Footage exists for a camera and time range. The footage itself is evidence, not an event stream."
+        }
+      ],
+      "fields": {
+        "native": [
+          "camera_id",
+          "segment_start",
+          "segment_end"
+        ],
+        "derived": [],
+        "absent_without_enrichment": [
+          "what_the_footage_shows"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Response support rather than detection: reviewed only once something is already suspected."
+      },
+      "collection": {
+        "necessity": "enrichment",
+        "status": "unknown",
+        "prerequisites": [
+          "retention long enough to cover the detection latency of everything else"
+        ],
+        "retention": "30d in the branch estate"
+      },
+      "availability": {
+        "artefact": "human_readable",
+        "cadence": "on_request",
+        "latency": "hours to days",
+        "owner": "Facilities"
+      },
+      "observes": [
+        {
+          "behaviour": "visual_corroboration_of_presence",
+          "attack_relation": "unmapped",
+          "local_id": "EM-PHYS-0003",
+          "rationale": "Footage corroborates a person and a time. It detects nothing on its own and must never be recorded as a detection source."
+        }
+      ],
+      "estates": [
+        "branch_physical"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "asset_audit.quarterly_report",
+      "name": "Quarterly hardware asset audit",
+      "category": "report",
+      "vendor_product": "Manual process",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [],
+        "component_types": [
+          "network_device",
+          "server",
+          "workstation"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "audit finding",
+          "mapping_status": "description_only",
+          "description": "A device racked that is not in the register, or registered and absent."
+        }
+      ],
+      "fields": {
+        "native": [
+          "location",
+          "device_observed",
+          "register_match",
+          "auditor",
+          "audit_date"
+        ],
+        "derived": [
+          "unregistered_device_present"
+        ],
+        "absent_without_enrichment": [
+          "when_the_device_appeared",
+          "what_it_did"
+        ]
+      },
+      "control_function": {
+        "domain": "variance_management",
+        "note": "Detects that the estate no longer matches its register. It is not attack detection: an implant is found because the rack stopped matching the spreadsheet, up to three months later."
+      },
+      "supports": [
+        {
+          "control": "Port security and network access control",
+          "effect": "provides_context",
+          "without_it": "an unknown MAC cannot be resolved to a physical device"
+        }
+      ],
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "an asset register that is current",
+          "physical access to every closet"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "human_readable",
+        "cadence": "quarterly",
+        "latency": "up to 90 days",
+        "owner": "Facilities and IT operations"
+      },
+      "observes": [
+        {
+          "behaviour": "unregistered_hardware_present",
+          "attack_relation": "adjacent",
+          "attack_id": "T1200",
+          "relation_kind": "consequence",
+          "matrix": "enterprise",
+          "rationale": "The audit sees the implant after the fact, as an inventory discrepancy rather than as an intrusion."
+        },
+        {
+          "behaviour": "estate_drift_from_register",
+          "attack_relation": "unmapped",
+          "local_id": "EM-PROC-0001",
+          "rationale": "Control drift is not an adversary behaviour."
+        }
+      ],
+      "estates": [
+        "branch_physical"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "badge_audit.monthly_report",
+      "name": "Monthly badge and access review",
+      "category": "report",
+      "vendor_product": "Manual process",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "access-control-server"
+        ],
+        "component_types": [
+          "service"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "review finding",
+          "mapping_status": "description_only",
+          "description": "A credential still active for a leaver, or a grant to a space the holder has no reason to enter."
+        }
+      ],
+      "fields": {
+        "native": [
+          "credential_id",
+          "holder_status",
+          "zones_granted",
+          "reviewer",
+          "review_date"
+        ],
+        "derived": [
+          "active_credential_for_leaver"
+        ],
+        "absent_without_enrichment": [
+          "use_of_the_credential_since_the_last_review"
+        ]
+      },
+      "control_function": {
+        "domain": "variance_management",
+        "note": "Asks whether access rights have drifted, not whether someone is walking through a door. The monthly interval is the weakness, not the data."
+      },
+      "collection": {
+        "necessity": "alternative",
+        "status": "unknown",
+        "prerequisites": [
+          "joiners and leavers feed from HR"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "human_readable",
+        "cadence": "monthly",
+        "latency": "up to 30 days",
+        "owner": "Facilities"
+      },
+      "observes": [
+        {
+          "behaviour": "physical_access_rights_drift",
+          "attack_relation": "unmapped",
+          "local_id": "EM-PROC-0002",
+          "rationale": "Entitlement drift is a control-health finding, not an adversary behaviour."
+        }
+      ],
+      "estates": [
+        "branch_physical"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "historian.tag_change",
+      "name": "Process historian tag records",
+      "category": "log",
+      "vendor_product": "Process historian",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "process-historian"
+        ],
+        "component_types": [
+          "database"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "tag value change",
+          "mapping_status": "description_only",
+          "description": "Time-series record of a process value or setpoint."
+        }
+      ],
+      "fields": {
+        "native": [
+          "tag_name",
+          "value",
+          "quality",
+          "timestamp",
+          "source_device"
+        ],
+        "derived": [
+          "setpoint_outside_operating_envelope",
+          "collection_gap"
+        ],
+        "absent_without_enrichment": [
+          "which_operator_or_account_changed_it"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects the process effect. The historian records what happened to the plant, not who caused it."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "tag list covering safety-relevant setpoints",
+          "time synchronisation with IT telemetry"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Process engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "parameter_modified",
+          "attack_relation": "exact",
+          "attack_id": "T0836",
+          "matrix": "ics"
+        },
+        {
+          "behaviour": "control_manipulation_effect",
+          "attack_relation": "adjacent",
+          "attack_id": "T0831",
+          "relation_kind": "consequence",
+          "matrix": "ics",
+          "rationale": "The historian shows the resulting process state; the command that caused it comes from the HMI or the controller."
+        },
+        {
+          "behaviour": "historian_collection_gap",
+          "attack_relation": "unmapped",
+          "local_id": "EM-OT-0001",
+          "rationale": "A gap in collection is a telemetry-health finding that may also be an evasion symptom; it is not itself a technique."
+        }
+      ],
+      "estates": [
+        "plant_ot"
+      ],
+      "provenance": {
+        "reference": "https://attack.mitre.org/techniques/T0836/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "hmi.operator_action",
+      "name": "HMI operator action records",
+      "category": "audit",
+      "vendor_product": "SCADA HMI software",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "hmi-software"
+        ],
+        "component_types": [
+          "admin_console"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "operator command issued",
+          "mapping_status": "description_only"
+        },
+        {
+          "event_ref": "mode change",
+          "mapping_status": "description_only",
+          "description": "Controller moved between run, program or remote modes."
+        }
+      ],
+      "fields": {
+        "native": [
+          "operator",
+          "workstation",
+          "command",
+          "target_device",
+          "prior_value",
+          "new_value"
+        ],
+        "derived": [
+          "command_outside_shift_pattern"
+        ],
+        "absent_without_enrichment": [
+          "whether_a_work_order_authorised_it"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects the command and the operator identity, which the historian cannot supply."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "HMI audit logging enabled and exported off the control network"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Process engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "operating_mode_change",
+          "attack_relation": "exact",
+          "attack_id": "T0858",
+          "matrix": "ics"
+        },
+        {
+          "behaviour": "parameter_modified",
+          "attack_relation": "exact",
+          "attack_id": "T0836",
+          "matrix": "ics"
+        }
+      ],
+      "estates": [
+        "plant_ot"
+      ],
+      "provenance": {
+        "reference": "https://attack.mitre.org/techniques/T0858/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "remote_access.session",
+      "name": "Remote access and jump host session records",
+      "category": "audit",
+      "vendor_product": "VPN concentrator or jump host",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "ssl-vpn",
+          "windows-server"
+        ],
+        "component_types": [
+          "gateway",
+          "server"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "session established",
+          "mapping_status": "description_only"
+        },
+        {
+          "event_ref": "session recording",
+          "mapping_status": "description_only",
+          "description": "Keystroke or screen capture where a session manager is deployed."
+        }
+      ],
+      "fields": {
+        "native": [
+          "principal",
+          "source_ip",
+          "destination",
+          "session_start",
+          "session_end",
+          "vendor_account_flag"
+        ],
+        "derived": [
+          "vendor_session_outside_maintenance_window"
+        ],
+        "absent_without_enrichment": [
+          "work_order_reference",
+          "named_human_behind_a_shared_vendor_account"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects remote entry into the estate, including vendor access."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "session manager in the path rather than direct RDP or SSH"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Network engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "remote_services_entry",
+          "attack_relation": "exact",
+          "attack_id": "T0886",
+          "matrix": "ics"
+        },
+        {
+          "behaviour": "valid_account_use",
+          "attack_relation": "exact",
+          "attack_id": "T1078",
+          "matrix": "enterprise"
+        }
+      ],
+      "estates": [
+        "plant_ot"
+      ],
+      "provenance": {
+        "reference": "https://attack.mitre.org/techniques/T0886/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "ledger.adjustment_audit",
+      "name": "Loyalty ledger adjustment audit log",
+      "category": "audit",
+      "vendor_product": "Custom application",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "postgres"
+        ],
+        "component_types": [
+          "database"
+        ],
+        "scope": "estate_specific"
+      },
+      "events": [
+        {
+          "event_ref": "points adjustment",
+          "mapping_status": "description_only",
+          "description": "Immutable record with actor, approver, reason code and prior balance."
+        },
+        {
+          "event_ref": "redemption",
+          "mapping_status": "description_only"
+        }
+      ],
+      "fields": {
+        "native": [
+          "adjustment_id",
+          "customer_id",
+          "actor_account",
+          "approver_account",
+          "reason_code",
+          "delta",
+          "prior_balance",
+          "timestamp"
+        ],
+        "derived": [
+          "adjustments_just_below_threshold",
+          "actor_approver_same_person",
+          "dormant_account_touched"
+        ],
+        "absent_without_enrichment": [
+          "ticket_reference",
+          "customer_contact_that_justified_it"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "The richest evidence in the estate, and nothing currently alerts on it."
+      },
+      "supports": [
+        {
+          "control": "Dual approval above 5,000 points",
+          "effect": "verifies_operation",
+          "without_it": "the control's operation is asserted and never observed"
+        }
+      ],
+      "join_keys": {
+        "actor": "actor_account",
+        "approver": "approver_account",
+        "same_artefact": true
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "export to a store outside the application's own database"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Application engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "separation_of_duties_bypass",
+          "attack_relation": "unmapped",
+          "local_id": "EM-PROC-0003",
+          "rationale": "One identity performing both sides of a separated duty has no ATT&CK equivalent: ATT&CK describes what an attacker does to systems, not how an organization divides authority."
+        },
+        {
+          "behaviour": "sub_threshold_splitting",
+          "attack_relation": "unmapped",
+          "local_id": "EM-FRAUD-0001",
+          "rationale": "Staying below an approval threshold is an attack on a business rule, not on a system."
+        },
+        {
+          "behaviour": "account_manipulation",
+          "attack_relation": "adjacent",
+          "attack_id": "T1098",
+          "relation_kind": "variant",
+          "matrix": "enterprise",
+          "rationale": "The intent matches - altering an account's standing - but the mechanism is an authorised business transaction rather than a permission change."
+        }
+      ],
+      "estates": [
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "agent_console.session_recording",
+      "name": "Agent console session recording",
+      "category": "audit",
+      "vendor_product": "Customer service platform",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "zendesk",
+          "custom-agent-console"
+        ],
+        "component_types": [
+          "admin_console"
+        ],
+        "scope": "estate_specific"
+      },
+      "events": [
+        {
+          "event_ref": "customer record viewed",
+          "mapping_status": "description_only"
+        },
+        {
+          "event_ref": "screen recording",
+          "mapping_status": "description_only",
+          "description": "Captured for quality assurance and sampled for tone, not for fraud."
+        }
+      ],
+      "fields": {
+        "native": [
+          "agent_account",
+          "customer_id",
+          "action",
+          "ticket_id",
+          "timestamp"
+        ],
+        "derived": [
+          "lookup_without_an_open_ticket",
+          "dormant_high_balance_browsing"
+        ],
+        "absent_without_enrichment": [
+          "intent",
+          "supervisor_awareness"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects agent activity. Its recordings are reviewed by sampling, so the derived fields matter more than the footage."
+      },
+      "collection": {
+        "necessity": "alternative",
+        "status": "unknown",
+        "prerequisites": [
+          "action-level export, not only video",
+          "ticket identifier attached to each lookup"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Customer service operations"
+      },
+      "observes": [
+        {
+          "behaviour": "authorised_access_without_business_reason",
+          "attack_relation": "unmapped",
+          "local_id": "EM-INSIDER-0001",
+          "rationale": "Every action is permitted; only the absence of a reason distinguishes it."
+        },
+        {
+          "behaviour": "target_selection_reconnaissance",
+          "attack_relation": "adjacent",
+          "attack_id": "T1078",
+          "relation_kind": "precursor",
+          "matrix": "enterprise",
+          "rationale": "Browsing dormant high-balance accounts precedes the adjustment; it is not itself account misuse."
+        }
+      ],
+      "estates": [
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "fraud_engine.alert",
+      "name": "Vendor fraud scoring alerts",
+      "category": "alert_feed",
+      "vendor_product": "Fraud scoring vendor",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "vendor-ml-scoring"
+        ],
+        "component_types": [
+          "external_service"
+        ],
+        "scope": "estate_specific"
+      },
+      "events": [
+        {
+          "event_ref": "score exceeded",
+          "mapping_status": "description_only",
+          "description": "Vendor-tuned anomaly score above a threshold nobody internal can explain."
+        }
+      ],
+      "fields": {
+        "native": [
+          "event_id",
+          "score",
+          "rule_or_model_id",
+          "customer_id",
+          "decision"
+        ],
+        "derived": [],
+        "absent_without_enrichment": [
+          "why_the_score_was_assigned",
+          "internal_account_context"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects anomalous value movement. Catches bursts; a patient attacker below the velocity threshold is invisible to it."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "alert webhook or file feed from the vendor",
+          "mapping from vendor customer ids to internal ones"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Fraud operations"
+      },
+      "observes": [
+        {
+          "behaviour": "anomalous_value_movement",
+          "attack_relation": "unmapped",
+          "local_id": "EM-FRAUD-0002",
+          "rationale": "A fraud score has no ATT&CK equivalent, and forcing one would claim a technique the engine never assessed."
+        }
+      ],
+      "estates": [
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "email.suppression_record",
+      "name": "Transactional email suppression and delivery records",
+      "category": "log",
+      "vendor_product": "Transactional email provider",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "sendgrid"
+        ],
+        "component_types": [
+          "external_service"
+        ],
+        "scope": "estate_specific"
+      },
+      "events": [
+        {
+          "event_ref": "message suppressed",
+          "mapping_status": "description_only",
+          "description": "A notification that was not sent, recorded in the provider rather than in the ledger."
+        },
+        {
+          "event_ref": "message delivered",
+          "mapping_status": "description_only"
+        }
+      ],
+      "fields": {
+        "native": [
+          "message_id",
+          "recipient",
+          "template_id",
+          "suppression_reason",
+          "actor_account",
+          "timestamp"
+        ],
+        "derived": [
+          "suppression_coinciding_with_an_adjustment"
+        ],
+        "absent_without_enrichment": [
+          "the_ledger_event_it_relates_to"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects that the customer was not told. Only meaningful when joined to the ledger, which nothing currently does."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "provider event webhook",
+          "a join key shared with the ledger"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Application engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "victim_notification_suppressed",
+          "attack_relation": "adjacent",
+          "attack_id": "T1114.003",
+          "relation_kind": "variant",
+          "matrix": "enterprise",
+          "rationale": "Same intent as hiding mail from a victim, different mechanism: an application feature rather than a mailbox rule."
+        }
+      ],
+      "estates": [
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "https://attack.mitre.org/techniques/T1114/003/",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "partner.settlement_file",
+      "name": "Redemption partner daily settlement file",
+      "category": "reconciliation",
+      "vendor_product": "Gift card partner",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "gift-card-api"
+        ],
+        "component_types": [
+          "external_service"
+        ],
+        "scope": "estate_specific"
+      },
+      "events": [
+        {
+          "event_ref": "settlement line",
+          "mapping_status": "description_only",
+          "description": "One line per redemption the partner honoured."
+        }
+      ],
+      "fields": {
+        "native": [
+          "redemption_id",
+          "customer_id",
+          "value",
+          "settled_at"
+        ],
+        "derived": [
+          "redemptions_without_a_matching_ledger_event"
+        ],
+        "absent_without_enrichment": [
+          "who_initiated_the_redemption_internally"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "The earliest external evidence that value left, and in this estate it is reconciled weekly by one analyst."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "file retrieval automated rather than emailed",
+          "reconciliation against the ledger"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "daily",
+        "latency": "up to 7 days as reconciled",
+        "owner": "Finance"
+      },
+      "observes": [
+        {
+          "behaviour": "value_converted_and_removed",
+          "attack_relation": "unmapped",
+          "local_id": "EM-FRAUD-0003",
+          "rationale": "Conversion of loyalty value to a gift card is a business outcome; the nearest technique would describe data exfiltration, which is not what happened."
+        }
+      ],
+      "estates": [
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "finance.points_liability_reconciliation",
+      "name": "Nightly points liability reconciliation",
+      "category": "reconciliation",
+      "vendor_product": "Finance process",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [],
+        "component_types": [
+          "database"
+        ],
+        "scope": "estate_specific"
+      },
+      "events": [
+        {
+          "event_ref": "liability variance",
+          "mapping_status": "description_only",
+          "description": "Issued, redeemed and expired points compared against the liability account."
+        }
+      ],
+      "fields": {
+        "native": [
+          "period",
+          "issued",
+          "redeemed",
+          "expired",
+          "liability_delta",
+          "variance_vs_forecast"
+        ],
+        "derived": [
+          "variance_outside_normal_band"
+        ],
+        "absent_without_enrichment": [
+          "which_accounts_or_agents_caused_it"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects the aggregate no per-event rule sees, including theft split below every threshold."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "daily run rather than month-end",
+          "variance band agreed with finance"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "daily",
+        "latency": "up to 24 hours",
+        "owner": "Finance"
+      },
+      "observes": [
+        {
+          "behaviour": "aggregate_value_leakage",
+          "attack_relation": "unmapped",
+          "local_id": "EM-FRAUD-0004",
+          "rationale": "A liability variance is an accounting observation. It detects the consequence of many small permitted actions, which no technique describes."
+        }
+      ],
+      "estates": [
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "complaints.queue_tickets",
+      "name": "Customer complaints queue",
+      "category": "human_report",
+      "vendor_product": "Helpdesk",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "helpdesk-queue"
+        ],
+        "component_types": [
+          "service"
+        ],
+        "scope": "estate_specific"
+      },
+      "events": [
+        {
+          "event_ref": "complaint ticket",
+          "mapping_status": "description_only",
+          "description": "A customer reporting that points are missing. Frequently the first true detection, and owned by customer service."
+        }
+      ],
+      "fields": {
+        "native": [
+          "ticket_id",
+          "customer_id",
+          "category",
+          "text",
+          "created_at"
+        ],
+        "derived": [
+          "clustered_complaints_same_category_same_week"
+        ],
+        "absent_without_enrichment": [
+          "the_ledger_events_the_customer_is_describing"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Detects the effect, reported by the victim. Triaged for satisfaction, so ten identical complaints look like ten unhappy customers."
+      },
+      "collection": {
+        "necessity": "alternative",
+        "status": "unknown",
+        "prerequisites": [
+          "a category that survives triage",
+          "correlation across tickets rather than per-ticket handling"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "human_report",
+        "cadence": "continuous",
+        "latency": "hours to days",
+        "owner": "Customer service"
+      },
+      "observes": [
+        {
+          "behaviour": "victim_reported_loss",
+          "attack_relation": "unmapped",
+          "local_id": "EM-FRAUD-0005",
+          "rationale": "A customer complaint is not an adversary behaviour; it is the consequence observed by the person harmed."
+        }
+      ],
+      "estates": [
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "identity.role_assignment_export",
+      "name": "Role assignment export",
+      "category": "report",
+      "vendor_product": "Identity governance (generic)",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "auth0",
+          "okta",
+          "active-directory"
+        ],
+        "component_types": [
+          "identity_provider",
+          "admin_console"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "role assignment snapshot",
+          "mapping_status": "description_only",
+          "description": "Which accounts hold which roles at a point in time."
+        }
+      ],
+      "fields": {
+        "native": [
+          "account",
+          "roles",
+          "granted_at",
+          "granted_by",
+          "justification"
+        ],
+        "derived": [
+          "accounts_holding_both_maker_and_checker_roles"
+        ],
+        "absent_without_enrichment": [
+          "whether_the_combination_was_ever_used_together"
+        ]
+      },
+      "control_function": {
+        "domain": "decision_support",
+        "note": "Detects nothing on its own. It is the data without which a separation-of-duties control cannot be evaluated or even known to be intact."
+      },
+      "supports": [
+        {
+          "control": "Dual approval above 5,000 points",
+          "effect": "enables_trigger",
+          "without_it": "the threshold is enforced while role correctness is unverified, so one person holding both roles defeats it silently"
+        },
+        {
+          "control": "Role-based agent permissions",
+          "effect": "verifies_operation",
+          "without_it": "holiday-cover grants accumulate unobserved"
+        }
+      ],
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "export including temporary and inherited grants"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "monthly",
+        "latency": "up to 30 days",
+        "owner": "Identity team"
+      },
+      "observes": [
+        {
+          "behaviour": "toxic_role_combination",
+          "attack_relation": "unmapped",
+          "local_id": "EM-PROC-0004",
+          "rationale": "An account holding both sides of a separated duty is a control-design condition, not an adversary action."
+        }
+      ],
+      "estates": [
+        "loyalty_commerce",
+        "claims_portal"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "inventory.asset_register",
+      "name": "Asset register",
+      "category": "report",
+      "vendor_product": "CMDB or spreadsheet",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [],
+        "component_types": [
+          "network_device",
+          "server",
+          "workstation"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "register entry",
+          "mapping_status": "description_only"
+        }
+      ],
+      "fields": {
+        "native": [
+          "asset_id",
+          "location",
+          "owner",
+          "mac_addresses",
+          "commissioned_at"
+        ],
+        "derived": [],
+        "absent_without_enrichment": [
+          "current_physical_presence"
+        ]
+      },
+      "control_function": {
+        "domain": "decision_support",
+        "note": "Detects nothing. It is what turns an unknown MAC on a switch port into a named device or a finding."
+      },
+      "supports": [
+        {
+          "control": "Sticky MAC port security",
+          "effect": "provides_context",
+          "without_it": "an unknown MAC cannot be judged"
+        },
+        {
+          "control": "Quarterly hardware asset audit",
+          "effect": "enables_trigger",
+          "without_it": "the audit has nothing to compare the rack against"
+        }
+      ],
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "kept current at commissioning and decommissioning"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "human_readable",
+        "cadence": "on_request",
+        "latency": "as current as the last update",
+        "owner": "IT operations"
+      },
+      "observes": [],
+      "estates": [
+        "branch_physical",
+        "plant_ot"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "baseline.redemption_velocity",
+      "name": "Redemption and adjustment baseline",
+      "category": "report",
+      "vendor_product": "Internal analytics",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [],
+        "component_types": [
+          "database",
+          "external_service"
+        ],
+        "scope": "estate_specific"
+      },
+      "events": [
+        {
+          "event_ref": "baseline recomputation",
+          "mapping_status": "description_only",
+          "description": "Normal rates per agent, per customer segment and per period."
+        }
+      ],
+      "fields": {
+        "native": [
+          "grouping",
+          "period",
+          "mean",
+          "percentile_95",
+          "sample_count"
+        ],
+        "derived": [
+          "cold_start_flag"
+        ],
+        "absent_without_enrichment": [
+          "seasonality_beyond_the_learning_period"
+        ]
+      },
+      "control_function": {
+        "domain": "decision_support",
+        "note": "Sets the boundary another control applies. Without a stated grouping, learning period, minimum sample count and cold-start behaviour, a threshold is a guess presented as a measurement."
+      },
+      "supports": [
+        {
+          "control": "Velocity and anomaly rules",
+          "effect": "tunes_threshold",
+          "without_it": "the vendor's default threshold is applied to an estate it was not measured on"
+        },
+        {
+          "control": "Nightly points liability reconciliation",
+          "effect": "tunes_threshold",
+          "without_it": "'normal variance' is an opinion"
+        }
+      ],
+      "collection": {
+        "necessity": "enrichment",
+        "status": "unknown",
+        "prerequisites": [
+          "a learning period free of the fraud being measured",
+          "minimum sample count per grouping"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "weekly",
+        "latency": "up to 7 days",
+        "owner": "Fraud operations"
+      },
+      "observes": [],
+      "estates": [
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "application.runtime_log",
+      "name": "Application runtime log",
+      "category": "log",
+      "vendor_product": "Application framework (generic)",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "nodejs",
+          "react",
+          "python",
+          "fastapi",
+          "django",
+          "go",
+          "grpc",
+          "java",
+          "php",
+          "magento"
+        ],
+        "component_types": [
+          "web_app",
+          "api",
+          "service",
+          "admin_console"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "request handled",
+          "mapping_status": "description_only",
+          "description": "Application-level record of a handled request, with whatever identity the framework attaches."
+        },
+        {
+          "event_ref": "authorisation failure",
+          "mapping_status": "description_only"
+        },
+        {
+          "event_ref": "unhandled exception",
+          "mapping_status": "description_only"
+        }
+      ],
+      "fields": {
+        "native": [
+          "route",
+          "method",
+          "status",
+          "principal",
+          "request_id",
+          "duration_ms"
+        ],
+        "derived": [
+          "first_time_route_for_principal"
+        ],
+        "absent_without_enrichment": [
+          "tenant_scope_of_the_query",
+          "downstream_database_statement"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "The only source that sees application intent - which route, on whose behalf. What it does not see is the statement the database actually ran."
+      },
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "structured logging rather than free prose",
+          "request id propagated to downstream calls"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "seconds",
+        "owner": "Application engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "application_exploitation",
+          "attack_relation": "exact",
+          "attack_id": "T1190",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "web_shell_request",
+          "attack_relation": "exact",
+          "attack_id": "T1505.003",
+          "matrix": "enterprise"
+        }
+      ],
+      "estates": [
+        "claims_portal",
+        "telemetry_saas",
+        "application_b",
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "edge.waf_decision",
+      "name": "Edge and WAF decisions",
+      "category": "log",
+      "vendor_product": "CDN or WAF (generic)",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [
+          "azure_front_door",
+          "azure_waf",
+          "cloudflare",
+          "cdn"
+        ],
+        "component_types": [
+          "cdn",
+          "gateway",
+          "load_balancer"
+        ],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "request allowed",
+          "mapping_status": "description_only"
+        },
+        {
+          "event_ref": "rule matched",
+          "mapping_status": "description_only",
+          "description": "A managed or custom rule fired; whether the request was blocked is a separate field from whether it matched."
+        }
+      ],
+      "fields": {
+        "native": [
+          "client_ip",
+          "host",
+          "uri",
+          "rule_id",
+          "action",
+          "user_agent"
+        ],
+        "derived": [
+          "allowed_after_rule_match"
+        ],
+        "absent_without_enrichment": [
+          "authenticated_principal",
+          "application_outcome"
+        ]
+      },
+      "control_function": {
+        "domain": "loss_event",
+        "note": "Sees the request at the edge. A syntactically valid credential-stuffing login passes every rule, so absence of a match is not evidence of absence."
+      },
+      "supports": [
+        {
+          "control": "Web application firewall",
+          "effect": "verifies_operation",
+          "without_it": "the WAF's rule coverage is asserted and never observed"
+        }
+      ],
+      "collection": {
+        "necessity": "alternative",
+        "status": "unknown",
+        "prerequisites": [
+          "diagnostic logging enabled and exported",
+          "allowed requests logged, not only blocked ones"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Platform engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "public_application_exploitation",
+          "attack_relation": "exact",
+          "attack_id": "T1190",
+          "matrix": "enterprise"
+        },
+        {
+          "behaviour": "credential_stuffing_at_the_edge",
+          "attack_relation": "adjacent",
+          "attack_id": "T1110",
+          "relation_kind": "narrower",
+          "matrix": "enterprise",
+          "rationale": "Volume and origin are visible at the edge; whether an attempt succeeded is known only to the identity provider."
+        }
+      ],
+      "estates": [
+        "application_b",
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    },
+    {
+      "source_id": "collector.heartbeat",
+      "name": "Log collector heartbeat and ingestion volume",
+      "category": "log",
+      "vendor_product": "Log pipeline (generic)",
+      "version_scope": "any",
+      "applies_to": {
+        "technologies": [],
+        "component_types": [],
+        "scope": "generic"
+      },
+      "events": [
+        {
+          "event_ref": "collector heartbeat",
+          "mapping_status": "description_only"
+        },
+        {
+          "event_ref": "ingestion volume by source",
+          "mapping_status": "description_only"
+        }
+      ],
+      "fields": {
+        "native": [
+          "collector_id",
+          "source_id",
+          "events_per_interval",
+          "last_seen"
+        ],
+        "derived": [
+          "source_silent_versus_baseline"
+        ],
+        "absent_without_enrichment": [
+          "whether_silence_means_no_activity_or_no_collection"
+        ]
+      },
+      "control_function": {
+        "domain": "variance_management",
+        "note": "Detects that a detection stopped working. Without it, every log-based control fails silently and looks like an absence of attacks."
+      },
+      "supports": [
+        {
+          "control": "Any log-based detection",
+          "effect": "verifies_operation",
+          "without_it": "a dead collector is indistinguishable from a quiet estate"
+        }
+      ],
+      "collection": {
+        "necessity": "required",
+        "status": "unknown",
+        "prerequisites": [
+          "per-source volume baselines"
+        ],
+        "retention": "unknown"
+      },
+      "availability": {
+        "artefact": "machine_readable",
+        "cadence": "continuous",
+        "latency": "minutes",
+        "owner": "Detection engineering"
+      },
+      "observes": [
+        {
+          "behaviour": "telemetry_source_silent",
+          "attack_relation": "unmapped",
+          "local_id": "EM-PROC-0005",
+          "rationale": "A source going quiet is a control-health finding. It may also be the symptom of evasion, which is why it is recorded rather than assumed benign."
+        }
+      ],
+      "estates": [
+        "claims_portal",
+        "telemetry_saas",
+        "plant_ot",
+        "branch_physical",
+        "loyalty_commerce"
+      ],
+      "provenance": {
+        "reference": "docs/specs/telemetry_reference_library.md",
+        "reviewed": "2026-09-20"
+      }
+    }
+  ]
+}

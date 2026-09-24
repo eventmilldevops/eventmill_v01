@@ -1,0 +1,421 @@
+{
+  "application": "Regional Branch Office",
+  "description": "A staffed branch office where the attack begins in the physical world: an implant placed on a meeting-room wall port, reaching corporate file shares and exfiltrating over a cellular path the network egress controls never see. Planted findings: the meeting-room port is unauthenticated because 802.1X was only ever deployed to the staff floor; the print VLAN is routable to the file server and the domain controller; the comms closet is alarmed but its asset audit is quarterly and manual; and the out-of-band cellular path has no control of any kind. Most of the controls that would catch this are not security tools - a visitor escort procedure, a badge report nobody reads daily, CCTV reviewed only on request, and an asset audit performed by hand.",
+  "zones": [
+    {
+      "id": "public_lobby",
+      "name": "Public lobby",
+      "trust_level": "untrusted",
+      "description": "Walk-in space before the badge line. Visitors wait here unescorted."
+    },
+    {
+      "id": "staff_floor",
+      "name": "Staff floor",
+      "trust_level": "semi_trusted",
+      "description": "Desks and meeting rooms behind the badge line. Meeting rooms are used by escorted visitors."
+    },
+    {
+      "id": "comms_room",
+      "name": "Communications closet",
+      "trust_level": "restricted",
+      "description": "Locked closet holding the branch switch stack and the CCTV recorder."
+    },
+    {
+      "id": "corp_net",
+      "name": "Corporate network",
+      "trust_level": "trusted",
+      "description": "Routed corporate services reachable from the branch."
+    },
+    {
+      "id": "out_of_band",
+      "name": "Out-of-band carrier",
+      "trust_level": "untrusted",
+      "description": "Commercial cellular coverage inside the building. Not an estate network and not monitored by it."
+    }
+  ],
+  "components": [
+    {
+      "id": "lobby_badge_reader",
+      "name": "Lobby badge reader",
+      "type": "network_device",
+      "zone": "public_lobby",
+      "exposure": "internet",
+      "technologies": ["hid-access-control", "door-controller"],
+      "authentication": "badge_credential",
+      "data_classification": "internal",
+      "description": "Controls the door between the lobby and the staff floor. Emits badge grant and deny events.",
+      "controls": [
+        {
+          "name": "Badge grant and deny alerting",
+          "control_type": "monitoring",
+          "description": "Access control server raises an alert on a deny streak or an out-of-hours grant. A real detection source that no SIEM currently ingests.",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "high"
+        },
+        {
+          "name": "Visitor escort procedure",
+          "control_type": "perimeter",
+          "description": "Staff are required to escort visitors past the badge line. A human procedure with no artefact: compliance is not recorded anywhere.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "bypass_requirements": ["social pretext", "tailgating a badged employee"],
+          "detection_capability": "low"
+        },
+        {
+          "name": "Anti-tailgating turnstile",
+          "control_type": "perimeter",
+          "implementation_status": "missing",
+          "bypass_difficulty": "trivial",
+          "detection_capability": "none"
+        }
+      ]
+    },
+    {
+      "id": "badge_system",
+      "name": "Access control server",
+      "type": "service",
+      "zone": "corp_net",
+      "exposure": "management",
+      "technologies": ["access-control-server", "sql-server"],
+      "authentication": "local_admin",
+      "data_classification": "confidential",
+      "description": "Holds badge credentials, door events and the visitor register.",
+      "controls": [
+        {
+          "name": "Monthly badge audit report",
+          "control_type": "monitoring",
+          "description": "Facilities reviews grants and terminations monthly. The interval, not the data, is the weakness.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "meeting_room_port",
+      "name": "Meeting room wall port",
+      "type": "network_device",
+      "zone": "staff_floor",
+      "exposure": "internal",
+      "technologies": ["ethernet-wall-port"],
+      "authentication": "none",
+      "data_classification": "internal",
+      "description": "Live wall port in a bookable meeting room. Patched to the print VLAN so that visiting sales teams can print.",
+      "controls": [
+        {
+          "name": "802.1X port authentication",
+          "control_type": "network",
+          "description": "Deployed on the staff floor desks but never extended to meeting rooms, because printers and guest laptops failed to authenticate.",
+          "implementation_status": "missing",
+          "bypass_difficulty": "trivial",
+          "detection_capability": "none"
+        },
+        {
+          "name": "Sticky MAC port security",
+          "control_type": "network",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "bypass_requirements": ["clone the MAC of the room's conference phone"],
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "print_vlan_switch",
+      "name": "Branch access switch (print VLAN)",
+      "type": "network_device",
+      "zone": "staff_floor",
+      "exposure": "internal",
+      "technologies": ["cisco-ios", "netflow"],
+      "authentication": "tacacs",
+      "data_classification": "internal",
+      "description": "Access switch carrying the print VLAN. Routes to corporate services rather than terminating at a print server.",
+      "controls": [
+        {
+          "name": "NetFlow export to collector",
+          "control_type": "monitoring",
+          "description": "Flow records are exported but retained for seven days and queried only during incidents.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium"
+        },
+        {
+          "name": "Print VLAN egress ACL",
+          "control_type": "network",
+          "description": "Intended to restrict the print VLAN to the print server. The rule set was relaxed during a printer migration and never restored.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "comms_closet_switch",
+      "name": "Comms closet switch stack",
+      "type": "network_device",
+      "zone": "comms_room",
+      "exposure": "management",
+      "technologies": ["cisco-ios"],
+      "authentication": "tacacs",
+      "data_classification": "internal",
+      "description": "Core of the branch. Physical access here yields a span port, a free uplink and the CCTV recorder.",
+      "controls": [
+        {
+          "name": "Door contact alarm",
+          "control_type": "monitoring",
+          "description": "Alarms to the facilities desk when the closet door opens outside a change window. Physical detection with no security-tool integration.",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium"
+        },
+        {
+          "name": "Quarterly hardware asset audit",
+          "control_type": "monitoring",
+          "description": "A technician walks the closet and compares what is racked against an inventory spreadsheet. The only control that would find an implant by looking at it.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": ["implant resembling sanctioned hardware", "placement behind the patch panel"],
+          "detection_capability": "low"
+        },
+        {
+          "name": "Key cabinet sign-out",
+          "control_type": "identity",
+          "description": "Closet key is signed out on paper at the facilities desk. Human process; the record is legible but never reconciled against door alarms.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "cctv_nvr",
+      "name": "CCTV recorder",
+      "type": "server",
+      "zone": "comms_room",
+      "exposure": "management",
+      "technologies": ["nvr", "onvif"],
+      "authentication": "local_admin",
+      "data_classification": "confidential",
+      "description": "Thirty days of footage covering the lobby, the staff floor corridor and the closet door.",
+      "controls": [
+        {
+          "name": "Thirty day retention",
+          "control_type": "data",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        },
+        {
+          "name": "Footage reviewed on request only",
+          "control_type": "monitoring",
+          "description": "Nobody watches. Review happens when an incident is already suspected, which makes this evidence rather than detection.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "staff_ws",
+      "name": "Staff workstation",
+      "type": "workstation",
+      "zone": "staff_floor",
+      "exposure": "internal",
+      "technologies": ["windows", "edr-agent"],
+      "authentication": "sso_mfa",
+      "data_classification": "confidential",
+      "description": "Managed desktop with endpoint detection. The implant deliberately avoids it.",
+      "controls": [
+        {
+          "name": "Endpoint detection and response",
+          "control_type": "endpoint",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "high",
+          "mitre_mitigation_id": "M1049"
+        },
+        {
+          "name": "USB device control",
+          "control_type": "endpoint",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "corp_ad",
+      "name": "Domain controller",
+      "type": "identity_provider",
+      "zone": "corp_net",
+      "exposure": "internal",
+      "technologies": ["windows-server", "active-directory"],
+      "authentication": "kerberos",
+      "data_classification": "confidential",
+      "description": "Authenticates branch users and file share access.",
+      "controls": [
+        {
+          "name": "LDAP channel binding and signing",
+          "control_type": "identity",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low",
+          "mitre_mitigation_id": "M1041"
+        },
+        {
+          "name": "Authentication event logging",
+          "control_type": "monitoring",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "file_server",
+      "name": "Branch file server",
+      "type": "file_store",
+      "zone": "corp_net",
+      "exposure": "internal",
+      "technologies": ["windows-server", "smb"],
+      "authentication": "kerberos",
+      "data_classification": "regulated",
+      "description": "Branch document shares including lending files and scanned identity documents.",
+      "controls": [
+        {
+          "name": "File access auditing",
+          "control_type": "monitoring",
+          "description": "Object access auditing is enabled on two of eleven shares.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low"
+        },
+        {
+          "name": "Data loss prevention on egress",
+          "control_type": "data",
+          "description": "Inspects the corporate internet path only. An implant leaving over cellular never meets it.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "oob_cellular",
+      "name": "Out-of-band cellular path",
+      "type": "external_service",
+      "zone": "out_of_band",
+      "exposure": "internet",
+      "technologies": ["lte-modem"],
+      "authentication": "none",
+      "data_classification": "internal",
+      "description": "Commercial cellular coverage inside the building. An implant with a SIM reaches the internet without traversing any estate egress point, so no proxy, DLP or firewall sees the traffic.",
+      "controls": []
+    }
+  ],
+  "flows": [
+    {
+      "id": "f1",
+      "from": "lobby_badge_reader",
+      "to": "badge_system",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "encrypted": true,
+      "crosses_boundary": true,
+      "description": "Door events and credential checks."
+    },
+    {
+      "id": "f9",
+      "from": "lobby_badge_reader",
+      "to": "meeting_room_port",
+      "protocol": "physical",
+      "authenticated": false,
+      "crosses_boundary": true,
+      "description": "Physical movement, modelled as a flow because it is real reachability: a person who passes the badge line reaches the meeting rooms. Unauthenticated because tailgating and the unenforced escort procedure both defeat the badge check."
+    },
+    {
+      "id": "f10",
+      "from": "meeting_room_port",
+      "to": "comms_closet_switch",
+      "protocol": "physical",
+      "authenticated": true,
+      "crosses_boundary": true,
+      "description": "Physical movement from the staff floor into the locked communications closet. Authenticated by a key signed out on paper, alarmed by a door contact."
+    },
+    {
+      "id": "f2",
+      "from": "meeting_room_port",
+      "to": "print_vlan_switch",
+      "protocol": "ethernet",
+      "authenticated": false,
+      "crosses_boundary": false,
+      "description": "Wall port patched into the print VLAN. Anything plugged in gets an address."
+    },
+    {
+      "id": "f3",
+      "from": "print_vlan_switch",
+      "to": "corp_ad",
+      "protocol": "ldap",
+      "port": 389,
+      "authenticated": true,
+      "encrypted": false,
+      "crosses_boundary": true,
+      "description": "Print VLAN can reach the domain controller because the egress ACL was relaxed."
+    },
+    {
+      "id": "f4",
+      "from": "print_vlan_switch",
+      "to": "file_server",
+      "protocol": "smb",
+      "port": 445,
+      "authenticated": true,
+      "encrypted": false,
+      "crosses_boundary": true,
+      "description": "Same relaxed ACL exposes the branch file shares."
+    },
+    {
+      "id": "f5",
+      "from": "comms_closet_switch",
+      "to": "print_vlan_switch",
+      "protocol": "ethernet",
+      "authenticated": false,
+      "crosses_boundary": false,
+      "bidirectional": true,
+      "description": "Uplink. A device in the closet sits upstream of the access switch."
+    },
+    {
+      "id": "f6",
+      "from": "comms_closet_switch",
+      "to": "cctv_nvr",
+      "protocol": "rtsp",
+      "port": 554,
+      "authenticated": false,
+      "crosses_boundary": false,
+      "description": "Camera streams and recorder management share the closet switch."
+    },
+    {
+      "id": "f7",
+      "from": "staff_ws",
+      "to": "file_server",
+      "protocol": "smb",
+      "port": 445,
+      "authenticated": true,
+      "encrypted": false,
+      "crosses_boundary": true,
+      "description": "Ordinary staff use of the shares. The baseline an implant's reads must be distinguished from."
+    },
+    {
+      "id": "f8",
+      "from": "print_vlan_switch",
+      "to": "oob_cellular",
+      "protocol": "lte",
+      "authenticated": false,
+      "encrypted": true,
+      "crosses_boundary": true,
+      "description": "Not a wired path: an implant on the print VLAN carries its own modem. Collected data leaves the building without passing a single estate egress control."
+    }
+  ],
+  "crown_jewels": ["file_server", "corp_ad", "badge_system"]
+}

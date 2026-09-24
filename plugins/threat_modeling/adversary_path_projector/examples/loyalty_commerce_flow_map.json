@@ -1,0 +1,430 @@
+{
+  "application": "Loyalty Commerce Platform",
+  "description": "A small e-commerce estate whose most stealable asset is not data but value: loyalty points, convertible to gift cards through a partner. The theft is a business-logic path rather than a malware path, and its central control is separation of duties - an adjustment above the threshold needs an agent to raise it and a supervisor to approve it, so the attacker must hold two accounts with different roles. Planted findings: customer MFA is optional, the agent console can adjust points below the threshold without any second party, notification suppression is available to agents and barely logged, and the strongest detections are not security tools at all - a vendor fraud engine, a nightly points-liability reconciliation, the partner's daily settlement file and customers complaining that their points are missing.",
+  "zones": [
+    {
+      "id": "internet",
+      "name": "Internet",
+      "trust_level": "untrusted"
+    },
+    {
+      "id": "storefront",
+      "name": "Storefront tier",
+      "trust_level": "semi_trusted",
+      "description": "Customer-facing shop and account services."
+    },
+    {
+      "id": "back_office",
+      "name": "Back office",
+      "trust_level": "trusted",
+      "description": "Agent and supervisor tooling used by staff."
+    },
+    {
+      "id": "finance",
+      "name": "Finance enclave",
+      "trust_level": "restricted",
+      "description": "Systems of record for monetary and near-monetary balances."
+    },
+    {
+      "id": "partner",
+      "name": "Partner services",
+      "trust_level": "semi_trusted",
+      "description": "Third parties: fraud scoring, mail delivery and gift-card redemption."
+    }
+  ],
+  "components": [
+    {
+      "id": "storefront_web",
+      "name": "Storefront",
+      "type": "web_app",
+      "zone": "storefront",
+      "exposure": "internet",
+      "technologies": ["magento", "php", "nginx"],
+      "authentication": "customer_password",
+      "data_classification": "pii",
+      "description": "Public shop. Customers see their points balance and redeem here.",
+      "controls": [
+        {
+          "name": "Web application firewall",
+          "control_type": "perimeter",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium",
+          "mitre_mitigation_id": "M1050"
+        },
+        {
+          "name": "Bot management",
+          "control_type": "application",
+          "description": "Rate limits login attempts per address. Ineffective against a low-and-slow credential stuffing run from residential proxies.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "customer_identity",
+      "name": "Customer identity service",
+      "type": "identity_provider",
+      "zone": "storefront",
+      "exposure": "internet",
+      "technologies": ["auth0"],
+      "authentication": "password_optional_mfa",
+      "data_classification": "pii",
+      "description": "Customer accounts. MFA is offered and rarely enabled.",
+      "controls": [
+        {
+          "name": "Optional customer MFA",
+          "control_type": "identity",
+          "description": "Available, opted into by a small minority. Marketing resists making it mandatory at checkout.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "low",
+          "mitre_mitigation_id": "M1032"
+        },
+        {
+          "name": "Credential stuffing detection",
+          "control_type": "monitoring",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "cs_portal",
+      "name": "Agent console",
+      "type": "admin_console",
+      "zone": "back_office",
+      "exposure": "internal",
+      "technologies": ["zendesk", "custom-agent-console"],
+      "authentication": "sso_mfa",
+      "data_classification": "pii",
+      "description": "Customer service tooling. Agents can look up any customer, adjust points below the approval threshold and suppress outbound notifications while they work a ticket.",
+      "controls": [
+        {
+          "name": "Agent SSO with MFA",
+          "control_type": "identity",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "medium",
+          "mitre_mitigation_id": "M1032"
+        },
+        {
+          "name": "Role-based agent permissions",
+          "control_type": "identity",
+          "description": "Agent and supervisor roles are distinct, but several long-serving agents hold both for holiday cover.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": ["an account carrying both roles"],
+          "detection_capability": "low"
+        },
+        {
+          "name": "Session recording of agent actions",
+          "control_type": "monitoring",
+          "description": "Records screens for quality assurance. Reviewed by sampling, for tone rather than fraud.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "supervisor_console",
+      "name": "Supervisor approval console",
+      "type": "admin_console",
+      "zone": "back_office",
+      "exposure": "management",
+      "technologies": ["custom-agent-console"],
+      "authentication": "sso_mfa_hardware_key",
+      "data_classification": "confidential",
+      "description": "Where an adjustment above the threshold is approved. The second half of the separation of duties control.",
+      "controls": [
+        {
+          "name": "Hardware key required for approval",
+          "control_type": "identity",
+          "description": "Phishing-resistant. Taking this account needs the key itself or a session on an already-trusted device.",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "very_high",
+          "bypass_requirements": ["theft of a registered security key", "session hijack on an approved workstation"],
+          "detection_capability": "medium",
+          "mitre_mitigation_id": "M1032"
+        },
+        {
+          "name": "Approval queue review",
+          "control_type": "monitoring",
+          "description": "Supervisors clear a queue under handling-time pressure; approvals that look routine are rarely questioned.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "loyalty_ledger",
+      "name": "Loyalty ledger",
+      "type": "database",
+      "zone": "finance",
+      "exposure": "internal",
+      "technologies": ["postgres", "pgaudit"],
+      "authentication": "mtls",
+      "data_classification": "confidential",
+      "description": "System of record for point balances and adjustments. Points are a monetary liability and convert to gift cards.",
+      "controls": [
+        {
+          "name": "Dual approval above 5,000 points",
+          "control_type": "application",
+          "description": "Separation of duties. One account raises the adjustment, a second with the supervisor role approves it. Enforced in the application, not the database, and only above the threshold.",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "bypass_requirements": [
+            "compromise of a second account holding the approver role",
+            "or splitting the theft into adjustments below the threshold"
+          ],
+          "detection_capability": "medium"
+        },
+        {
+          "name": "Immutable adjustment audit log",
+          "control_type": "monitoring",
+          "description": "Every adjustment is written with actor, approver, reason code and prior balance. Rich evidence that nothing currently alerts on.",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "high",
+          "detection_capability": "high"
+        },
+        {
+          "name": "Nightly points liability reconciliation",
+          "control_type": "monitoring",
+          "description": "Finance compares issued, redeemed and expired points against the liability account. A business process, not a security tool, and the control most likely to notice the aggregate.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": ["keeping daily totals inside normal variance"],
+          "detection_capability": "medium"
+        }
+      ]
+    },
+    {
+      "id": "order_db",
+      "name": "Order database",
+      "type": "database",
+      "zone": "back_office",
+      "exposure": "internal",
+      "technologies": ["postgres"],
+      "authentication": "password",
+      "data_classification": "pii",
+      "description": "Orders, addresses and contact details. Useful to an attacker for picking dormant high-balance accounts.",
+      "controls": [
+        {
+          "name": "Row level security by tenant",
+          "control_type": "data",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "fraud_engine",
+      "name": "Vendor fraud scoring engine",
+      "type": "external_service",
+      "zone": "partner",
+      "exposure": "partner",
+      "technologies": ["vendor-ml-scoring"],
+      "authentication": "api_key",
+      "data_classification": "confidential",
+      "description": "Scores redemption and adjustment events and raises anomaly alerts. Its alerts do not correspond to any ATT&CK technique.",
+      "controls": [
+        {
+          "name": "Velocity and anomaly rules",
+          "control_type": "monitoring",
+          "description": "Vendor-tuned. Catches bursts; a patient attacker below the velocity threshold is invisible to it.",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "bypass_requirements": ["redemptions spread across accounts and days"],
+          "detection_capability": "medium"
+        },
+        {
+          "name": "Model drift review",
+          "control_type": "monitoring",
+          "description": "Quarterly vendor review of scoring quality. Nobody internal can explain a score.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "medium",
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "email_provider",
+      "name": "Transactional email provider",
+      "type": "external_service",
+      "zone": "partner",
+      "exposure": "partner",
+      "technologies": ["sendgrid"],
+      "authentication": "api_key",
+      "data_classification": "pii",
+      "description": "Sends the 'points redeemed' and 'balance changed' notifications that would otherwise tell the customer first.",
+      "controls": [
+        {
+          "name": "Notification suppression logging",
+          "control_type": "monitoring",
+          "description": "Agents may suppress notifications while working a ticket. The suppression is recorded in the provider, not in the ledger, and the two are never joined.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "redemption_partner",
+      "name": "Gift card redemption partner",
+      "type": "external_service",
+      "zone": "partner",
+      "exposure": "partner",
+      "technologies": ["gift-card-api"],
+      "authentication": "api_key",
+      "data_classification": "confidential",
+      "description": "Converts points to gift card codes. Where stolen points become money and leave the estate.",
+      "controls": [
+        {
+          "name": "Daily settlement file",
+          "control_type": "monitoring",
+          "description": "The partner sends a daily file of redemptions. Reconciled weekly by one analyst, so the earliest external evidence arrives up to a week late.",
+          "implementation_status": "implemented",
+          "bypass_difficulty": "medium",
+          "detection_capability": "medium"
+        },
+        {
+          "name": "Per-account redemption velocity cap",
+          "control_type": "application",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "bypass_requirements": ["spreading redemption across many customer accounts"],
+          "detection_capability": "low"
+        }
+      ]
+    },
+    {
+      "id": "complaints_queue",
+      "name": "Customer complaints queue",
+      "type": "service",
+      "zone": "back_office",
+      "exposure": "internal",
+      "technologies": ["helpdesk-queue"],
+      "authentication": "sso",
+      "data_classification": "pii",
+      "description": "Where 'my points are missing' arrives. In loyalty fraud this is frequently the first true detection, and it is owned by customer service rather than security.",
+      "controls": [
+        {
+          "name": "Complaint triage SLA",
+          "control_type": "monitoring",
+          "description": "Tickets are triaged for satisfaction, not correlated. Ten identical complaints in a week look like ten unhappy customers.",
+          "implementation_status": "partial",
+          "bypass_difficulty": "low",
+          "detection_capability": "low"
+        }
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "id": "f1",
+      "from": "storefront_web",
+      "to": "customer_identity",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "encrypted": true,
+      "crosses_boundary": false,
+      "description": "Customer sign-in."
+    },
+    {
+      "id": "f2",
+      "from": "storefront_web",
+      "to": "loyalty_ledger",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "encrypted": true,
+      "crosses_boundary": true,
+      "description": "Balance display and customer-initiated redemption."
+    },
+    {
+      "id": "f3",
+      "from": "cs_portal",
+      "to": "loyalty_ledger",
+      "protocol": "postgres",
+      "port": 5432,
+      "authenticated": true,
+      "encrypted": true,
+      "crosses_boundary": true,
+      "description": "Agent adjustments. Below the threshold this needs no second party."
+    },
+    {
+      "id": "f4",
+      "from": "cs_portal",
+      "to": "order_db",
+      "protocol": "postgres",
+      "port": 5432,
+      "authenticated": true,
+      "encrypted": true,
+      "crosses_boundary": false,
+      "description": "Customer lookup, including dormancy and balance history."
+    },
+    {
+      "id": "f5",
+      "from": "supervisor_console",
+      "to": "loyalty_ledger",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "encrypted": true,
+      "crosses_boundary": true,
+      "description": "Approval of an adjustment above the threshold. The second half of separation of duties."
+    },
+    {
+      "id": "f6",
+      "from": "loyalty_ledger",
+      "to": "fraud_engine",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "encrypted": true,
+      "crosses_boundary": true,
+      "description": "Adjustment and redemption events submitted for scoring."
+    },
+    {
+      "id": "f7",
+      "from": "cs_portal",
+      "to": "email_provider",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "encrypted": true,
+      "crosses_boundary": true,
+      "description": "Notification sending and suppression."
+    },
+    {
+      "id": "f8",
+      "from": "loyalty_ledger",
+      "to": "redemption_partner",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "encrypted": true,
+      "crosses_boundary": true,
+      "description": "Points converted to gift card codes."
+    },
+    {
+      "id": "f9",
+      "from": "complaints_queue",
+      "to": "cs_portal",
+      "protocol": "https",
+      "port": 443,
+      "authenticated": true,
+      "encrypted": true,
+      "crosses_boundary": false,
+      "bidirectional": true,
+      "description": "Complaints become tickets an agent works - including, in this scenario, the complaints the attacker's own activity generates."
+    }
+  ],
+  "crown_jewels": ["loyalty_ledger", "redemption_partner"]
+}

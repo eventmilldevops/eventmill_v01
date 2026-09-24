@@ -170,7 +170,10 @@ identity, `path_id`, and `node_index`; a technique ID alone is not a join key.
 > `authentication` and `zone` appear in no export, adds the provenance the
 > exports do not yet carry, and splits normalization into a deterministic
 > `normalize_paths` action that runs with no provider. Read it alongside this
-> section; the node-identity rule stated here is unchanged.
+> section; the node-identity rule stated here is unchanged. *(2026-09-23: that
+> separate action was retired unbuilt. Normalization runs as `validate_input`,
+> and inside `generate_detections` on every run. See the normalization spec,
+> decision 12.)*
 
 Build a typed internal `DetectionNodeContext` before generation:
 
@@ -336,6 +339,141 @@ proposed and tunable. Do not invent a universal numerical definition of normal
 for service accounts. Where a baseline is needed, define the grouping, learning
 period, minimum samples, and cold-start behavior. Prefer approved workload policy
 and trace context when these are available.
+
+A window is written `value_timeunit` — `60_sec`, `10_min`, `24_hour`, `7_day` —
+so a consumer splits on the underscore rather than parsing prose. The first live
+run produced both `60` and `"10 minutes"` for the same field, which no consumer
+can compare without guessing what the bare number meant. `normalize_window`
+canonicalizes after generation; a window it cannot read is kept verbatim and
+carries `WINDOW_UNPARSED`, because discarding a parameter an engineer proposed
+is worse than carrying one that needs a human to read it.
+
+### Fields are offered, not invented
+
+A draft may name only the fields its candidate carried, in
+`fields.native` and `fields.derived`, spelled exactly. This is the source rule
+one level down, and it is a **rejection**, not a flag: `required_fields` is the
+list a collection engineer onboards against, so a plausible substitution —
+`http_method` for `method`, `head_branch` for `ref` — ships a rule that cannot
+evaluate and a collection request nobody can fulfil. The refusal names what the
+source does offer, because a rejection the author cannot act on costs the draft
+and teaches nothing. A candidate that carries no field list is not second-
+guessed: there is nothing to check against, and inventing a complaint is worse.
+
+Validation reads the candidate rather than the library, so a draft is judged on
+what it was told. That is only sound because the candidate now carries the
+fields at all: it previously passed `absent_without_enrichment` while
+withholding `native` and `derived`, which told a model what each source lacks
+and never what it has. The first live run on the annotated build invented all
+14 of its field names while copying `prerequisites` verbatim — it used what it
+was given and fabricated the rest.
+
+`fields.derived` are the library's purpose-built indicators, one per source
+(`rows_touched_estimate`, `secret_read_rate_per_principal`,
+`token_file_read_by_unexpected_process`). Withholding them cost that run the
+best field each source offers: one draft reconstructed a query count by hand
+where `rows_touched_estimate` measures the thing the rule was actually after.
+
+### Derived record state and review flags
+
+Pseudocode is a hypothesis to be generated and then tested. Holding a model to
+a rule that is correct on first emission is the wrong target; what the record
+owes its reader is an accurate account of itself and the questions it carries
+into testing. Two things are therefore derived after validation rather than
+trusted to the reply, and the rest become flags:
+
+| Derived | Rule |
+|---|---|
+| `detection_logic.kind` | `thresholds` present → `threshold`; otherwise `join_keys` → `correlation`; otherwise `window` → `threshold`; otherwise `single_event`. A draft declaring `baseline_deviation` or `reconciliation` keeps it: those are claims about method that no structural rule can infer. |
+| `detection_logic.window` | Canonical `value_timeunit`. A bare number is seconds. |
+
+Thresholds outrank keys because `join_keys` carries two meanings. A live draft
+counting statements `BY user_name` over ten minutes declared itself a
+`threshold` and was right; reading its grouping key as a join rewrote the one
+kind the model had reasoned its way to. Where both a threshold and a grouping
+are present the shape genuinely supports either reading, so a draft that
+declared `threshold` or `correlation` keeps its answer. A draft still carrying
+the `single_event` placeholder expressed no view and is derived: the
+placeholder is definitively wrong once a threshold exists.
+
+Only a **numeric** threshold counts. One run's single wrong correction came
+from a `thresholds` entry reading *"proposed starting point: alert on the first
+event"* — prose saying the opposite of a threshold, which nonetheless made the
+mapping non-empty and rewrote a correct `single_event`.
+
+More than one source over a window is a correlation whether or not a join key
+is named. A draft joining CI records to runner process events stated in prose
+that the two share no identifier; once that prose moved to `join_notes` the
+remaining shape read as a threshold. Relocating an explanation must never
+change what the record claims.
+
+`review_flags` is a closed catalogue, and an empty array asserts there are none.
+None of these codes rejects a draft.
+
+| Code | Meaning |
+|---|---|
+| `FIELD_DECLARED_UNUSED` | A `required_fields` entry the logic never reads. Often deliberate analyst context — and also what a rule looks like when its discriminator went missing. |
+| `FIELD_UNDECLARED_IN_LOGIC` | The logic reads a field of a cited source that is not in `required_fields`. `required_fields` is the list a collection engineer onboards against, so the rule as written would ship uncollectable. |
+| `FIELD_FROM_UNCITED_SOURCE` | The logic reads a field the library attributes only to sources this draft does not cite. Either the source list or the logic is wrong. |
+| `LOGIC_KIND_CORRECTED` | `kind` disagreed with the shape and was replaced. |
+| `LOGIC_NULL_AS_MATCH` | The condition fires on an absent value. If the field is not collected, every record matches. |
+| `WINDOW_UNPARSED` | A window that is not a number and a time unit. |
+| `ANNOTATION_FAILED` | Annotation raised. The draft passed validation and is kept. |
+
+`LOGIC_NULL_AS_MATCH` is where the line between a rejection and a flag is
+clearest. The spec forbids null-as-match outright, and `missing_data_behaviour`
+is enforced as a rejection because it is a declared value — a checkable fact
+about the record. The null test is read out of prose pseudocode, where the same
+words express the defect (`auth_identity IS NULL` meaning "unauthenticated")
+and the handling the contract asks for (`IF principal IS NULL THEN
+insufficient_telemetry`). A pattern that cannot tell those apart with certainty
+states the concern and leaves the judgement. `IS NOT NULL` and `!= NULL` are
+excluded: requiring presence is the opposite failure and a legitimate
+condition.
+
+The field checks are grounded in the telemetry reference library: only names the
+library knows to be fields of some source are reported, so pseudocode
+placeholders and SQL keywords never become findings. Generation takes the
+library as an argument and runs without it, in which case only
+`FIELD_DECLARED_UNUSED` is available.
+
+They report only **distinctive** names — those containing `_` or `.`. Pseudocode
+may be prose, and a draft reading *"executing command patterns"* or *"suppress
+monitoring request patterns"* means English, not the `command` and `request`
+that happen to be fields of some source. One prose draft produced four findings
+this way. Every true positive to date has been distinctive (`request.operation`,
+`file_path`, `db_user`), so the bare word is not worth the noise.
+
+### Parameters stay parameters
+
+`thresholds` values are numbers and `join_keys` entries are field names. Where
+a model supplies prose instead — and across three vendors it often does, since
+both fields invite the reasoning as readily as the value — it is **moved, not
+discarded**: `threshold_notes` keeps each note under its parameter's name, and
+`join_notes` keeps what the draft said about the join, which in one run was
+that no join key existed at all. That is a real and useful answer; the fix is
+to give it a field, not to suppress it.
+
+This is the same failure as `review_flags` below and as `limitations` before
+it. A model with something worth saying says it in whichever field is nearest,
+and the field stops being parseable. Each machine-readable field therefore has
+a prose sibling.
+
+### `caveats` is the model's, `review_flags` is ours
+
+A drafting model has things to say about what its draft cannot show —
+`authentication_not_directly_observed`, `attempt_only_not_code_execution` — and
+a live run put them in `review_flags` as bare strings, breaking the
+`{code, message}` shape and reading as uncoded in the summary. The content is
+exactly what a tester wants, so `caveats` exists for it and anything the model
+leaves in `review_flags` is **moved there rather than discarded**. A
+well-formed flag the model supplies is kept where it is.
+
+`summarize_for_llm` reports the flags by code and count, above the closing
+caveat because the summary truncates from the end. Codes only: the messages name
+fields and sources, and a full path's worth would push the rest of the summary
+past the budget. Absence is stated rather than left silent, so a run with
+nothing to ask reads differently from one where annotation never happened.
 
 ### Expandable assessment tuple
 
@@ -920,8 +1058,19 @@ asks of this one — node counts as data rather than the constant 15, the
 batching rule, the graph/seed union — are listed in its section 6 and are not
 yet applied here.
 
-No plugin code or source exports were changed. No generated detection has been
-tested against live telemetry, and no LLM generation run was performed. The
+**Superseded 2026-09-20 on both counts below.** Generation is built and has
+run: see `docs/change_log/2026-09-20-g1a-g1b-telemetry-join-and-generation.md`.
+Stage 1 (contracts and adapters) and stage 2's grounding half landed as N1-N3
+and G1 in `docs/specs/attack_path_detection_normalization.md`; stage 3 (draft
+generation) produced its first complete workbook-less run on `gcp_gemini` with
+one valid draft per node. Stage 4 (the workbook, YAML and sidecar) and stage 5
+(analyst evaluation against labelled telemetry) remain outstanding, and the
+telemetry reference library this plan asks for is specified and seeded in
+`docs/specs/telemetry_reference_library.md`.
+
+No generated detection has been tested against live telemetry. When this plan
+was written, no plugin code had been changed and no LLM generation run had been
+performed; The
 local Python launcher reports `No installed Pythons found!`; therefore Python
 contract tests and an actual YAML-parser round trip remain implementation-time
 checks rather than claimed validation of these examples.
