@@ -1561,6 +1561,102 @@ class TestBatchedNativeIngestion:
         assert manifest["timeout_class"] == "long"
 
 
+class TestUntrustedShapeCannotCrashTheRun:
+    """A 91-page OpenAI run finished all nine batches, then died with
+    "unhashable type: 'dict'" before saving anything. The prompt's Section 4
+    asks for a "tactic" on every technique in related_mitre - which only an
+    object can carry - while its format shows related_mitre as ID strings, so
+    a model may return either. Every such shape is normalised where results
+    enter, which is what keeps a run from dying on one."""
+
+    class _ObjectShapedLLM(_NativeLLM):
+        def _reply(self, values, label):
+            return json.dumps({
+                "refined_iocs": [
+                    {"value": v, "ioc_type": "ip",
+                     "confidence": {"level": "high"}, "priority": ["High"],
+                     "context": {"text": f"seen in {label}"},
+                     "related_mitre": [
+                         {"technique_id": "T1595.001", "tactic": "Reconnaissance"},
+                         "T1071.001",
+                     ],
+                     "is_false_positive": "false"}
+                    for v in values[:2]
+                ],
+                "additional_mitre_techniques": [
+                    {"technique_id": "T1595.001", "technique_name": "Scanning IP Blocks",
+                     "tactic": ["Reconnaissance", "Discovery"],
+                     "confidence": "inferred", "report_context": label},
+                ],
+                "report_metadata": {"title": f"Report {label}"},
+                "attack_graph": {
+                    "paths": [], "branch_points": None,
+                    "convergence_points": [{"technique_id": "T1595.001"}],
+                },
+            })
+
+    def test_a_batched_run_with_object_shapes_completes_and_saves(
+        self, tool_instance, batched_run,
+    ):
+        registered = []
+        make = batched_run["make_context"]
+
+        def context_recording(llm):
+            ctx = make(llm)
+            inner = ctx.register_artifact
+
+            def register(*a, **k):
+                registered.append(a or k)
+                return inner(*a, **k)
+
+            ctx.register_artifact = register
+            return ctx
+
+        llm = self._ObjectShapedLLM()
+        result = tool_instance.execute(
+            {"artifact_id": "art_dense"}, context_recording(llm),
+        )
+        assert result.ok, result.message
+        assert len(llm.doc_calls) > 1, "must exercise the batched merge"
+        assert registered, "the IOC artifact must be saved"
+        iocs = result.result["iocs"]
+        assert iocs
+        for ioc in iocs:
+            assert ioc["confidence"] == "high"
+            assert ioc["priority"] == "high"
+            assert ioc["related_mitre"] == ["T1595.001", "T1071.001"]
+            assert ioc["is_false_positive"] is False
+        ids = {m["technique_id"] for m in result.result["mitre_mappings"]}
+        assert {"T1595.001", "T1071.001"} <= ids
+
+    def test_the_drift_is_logged_not_absorbed(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="eventmill.plugin.threat_intel_ingester"):
+            _tool_mod._merge_llm_chunk_results([
+                {"refined_iocs": [{"value": "1.2.3.4", "ioc_type": "ip",
+                                   "related_mitre": [{"technique_id": "T1"}]}]},
+            ])
+        shape = [r.getMessage() for r in caplog.records if "[SHAPE]" in r.getMessage()]
+        assert shape and "refined_iocs.related_mitre" in shape[0]
+
+    def test_a_well_shaped_result_is_untouched(self):
+        good = {
+            "refined_iocs": [{"value": "1.2.3.4", "ioc_type": "ip",
+                              "confidence": "high", "priority": "low",
+                              "context": "c", "related_mitre": ["T1071.001"],
+                              "is_false_positive": False}],
+            "additional_mitre_techniques": [{"technique_id": "T1071.001",
+                                             "tactic": "Command and Control"}],
+            "report_metadata": {"title": "t"},
+            "attack_graph": {"paths": [], "convergence_points": ["T1071.001"],
+                             "branch_points": []},
+        }
+        shaped, notes = _tool_mod._coerce_result_shape(good)
+        assert notes == []
+        assert shaped == good
+
+
 class TestPlanFollowsTheOperatorsProvider:
     """Plan and budgets follow the provider the operator chose, not whatever
     else happens to be bound.

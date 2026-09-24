@@ -79,6 +79,9 @@ class JSONFormatter(logging.Formatter):
             log_entry["error"] = {
                 "type": type(record.exc_info[1]).__name__,
                 "message": str(record.exc_info[1]),
+                # Without the stack, "unhashable type: 'dict'" names no line,
+                # and on Cloud Run this record is the only copy there is.
+                "stack_trace": self.formatException(record.exc_info),
             }
         
         return json.dumps(log_entry, default=str)

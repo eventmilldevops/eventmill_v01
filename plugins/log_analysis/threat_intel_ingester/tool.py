@@ -951,6 +951,134 @@ def _merge_metadata(
         campaigns.append({"name": campaign, "batch_label": label})
 
 
+_LEVELS = ("low", "medium", "high")
+
+
+def _as_text(value: Any) -> str:
+    """A scalar the model returned as something else, flattened to text."""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        for key in ("value", "id", "technique_id", "name", "level", "text"):
+            if isinstance(value.get(key), str):
+                return value[key]
+        return ""
+    if isinstance(value, (list, tuple)):
+        return next((v for v in value if isinstance(v, str)), "")
+    return str(value)
+
+
+def _as_technique_ids(value: Any) -> list[str]:
+    """related_mitre as the list of ID strings the prompt asks for.
+
+    Models also return objects ({"technique_id": ..., "tactic": ...}) or a
+    bare string. Anything that yields no ID is dropped rather than guessed at.
+    """
+    items = value if isinstance(value, (list, tuple)) else [value]
+    ids = []
+    for item in items:
+        tid = _as_text(item).strip()
+        if tid:
+            ids.append(tid)
+    return ids
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1")
+    return bool(value)
+
+
+def _coerce_result_shape(result: Any) -> tuple[dict, list[str]]:
+    """Normalise one batch's JSON to the shape the merge and export assume.
+
+    Model output is untrusted shape. Every field below is hashed, used as a
+    dict key, or compared against a fixed vocabulary downstream, and a list
+    or object where a string belongs raises TypeError there — after every
+    batch has already been paid for, and before anything is saved. Coercing
+    at the one place results enter keeps that failure out of every consumer.
+
+    Returns the normalised result and one note per field that needed it, so
+    the drift stays visible instead of being silently absorbed.
+    """
+    notes: list[str] = []
+    if not isinstance(result, dict):
+        return {}, [f"result was {type(result).__name__}, not an object"]
+    out = dict(result)
+
+    iocs = []
+    for ioc in result.get("refined_iocs") or []:
+        if not isinstance(ioc, dict):
+            notes.append("refined_iocs entry that was not an object")
+            continue
+        fixed = dict(ioc)
+        for name in ("value", "ioc_type", "context"):
+            if name in fixed and not isinstance(fixed[name], str):
+                notes.append(f"refined_iocs.{name}")
+                fixed[name] = _as_text(fixed[name])
+        for name, default in (("confidence", "low"), ("priority", "medium")):
+            if name in fixed:
+                level = _as_text(fixed[name]).strip().lower()
+                if not isinstance(fixed[name], str) or level not in _LEVELS:
+                    notes.append(f"refined_iocs.{name}")
+                fixed[name] = level if level in _LEVELS else default
+        if "related_mitre" in fixed:
+            ids = _as_technique_ids(fixed["related_mitre"])
+            if ids != fixed["related_mitre"]:
+                notes.append("refined_iocs.related_mitre")
+            fixed["related_mitre"] = ids
+        if "is_false_positive" in fixed and not isinstance(
+            fixed["is_false_positive"], bool
+        ):
+            notes.append("refined_iocs.is_false_positive")
+            fixed["is_false_positive"] = _as_bool(fixed["is_false_positive"])
+        iocs.append(fixed)
+    out["refined_iocs"] = iocs
+
+    techniques = []
+    for tech in result.get("additional_mitre_techniques") or []:
+        if not isinstance(tech, dict):
+            notes.append("additional_mitre_techniques entry that was not an object")
+            continue
+        fixed = dict(tech)
+        for name in ("technique_id", "technique_name", "tactic", "confidence",
+                     "report_context"):
+            if name in fixed and not isinstance(fixed[name], str):
+                notes.append(f"additional_mitre_techniques.{name}")
+                fixed[name] = _as_text(fixed[name])
+        techniques.append(fixed)
+    out["additional_mitre_techniques"] = techniques
+
+    if not isinstance(result.get("report_metadata") or {}, dict):
+        notes.append("report_metadata")
+        out["report_metadata"] = {}
+
+    graph = result.get("attack_graph") or {}
+    if not isinstance(graph, dict):
+        notes.append("attack_graph")
+        graph = {}
+    else:
+        graph = dict(graph)
+        paths = graph.get("paths") or []
+        if not isinstance(paths, list):
+            notes.append("attack_graph.paths")
+            paths = []
+        graph["paths"] = [p for p in paths if isinstance(p, dict)]
+        for name in ("convergence_points", "branch_points"):
+            points = graph.get(name) or []
+            if not isinstance(points, list):
+                points = [points]
+            flat = [_as_text(p) for p in points]
+            flat = [p for p in flat if p]
+            if flat != points:
+                notes.append(f"attack_graph.{name}")
+            graph[name] = flat
+    out["attack_graph"] = graph
+    return out, notes
+
+
 def _merge_llm_chunk_results(
     chunk_results: list[dict],
     provenance: list[dict] | None = None,
@@ -989,9 +1117,22 @@ def _merge_llm_chunk_results(
     stats = {"conflicts": 0, "recovered_from_partial": 0, "paths_namespaced": 0}
 
     provenance = provenance or []
+    coerced = []
+    for idx, raw in enumerate(chunk_results):
+        result, notes = _coerce_result_shape(raw)
+        if notes:
+            label = (provenance[idx] if idx < len(provenance) else {}).get(
+                "batch_label", f"result {idx + 1}",
+            )
+            logger.warning(
+                "[SHAPE] %s: the model returned %d field(s) in a shape the "
+                "prompt did not ask for, normalised: %s",
+                label, len(notes), ", ".join(sorted(set(notes))),
+            )
+        coerced.append(result)
     pairs = [
         (result, provenance[idx] if idx < len(provenance) else {})
-        for idx, result in enumerate(chunk_results)
+        for idx, result in enumerate(coerced)
     ]
     # Two passes, and the order is the whole point of 2.1. Results that still
     # stand establish the canonical record; superseded partials are folded in
@@ -2695,13 +2836,16 @@ class ThreatIntelIngester:
                                 "truncated": truncated,
                                 "superseded_by": None,
                             })
+                            # Counted from the normalised view: this runs before
+                            # the merge, on the model's raw shape.
+                            shaped = _coerce_result_shape(parsed)[0]
                             logger.info(
                                 "[NATIVE] %s parsed %s — %d refined_iocs, %d techniques, "
                                 "%d attack paths",
                                 batch.label, "PARTIAL" if truncated else "OK",
-                                len(parsed.get("refined_iocs", [])),
-                                len(parsed.get("additional_mitre_techniques", [])),
-                                len(parsed.get("attack_graph", {}).get("paths", [])),
+                                len(shaped["refined_iocs"]),
+                                len(shaped["additional_mitre_techniques"]),
+                                len(shaped["attack_graph"]["paths"]),
                             )
                             if not truncated:
                                 continue
@@ -2897,13 +3041,14 @@ class ThreatIntelIngester:
                                 bool(llm_response.truncated), repaired,
                             )
                         if parsed:
-                            n_refined = len(parsed.get("refined_iocs", []))
+                            shaped = _coerce_result_shape(parsed)[0]
+                            n_refined = len(shaped["refined_iocs"])
                             n_fp = sum(
-                                1 for r in parsed.get("refined_iocs", [])
+                                1 for r in shaped["refined_iocs"]
                                 if r.get("is_false_positive")
                             )
-                            n_mitre = len(parsed.get("additional_mitre_techniques", []))
-                            n_paths = len(parsed.get("attack_graph", {}).get("paths", []))
+                            n_mitre = len(shaped["additional_mitre_techniques"])
+                            n_paths = len(shaped["attack_graph"]["paths"])
                             logger.info(
                                 "[DIAG] Chunk %d/%d parsed OK — "
                                 "%d refined_iocs (%d false_pos), "

@@ -60,7 +60,9 @@ Wired like the shell: all three providers bound to one dispatcher, and the
 operator's choice on the wrapper. That reproduces the 09-24 setup where Gemini
 was bound alongside.
 
-`threat_intel_ingester`, whole-document plan:
+`threat_intel_ingester`, whole-document plan (one run each; **see the
+correction in `2026-09-24-untrusted-shape-crash.md`**: OpenAI's false-positive
+judgement on this probe varies from run to run, down to rejecting all 74):
 
 | Provider (light) | Plan | Native calls | Time | Non-technique | Techniques |
 |---|---|---|---|---|---|
