@@ -117,6 +117,16 @@ PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-}"
 REGION="${CLOUD_RUN_REGION:-}"
 SERVICE_NAME="${CLOUD_RUN_SERVICE:-event-mill}"
 AR_REPO="${EVENTMILL_AR_REPO:-eventmill}"
+# The image is named after the service unless told otherwise. Many services
+# can run one image (cloud_install/lab/ deploys every lab service from the
+# event-mill-lab image with SKIP_BUILD=1), which is what this override is for.
+# EVENTMILL_IMAGE_TAG pins the tag deployed under SKIP_BUILD; see Step 6.
+IMAGE_NAME="${EVENTMILL_IMAGE_NAME:-${SERVICE_NAME}}"
+MIN_INSTANCES="${CLOUD_RUN_MIN_INSTANCES:-0}"
+MAX_INSTANCES="${CLOUD_RUN_MAX_INSTANCES:-3}"
+# 0 leaves the Daybreak secret unmounted and drops both Daybreak providers from
+# the default provider list. The secret need not exist in that case.
+MOUNT_DAYBREAK="${EVENTMILL_MOUNT_DAYBREAK:-1}"
 
 # Bucket prefix: same derivation as provision-gcp-project.sh.
 # Never allowed to be empty — an empty prefix makes the runtime resolver fall
@@ -152,7 +162,11 @@ SECRET_TTYD_CRED="${EVENTMILL_SECRET_TTYD_CRED:-eventmill-ttyd-cred}"
 # So adoption is now decided by whether a key holds a real value, which is
 # already where the operator's real decision lives, and this variable stops
 # being a second switch that has to agree with it.
-LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue}"
+if [ "${MOUNT_DAYBREAK}" = "1" ]; then
+    LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue}"
+else
+    LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai}"
+fi
 
 SA_NAME="${EVENTMILL_SA_NAME:-eventmill-runner}"
 
@@ -205,7 +219,7 @@ if [ -z "${EVENTMILL_BUCKET_PREFIX:-}" ]; then
 fi
 
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
-IMAGE_BASE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${SERVICE_NAME}"
+IMAGE_BASE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${IMAGE_NAME}"
 
 # ---------------------------------------------------------------------------
 # Repo root, resolved from this script's own location — NOT from the CWD.
@@ -269,15 +283,20 @@ LLM_SECRETS=(
     "${SECRET_GEMINI_PRO}"
     "${SECRET_ANTHROPIC}"
     "${SECRET_OPENAI}"
-    "${SECRET_OPENAI_DAYBREAK}"
 )
+[ "${MOUNT_DAYBREAK}" = "1" ] && LLM_SECRETS+=("${SECRET_OPENAI_DAYBREAK}")
 
 # The typo guard stays: an unknown id is refused rather than ignored, because
 # it would otherwise deploy with that provider silently absent.
 for _provider in ${LLM_PROVIDERS}; do
     case "${_provider}" in
         gcp_gemini|anthropic|openai) ;;
-        openai_daybreak_red|openai_daybreak_blue) ;;
+        openai_daybreak_red|openai_daybreak_blue)
+            if [ "${MOUNT_DAYBREAK}" != "1" ]; then
+                echo "ERROR: EVENTMILL_LLM_PROVIDERS names '${_provider}', but"
+                echo "       EVENTMILL_MOUNT_DAYBREAK=0 leaves its key unmounted."
+                exit 1
+            fi ;;
         *)
             echo "ERROR: unknown provider '${_provider}' in EVENTMILL_LLM_PROVIDERS."
             echo "       Known: gcp_gemini anthropic openai"
@@ -322,7 +341,9 @@ SECRET_MOUNTS="GEMINI_FLASH_API_KEY=${SECRET_GEMINI_FLASH}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},GEMINI_PRO_API_KEY=${SECRET_GEMINI_PRO}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},ANTHROPIC_API_KEY=${SECRET_ANTHROPIC}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},OPENAI_API_KEY=${SECRET_OPENAI}:latest"
-SECRET_MOUNTS="${SECRET_MOUNTS},OPENAI_DAYBREAK_API_KEY=${SECRET_OPENAI_DAYBREAK}:latest"
+if [ "${MOUNT_DAYBREAK}" = "1" ]; then
+    SECRET_MOUNTS="${SECRET_MOUNTS},OPENAI_DAYBREAK_API_KEY=${SECRET_OPENAI_DAYBREAK}:latest"
+fi
 SECRET_MOUNTS="${SECRET_MOUNTS},TTYD_USERNAME=${SECRET_TTYD_USER}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},TTYD_PASSWORD=${SECRET_TTYD_CRED}:latest"
 
@@ -336,6 +357,8 @@ echo "Bucket prefix:  ${BUCKET_PREFIX}"
 echo "Image:          ${IMAGE_BASE}:${IMAGE_TAG}"
 echo "Build context:  ${REPO_ROOT}"
 echo "Public access:  ${ALLOW_UNAUTH}"
+echo "Instances:      min ${MIN_INSTANCES}, max ${MAX_INSTANCES}"
+echo "LLM providers:  ${LLM_PROVIDERS}"
 echo ""
 
 FAILED=0
@@ -808,8 +831,17 @@ fi
 # but only on the path that actually builds it. Reusing :latest would be
 # claiming a SHA this tree did not produce, which is worse than saying nothing:
 # the runtime records code_id_source: unavailable instead.
+#
+# A pinned tag (EVENTMILL_IMAGE_TAG, e.g. from cloud_install/lab/
+# lab-build-image.sh) is different: the tag IS the identity of the build that
+# produced it, so it is forwarded, just as a fresh build's tag is.
 BUILD_SHA=""
-if [ "${SKIP_BUILD}" = "1" ]; then
+PINNED_TAG="${EVENTMILL_IMAGE_TAG:-}"
+if [ "${SKIP_BUILD}" = "1" ] && [ -n "${PINNED_TAG}" ] && [ "${PINNED_TAG}" != "latest" ]; then
+    echo "📦 Step 6: SKIP_BUILD=1 — deploying pinned ${IMAGE_BASE}:${PINNED_TAG}"
+    DEPLOY_IMAGE="${IMAGE_BASE}:${PINNED_TAG}"
+    BUILD_SHA="${PINNED_TAG}"
+elif [ "${SKIP_BUILD}" = "1" ]; then
     echo "📦 Step 6: SKIP_BUILD=1 — reusing ${IMAGE_BASE}:latest"
     DEPLOY_IMAGE="${IMAGE_BASE}:latest"
 else
@@ -883,8 +915,8 @@ if ! gcloud run deploy "${SERVICE_NAME}" \
         --memory=2Gi \
         --cpu=2 \
         --no-cpu-throttling \
-        --min-instances=0 \
-        --max-instances=3 \
+        --min-instances="${MIN_INSTANCES}" \
+        --max-instances="${MAX_INSTANCES}" \
         --timeout=3600 \
         --concurrency=5 \
         --session-affinity \
