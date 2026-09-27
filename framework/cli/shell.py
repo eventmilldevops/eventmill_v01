@@ -3639,7 +3639,9 @@ class EventMillShell(cmd.Cmd):
                     if a.artifact_id not in _artifacts_before
                 }
                 for oa in (result.output_artifacts or []):
-                    oa_path = Path(oa.get("file_path", ""))
+                    if not oa.get("file_path"):
+                        continue
+                    oa_path = Path(oa["file_path"])
                     if str(oa_path.resolve()) in _already_registered:
                         continue
                     if oa_path.exists():

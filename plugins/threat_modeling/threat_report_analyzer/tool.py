@@ -870,25 +870,36 @@ class ThreatReportAnalyzer:
         else:
             # No local mirror — upload directly to GCS
             normalized = report_path.replace("\\", "/")
+            export_name = self._export_name(normalized, stamp, "summary.md")
             gcs_object = (
-                f"{self.GENERATED_BASE}/threat_report_analyzer/"
-                f"{self._export_name(normalized, stamp, 'summary.md')}"
+                f"{self.GENERATED_BASE}/threat_report_analyzer/{export_name}"
             )
-            if self._upload_to_gcs(
+            summary_text = (
                 self._provenance_block(report_path, stamp)
-                    + self._attack_block() + final_summary,
-                gcs_object, context,
-            ):
+                + self._attack_block() + final_summary
+            )
+            # The shell registers, shows and exports artifacts from a local
+            # file. A gcs_uri-only descriptor has none, and used to be
+            # registered as "." — the working directory.
+            local_copy = self._write_local_artifact(
+                summary_text, Path(export_name).name, _log,
+            )
+            summary_gcs_uri = None
+            if self._upload_to_gcs(summary_text, gcs_object, context):
                 bucket_name = self._get_common_bucket_name(context)
-                summary_relative = f"gs://{bucket_name}/{gcs_object}"
-                output_artifacts.append(
-                    {
-                        "artifact_type": "text/markdown",
-                        "gcs_uri": summary_relative,
-                        "relative_path": gcs_object,
-                        "source_tool": "threat_report_analyzer",
-                    }
-                )
+                summary_gcs_uri = f"gs://{bucket_name}/{gcs_object}"
+                summary_relative = summary_gcs_uri
+            if local_copy or summary_gcs_uri:
+                descriptor: dict[str, Any] = {
+                    "artifact_type": "text/markdown",
+                    "relative_path": gcs_object,
+                    "source_tool": "threat_report_analyzer",
+                }
+                if summary_gcs_uri:
+                    descriptor["gcs_uri"] = summary_gcs_uri
+                if local_copy:
+                    descriptor["file_path"] = local_copy
+                output_artifacts.append(descriptor)
 
         return ToolResult(
             ok=True,
@@ -1019,6 +1030,23 @@ class ThreatReportAnalyzer:
         against the one it replaced.
         """
         return f"{normalized}.{stamp}.{suffix}"
+
+    @staticmethod
+    def _write_local_artifact(text: str, filename: str, log: Any) -> str | None:
+        """Write *text* under $EVENTMILL_WORKSPACE/artifacts; return its path.
+
+        The ingester's convention for a run with no local bucket mirror. None
+        if the write fails, which never fails the run.
+        """
+        workspace = os.environ.get("EVENTMILL_WORKSPACE", "/tmp")
+        target = Path(workspace) / "artifacts" / filename
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        except OSError as e:
+            log.warning("Failed to write local summary copy: %s", e)
+            return None
+        return str(target)
 
     def _coverage_fields(self) -> dict[str, Any]:
         """Page coverage for the report just processed.

@@ -344,3 +344,55 @@ class TestNoCallIsSizedBelowItsOwnReserve:
                 f"entirely inside the thinking reserve, so content can be "
                 f"starved to empty text with ok=True"
             )
+
+
+# ---------------------------------------------------------------------------
+# Cloud Run: no local bucket mirror
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryWithoutLocalMirror:
+    """With no local mirror the summary goes straight to GCS. The descriptor
+    must still carry a readable file_path: the shell registers, shows and
+    exports artifacts from a local file, and a gcs_uri-only entry was being
+    registered as Path("") — the working directory, ".".
+    """
+
+    def _run(self, tool_instance, tmp_path, monkeypatch, uploaded: bool):
+        pdf = tmp_path / "r.pdf"
+        pdf.write_bytes(b"%PDF-fake")
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path / "ws"))
+        monkeypatch.setattr(tool_instance, "_resolve_report_path", lambda *a, **k: pdf)
+        monkeypatch.setattr(tool_instance, "_get_generated_path", lambda ctx: None)
+        monkeypatch.setattr(
+            tool_instance, "_upload_to_gcs", lambda *a, **k: uploaded,
+        )
+        monkeypatch.setattr(
+            tool_instance, "_get_common_bucket_name", lambda ctx: "bkt",
+        )
+        result = tool_instance.execute(
+            {"action": "summarize", "report_path": "v/r.pdf", "max_words": 2000},
+            _Context(llm_query=_RecordingLLM()),
+        )
+        assert result.ok
+        return result
+
+    def test_uploaded_summary_also_has_a_local_file(
+        self, tool_instance, tmp_path, monkeypatch,
+    ):
+        result = self._run(tool_instance, tmp_path, monkeypatch, uploaded=True)
+        summary = [
+            a for a in result.output_artifacts if a.get("tag") != "threat_summary_chunk"
+        ][-1]
+        assert summary["gcs_uri"].startswith("gs://bkt/")
+        local = Path(summary["file_path"])
+        assert local.is_file() and local.name.endswith(".summary.md")
+        assert local.parent == tmp_path / "ws" / "artifacts"
+
+    def test_failed_upload_still_leaves_the_summary_readable(
+        self, tool_instance, tmp_path, monkeypatch,
+    ):
+        result = self._run(tool_instance, tmp_path, monkeypatch, uploaded=False)
+        summary = result.output_artifacts[-1]
+        assert "gcs_uri" not in summary
+        assert Path(summary["file_path"]).is_file()
