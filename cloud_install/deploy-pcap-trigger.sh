@@ -64,7 +64,19 @@ if [ -z "${TRIGGER_BUCKET}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 0: Create the runtime service account (idempotent) and grant
+# Step 0a: Enable required APIs (idempotent).
+# ---------------------------------------------------------------------------
+echo "📡 Enabling required APIs..."
+gcloud services enable \
+    cloudfunctions.googleapis.com \
+    run.googleapis.com \
+    cloudbuild.googleapis.com \
+    eventarc.googleapis.com \
+    artifactregistry.googleapis.com \
+    --project="${PROJECT_ID}" --quiet
+
+# ---------------------------------------------------------------------------
+# Step 0b: Create the runtime service account (idempotent) and grant
 # least-privilege IAM bindings.
 # ---------------------------------------------------------------------------
 echo "🔑 Ensuring service account ${SA_EMAIL} exists..."
@@ -89,22 +101,51 @@ fi
 
 echo "🔐 Granting least-privilege bucket IAM bindings..."
 
+# Idempotency helper: skip a binding if role+member+condition-title already
+# present, so reruns don't hit gcloud's interactive condition prompt.
+_binding_exists() {
+    local bucket_url="$1" role="$2" title="$3"
+    gcloud storage buckets get-iam-policy "${bucket_url}" --format=json \
+        --project="${PROJECT_ID}" 2>/dev/null | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+role, member, title = '$role', 'serviceAccount:${SA_EMAIL}', '$title'
+for b in data.get('bindings', []):
+    if b.get('role') != role or member not in b.get('members', []):
+        continue
+    cond = b.get('condition')
+    if not title and cond is None:
+        sys.exit(0)
+    if title and cond and cond.get('title') == title:
+        sys.exit(0)
+sys.exit(1)
+"
+}
+
 # Read access to bucket B (pcap objects) and the common bucket (sensors.json).
-gcloud storage buckets add-iam-policy-binding "gs://${TRIGGER_BUCKET}" \
-    --member="serviceAccount:${SA_EMAIL}" \
-    --role="roles/storage.objectViewer" \
-    --project="${PROJECT_ID}" >/dev/null
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_COMMON}" \
-    --member="serviceAccount:${SA_EMAIL}" \
-    --role="roles/storage.objectViewer" \
-    --project="${PROJECT_ID}" >/dev/null
+if ! _binding_exists "gs://${TRIGGER_BUCKET}" "roles/storage.objectViewer" ""; then
+    gcloud storage buckets add-iam-policy-binding "gs://${TRIGGER_BUCKET}" \
+        --member="serviceAccount:${SA_EMAIL}" \
+        --role="roles/storage.objectViewer" \
+        --condition=None \
+        --project="${PROJECT_ID}" >/dev/null
+fi
+if ! _binding_exists "gs://${BUCKET_COMMON}" "roles/storage.objectViewer" ""; then
+    gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_COMMON}" \
+        --member="serviceAccount:${SA_EMAIL}" \
+        --role="roles/storage.objectViewer" \
+        --condition=None \
+        --project="${PROJECT_ID}" >/dev/null
+fi
 
 # Write access limited to the acks/ prefix in bucket B via an IAM condition.
-gcloud storage buckets add-iam-policy-binding "gs://${TRIGGER_BUCKET}" \
-    --member="serviceAccount:${SA_EMAIL}" \
-    --role="roles/storage.objectCreator" \
-    --condition="expression=resource.name.startsWith(\"projects/_/buckets/${TRIGGER_BUCKET}/objects/acks/\"),title=acks-prefix-only" \
-    --project="${PROJECT_ID}" >/dev/null
+if ! _binding_exists "gs://${TRIGGER_BUCKET}" "roles/storage.objectCreator" "acks-prefix-only"; then
+    gcloud storage buckets add-iam-policy-binding "gs://${TRIGGER_BUCKET}" \
+        --member="serviceAccount:${SA_EMAIL}" \
+        --role="roles/storage.objectCreator" \
+        --condition="expression=resource.name.startsWith(\"projects/_/buckets/${TRIGGER_BUCKET}/objects/acks/\"),title=acks-prefix-only" \
+        --project="${PROJECT_ID}" >/dev/null
+fi
 
 # ---------------------------------------------------------------------------
 # Step 1: Deploy the gen2 Cloud Run function
