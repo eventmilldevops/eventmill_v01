@@ -147,6 +147,24 @@ if ! _binding_exists "gs://${TRIGGER_BUCKET}" "roles/storage.objectCreator" "ack
         --project="${PROJECT_ID}" >/dev/null
 fi
 
+# The trigger's runtime service account must be able to receive Eventarc
+# events (roles/eventarc.eventReceiver), separate from the bucket bindings.
+if ! gcloud projects get-iam-policy "${PROJECT_ID}" --format=json \
+    | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+member = 'serviceAccount:${SA_EMAIL}'
+for b in data.get('bindings', []):
+    if b.get('role') == 'roles/eventarc.eventReceiver' and member in b.get('members', []):
+        sys.exit(0)
+sys.exit(1)
+"; then
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+        --member="serviceAccount:${SA_EMAIL}" \
+        --role="roles/eventarc.eventReceiver" \
+        --condition=None >/dev/null
+fi
+
 # ---------------------------------------------------------------------------
 # Step 1: Deploy the gen2 Cloud Run function
 # ---------------------------------------------------------------------------
