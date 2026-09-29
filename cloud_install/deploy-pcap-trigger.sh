@@ -74,6 +74,17 @@ if ! gcloud iam service-accounts describe "${SA_EMAIL}" \
     gcloud iam service-accounts create "${SA_NAME}" \
         --project="${PROJECT_ID}" \
         --display-name="PCAP ingest trigger runtime SA"
+
+    # New service accounts can take a few seconds to propagate through IAM
+    # before they're usable in bucket policy bindings; poll until visible.
+    echo "   waiting for service account to propagate..."
+    for _ in $(seq 1 10); do
+        if gcloud iam service-accounts describe "${SA_EMAIL}" \
+            --project="${PROJECT_ID}" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 3
+    done
 fi
 
 echo "🔐 Granting least-privilege bucket IAM bindings..."
