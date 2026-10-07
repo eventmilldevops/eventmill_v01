@@ -5103,6 +5103,13 @@ def main() -> None:
     if dotenv_path is not None:
         logger.info("Loaded local environment from %s", dotenv_path)
 
+    # EVENTMILL_MODE=api runs the headless HTTP API instead of the
+    # interactive shell — same container image, different entrypoint.
+    if os.environ.get("EVENTMILL_MODE", "shell").lower() == "api":
+        from .api_server import main as api_main
+        api_main()
+        return
+
     # Gracefully handle SIGHUP (signal 1) — sent by ttyd when a browser
     # tab closes or Cloud Run manages instance lifecycle. Without this,
     # the Python process crashes with "Uncaught signal: 1".

@@ -43,6 +43,12 @@ BUCKET_COMMON="${EVENTMILL_BUCKET_COMMON:-${BUCKET_PREFIX}-common}"
 SA_NAME="pcap-trigger-runner"
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
+# event-mill-api (Phase 2) may not be deployed yet — look it up if present,
+# otherwise the trigger logs a warning and skips the analysis call.
+EVENTMILL_API_URL=$(gcloud run services describe event-mill-api \
+    --project="${PROJECT_ID}" --region="${REGION}" \
+    --format="value(status.url)" 2>/dev/null || true)
+
 echo "⚙ PCAP Ingest Trigger — Cloud Run Function Deployment"
 echo "========================================================"
 echo "Project:        ${PROJECT_ID}"
@@ -183,7 +189,8 @@ gcloud functions deploy "${FUNCTION_NAME}" \
     --timeout=60s \
     --max-instances=10 \
     --set-env-vars="EVENTMILL_BUCKET_PREFIX=${BUCKET_PREFIX}" \
-    --set-env-vars="EVENTMILL_BUCKET_COMMON=${BUCKET_COMMON}"
+    --set-env-vars="EVENTMILL_BUCKET_COMMON=${BUCKET_COMMON}" \
+    --set-env-vars="EVENTMILL_API_URL=${EVENTMILL_API_URL}"
 
 # The Eventarc trigger's own SA also needs run.invoker on the underlying
 # Cloud Run service (separate from the project-level eventReceiver role).

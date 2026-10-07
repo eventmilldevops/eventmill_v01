@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Both are small pure-Python wheels over httpx, which google-genai already pulls.
 COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir build && \
-    pip install --no-cache-dir ".[gcp,plugins-threat-modeling,plugins-log-analysis,plugins-network-forensics,llm-anthropic,llm-openai]"
+    pip install --no-cache-dir ".[gcp,api,plugins-threat-modeling,plugins-log-analysis,plugins-network-forensics,llm-anthropic,llm-openai]"
 
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime

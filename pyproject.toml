@@ -73,6 +73,10 @@ gcp = [
     "google-cloud-logging>=3.8.0",
     "google-cloud-build>=3.22.0",
 ]
+api = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+]
 plugins-log-analysis = [
     "pdfplumber>=0.10.0",
     "beautifulsoup4>=4.12.0",
@@ -111,7 +115,7 @@ llm-openai = [
     "openai>=3.13.0,<4.0.0",
 ]
 all = [
-    "eventmill[dev,gcp,plugins-log-analysis,plugins-network-forensics,plugins-threat-modeling,llm-anthropic,llm-openai]",
+    "eventmill[dev,gcp,api,plugins-log-analysis,plugins-network-forensics,plugins-threat-modeling,llm-anthropic,llm-openai]",
 ]
 
 [project.urls]
@@ -122,6 +126,7 @@ Issues = "https://github.com/eventmilldevops/eventmill_v01/issues"
 
 [project.scripts]
 eventmill = "framework.cli.shell:main"
+eventmill-api = "framework.cli.api_server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -141,6 +141,58 @@ def _write_ack_marker(
     logger.info("Wrote ack marker gs://%s/%s (status=%s)", bucket_name, ack_path, status)
 
 
+def _trigger_analysis(event: PcapUploadEvent) -> None:
+    """Kick off a headless Event Mill investigation for an acknowledged PCAP.
+
+    Calls the event-mill-api Cloud Run service's /analyze endpoint
+    (see docs/specs/pcap_ingest_trigger_phase2.md). This is fire-and-forget
+    from the trigger's perspective: a short read timeout is used so this
+    function doesn't block on the full (potentially multi-minute) analysis.
+    A read timeout here means the request was already delivered and the
+    service will keep running it — it is not a failure to kick off analysis.
+    """
+    api_url = os.environ.get("EVENTMILL_API_URL")
+    if not api_url:
+        logger.warning("EVENTMILL_API_URL not set; skipping analysis trigger")
+        return
+
+    import requests
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+    from google.oauth2 import id_token
+
+    try:
+        auth_req = GoogleAuthRequest()
+        token = id_token.fetch_id_token(auth_req, api_url)
+    except Exception:
+        logger.exception("Failed to fetch identity token for %s", api_url)
+        return
+
+    try:
+        requests.post(
+            f"{api_url.rstrip('/')}/analyze",
+            json={
+                "pcap_uri": f"gs://{event.bucket}/{event.object_name}",
+                "sensor_id": event.sensor_id,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=(5, 5),
+        )
+        logger.info("Queued analysis for %s (sensor=%s)", event.object_name, event.sensor_id)
+    except requests.exceptions.Timeout:
+        logger.info(
+            "Analysis request for %s (sensor=%s) delivered; continuing "
+            "in background past the short client timeout",
+            event.object_name,
+            event.sensor_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to trigger analysis for %s (sensor=%s)",
+            event.object_name,
+            event.sensor_id,
+        )
+
+
 @functions_framework.cloud_event
 def handle_pcap_upload(cloud_event: CloudEvent) -> None:
     """Entry point for the Eventarc storage.object.v1.finalized trigger."""
@@ -179,3 +231,7 @@ def handle_pcap_upload(cloud_event: CloudEvent) -> None:
             event.object_name,
             event.sensor_id,
         )
+
+    if status == _STATUS_ACKNOWLEDGED:
+        _trigger_analysis(event)
+
