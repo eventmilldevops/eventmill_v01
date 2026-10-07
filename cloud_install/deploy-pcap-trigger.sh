@@ -185,6 +185,26 @@ gcloud functions deploy "${FUNCTION_NAME}" \
     --set-env-vars="EVENTMILL_BUCKET_PREFIX=${BUCKET_PREFIX}" \
     --set-env-vars="EVENTMILL_BUCKET_COMMON=${BUCKET_COMMON}"
 
+# The Eventarc trigger's own SA also needs run.invoker on the underlying
+# Cloud Run service (separate from the project-level eventReceiver role).
+if ! gcloud run services get-iam-policy "${FUNCTION_NAME}" \
+    --region="${REGION}" --project="${PROJECT_ID}" --format=json \
+    | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+member = 'serviceAccount:${SA_EMAIL}'
+for b in data.get('bindings', []):
+    if b.get('role') == 'roles/run.invoker' and member in b.get('members', []):
+        sys.exit(0)
+sys.exit(1)
+"; then
+    gcloud run services add-iam-policy-binding "${FUNCTION_NAME}" \
+        --region="${REGION}" \
+        --member="serviceAccount:${SA_EMAIL}" \
+        --role="roles/run.invoker" \
+        --project="${PROJECT_ID}" >/dev/null
+fi
+
 # ---------------------------------------------------------------------------
 # Step 2: Display status
 # ---------------------------------------------------------------------------
