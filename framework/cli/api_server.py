@@ -71,8 +71,11 @@ class AnalyzeResponse(BaseModel):
     message: str | None = None
 
 
-@app.get("/healthz")
-def healthz() -> dict[str, str]:
+# Note: intentionally not "/healthz" — Google's front-end infrastructure
+# intercepts that exact path before it reaches Cloud Run, regardless of
+# the container's own routes.
+@app.get("/health")
+def health() -> dict[str, str]:
     """Liveness check for Cloud Run."""
     return {"status": "ok"}
 

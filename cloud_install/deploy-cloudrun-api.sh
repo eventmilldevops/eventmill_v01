@@ -114,7 +114,7 @@ SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
 echo "✅ ${SERVICE_NAME} deployed!"
 echo ""
 echo "URL (authenticated callers only): ${SERVICE_URL}"
-echo "Endpoints: POST /analyze   GET /healthz"
+echo "Endpoints: POST /analyze   GET /health"
 echo ""
 echo "Note: the existing interactive 'event-mill' (ttyd) service is"
 echo "unaffected by this deployment."
