@@ -171,6 +171,27 @@ sys.exit(1)
         --condition=None >/dev/null
 fi
 
+# The GCS service agent needs pubsub.publisher to publish bucket-finalize
+# events to the Pub/Sub topic backing this Eventarc trigger — required the
+# first time a project uses a GCS-triggered Eventarc trigger.
+PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
+GCS_SERVICE_AGENT="service-${PROJECT_NUMBER}@gs-project-accounts.iam.gserviceaccount.com"
+if ! gcloud projects get-iam-policy "${PROJECT_ID}" --format=json \
+    | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+member = 'serviceAccount:${GCS_SERVICE_AGENT}'
+for b in data.get('bindings', []):
+    if b.get('role') == 'roles/pubsub.publisher' and member in b.get('members', []):
+        sys.exit(0)
+sys.exit(1)
+"; then
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+        --member="serviceAccount:${GCS_SERVICE_AGENT}" \
+        --role="roles/pubsub.publisher" \
+        --condition=None >/dev/null
+fi
+
 # ---------------------------------------------------------------------------
 # Step 1: Deploy the gen2 Cloud Run function
 # ---------------------------------------------------------------------------
