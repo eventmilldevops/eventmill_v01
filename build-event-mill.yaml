@@ -7,7 +7,7 @@ steps:
     args:
       - 'build'
       - '-t'
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:latest'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/event-mill:latest'
       - '-f'
       - 'cloud_install/Dockerfile.cloudrun'
       - '.'
@@ -16,13 +16,14 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:latest'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/event-mill:latest'
 
 images:
-  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/eventmill/event-mill:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/event-mill:latest'
 
 substitutions:
   _REGION: northamerica-northeast2
+  _AR_REPO: eventmill
 
 options:
   logging: CLOUD_LOGGING_ONLY

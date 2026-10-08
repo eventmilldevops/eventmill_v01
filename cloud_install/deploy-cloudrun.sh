@@ -37,7 +37,8 @@ set -e
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-your-project-id}"
 REGION="${CLOUD_RUN_REGION:-}"
 SERVICE_NAME="event-mill"
-IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/eventmill/${SERVICE_NAME}"
+AR_REPO="${EVENTMILL_AR_REPO:-eventmill}"
+IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${SERVICE_NAME}"
 
 echo "⚙ Event Mill v0.1.0 — Cloud Run Deployment"
 echo "============================================="

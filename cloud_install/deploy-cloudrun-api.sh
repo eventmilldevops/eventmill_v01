@@ -37,7 +37,8 @@ set -e
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-your-project-id}"
 REGION="${CLOUD_RUN_REGION:-northamerica-northeast2}"
 SERVICE_NAME="event-mill-api"
-IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/eventmill/event-mill:latest"
+AR_REPO="${EVENTMILL_AR_REPO:-eventmill}"
+IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/event-mill:latest"
 
 # The pcap_trigger function's runtime SA (created by deploy-pcap-trigger.sh)
 # is the only identity granted permission to call this service.
