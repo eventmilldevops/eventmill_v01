@@ -88,12 +88,19 @@ gcloud run deploy "${SERVICE_NAME}" \
 # Step 2: Grant the pcap_trigger function's SA permission to invoke it
 # ---------------------------------------------------------------------------
 echo ""
-echo "🔐 Granting run.invoker to ${PCAP_TRIGGER_SA}..."
-gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
-    --project="${PROJECT_ID}" \
-    --region="${REGION}" \
-    --member="serviceAccount:${PCAP_TRIGGER_SA}" \
-    --role="roles/run.invoker" >/dev/null
+if gcloud iam service-accounts describe "${PCAP_TRIGGER_SA}" \
+    --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    echo "🔐 Granting run.invoker to ${PCAP_TRIGGER_SA}..."
+    gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
+        --project="${PROJECT_ID}" \
+        --region="${REGION}" \
+        --member="serviceAccount:${PCAP_TRIGGER_SA}" \
+        --role="roles/run.invoker" >/dev/null
+else
+    echo "⚠ ${PCAP_TRIGGER_SA} does not exist yet — skipping run.invoker grant."
+    echo "  Run cloud_install/deploy-pcap-trigger.sh (creates the SA), then"
+    echo "  re-run this script to apply the binding."
+fi
 
 # ---------------------------------------------------------------------------
 # Step 3: Display results
