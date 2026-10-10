@@ -138,13 +138,21 @@ def build_prompt(
         if content is None
         else f"STANDARD TEXT{part_note}:\n{content}"
     )
-    return f"""Extract the logging requirements from this standard.
+    return f"""Extract every logging requirement this standard makes.
 
-Most of a standard is scope, definitions, roles and rationale. Skip that. Keep
-only statements that say what must, should or may be logged, what a log record
-has to contain, how its values must be formatted, and how logs are to be
-handled. One requirement per statement; do not merge statements and do not
-invent requirements the document does not make.
+A standard also holds scope, definitions, roles and rationale; those are not
+requirements. A requirement is any sentence that obliges or recommends
+something about event records or logs: what is recorded, what a record
+contains, how values are formatted, and equally how logs are collected,
+transported, protected, retained, reviewed and disposed of.
+
+Be exhaustive. Go through the document section by section and return every
+such sentence, one requirement per sentence, including the many that a log
+file cannot show; those are kept and labelled, not skipped. A standard of a
+dozen pages usually makes dozens of requirements, often more than a hundred.
+Every sentence containing shall, must, should or required will be counted in
+the document afterwards and compared with what you return. Do not merge
+sentences and do not invent requirements the document does not make.
 
 For each requirement return:
 - requirement_id: the document's own clause or control number if it has one.
@@ -169,6 +177,8 @@ For each requirement return:
   Each entry is {{"element": name}} with optional "constraints":
 {constraints}
   Use an empty list for "not_assessable_from_sample".
+  A requirement worded as conditional ("where applicable", "when an outcome
+  exists") still names its elements.
 - unmapped_reason: if the requirement is about record content but no catalogue
   element expresses it, leave elements empty and say here what it needs.
   Otherwise null. Never force a requirement onto an element that does not fit.
@@ -296,6 +306,221 @@ def _squash(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
+NORMATIVE = re.compile(r"\b(shall|must|should|required)\b", re.IGNORECASE)
+HEADING = re.compile(r"^(\d{1,2}(?:\.\d{1,2}){0,3})\.?\s+([A-Z][^\n]{2,90})$")
+# Sentences sent for classification in one sweep call, and characters of each.
+SWEEP_SENTENCES = 250
+SWEEP_SENTENCE_CHARS = 500
+NOT_REQUIREMENT_KEPT = 200
+
+SWEEP_EXAMPLE = {
+    "sentences": [
+        {
+            "n": 1,
+            "requirement": True,
+            "obligation": "must",
+            "assessable_from": "not_assessable_from_sample",
+            "summary": "Logs are kept for at least twelve months.",
+            "elements": [],
+            "unmapped_reason": None,
+        },
+        {
+            "n": 2,
+            "requirement": True,
+            "obligation": "should",
+            "assessable_from": "record_content",
+            "summary": "Records name the host that produced them.",
+            "elements": [{"element": "host"}],
+            "unmapped_reason": None,
+        },
+        {"n": 3, "requirement": False, "why": "defines the word 'shall'"},
+    ]
+}
+
+
+def _tidy(text: str) -> str:
+    text = text.replace(chr(173), "").replace("-" + chr(10), "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _running_lines(pages: list[str]) -> set[str]:
+    """Lines repeated on most pages: running headers and footers."""
+    if len(pages) < 4:
+        return set()
+    seen: dict[str, int] = {}
+    for page in pages:
+        for line in {ln.strip() for ln in page.splitlines() if ln.strip()}:
+            seen[line] = seen.get(line, 0) + 1
+    return {line for line, count in seen.items() if count * 2 > len(pages)}
+
+
+def obligation_sentences(pages: list[str]) -> list[dict[str, Any]]:
+    """Every sentence in the document worded shall, must, should or required.
+
+    Each carries its page and the numbered heading it sits under, when the
+    document numbers its headings. This is a wording match, not a judgment:
+    it over-collects (a sentence defining "shall" matches) and the caller
+    decides what each one is.
+    """
+    running = _running_lines(pages)
+    many = len(pages) > 1
+    found: list[dict[str, Any]] = []
+    number_of, heading = "", ""
+
+    def flush(lines: list[str], page: int) -> None:
+        for sentence in re.split(r"(?<=[.;!?])\s+", _tidy("\n".join(lines))):
+            if len(sentence) >= 20 and NORMATIVE.search(sentence):
+                found.append(
+                    {
+                        "n": len(found) + 1,
+                        "page": page if many else None,
+                        "section_number": number_of,
+                        "section": heading,
+                        "text": sentence,
+                    }
+                )
+
+    for page_number, page in enumerate(pages, start=1):
+        block: list[str] = []
+        for line in page.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped in running:
+                continue
+            match = HEADING.match(stripped)
+            if match and stripped[-1] not in ".;:,":
+                flush(block, page_number)
+                block = []
+                number_of = match.group(1)
+                heading = f"{match.group(1)} {match.group(2).strip()}"
+                continue
+            block.append(line)
+        flush(block, page_number)
+    return found
+
+
+def not_quoted(
+    sentences: list[dict[str, Any]], requirements: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The sentences no requirement's quote contains or is contained in."""
+    quotes = [q for q in (_squash(r.get("quote") or "") for r in requirements) if q]
+    out = []
+    for sentence in sentences:
+        squashed = _squash(sentence["text"])
+        if not any(q in squashed or squashed in q for q in quotes):
+            out.append(sentence)
+    return out
+
+
+def build_sweep_prompt(
+    catalogue: dict[str, Any], sentences: list[dict[str, Any]]
+) -> str:
+    elements = "\n".join(
+        f"- {name} ({spec['value_type']}): {spec['description']}"
+        for name, spec in catalogue["elements"].items()
+    )
+    constraints = "\n".join(
+        f"- {name}: {text}" for name, text in catalogue.get("constraints", {}).items()
+    )
+    listing = "\n".join(
+        f"{s['n']}. [{s['section'] or 'no heading'}] {s['text'][:SWEEP_SENTENCE_CHARS]}"
+        for s in sentences
+    )
+    return f"""These numbered sentences come from a logging standard. Each contains
+shall, must, should or required. Classify every one of them.
+
+A sentence is a requirement when it obliges or recommends something about
+event records or logs: what is recorded, what a record contains, how values
+are formatted, or how logs are collected, transported, protected, retained,
+reviewed or disposed of. It is not a requirement when it defines a term,
+states scope, disclaims, describes the document itself, or is a fragment of a
+table or heading.
+
+For each sentence return an object with:
+- n: its number.
+- requirement: true or false. When false add "why" in a few words and nothing
+  else.
+- obligation: "must" (shall, must, required), "should" or "may".
+- assessable_from:
+    "record_content" - can be checked by looking inside individual log
+      records (a field is present, a value has a format).
+    "record_set" - needs many records together (ordering, gaps, consistency).
+    "not_assessable_from_sample" - cannot be seen in a log file at all:
+      retention, access control, protection, review, roles, storage,
+      configuration, documentation.
+- summary: one plain sentence of at most 20 words.
+- elements: for the first two kinds, which record elements it needs, chosen
+  ONLY from this catalogue:
+{elements}
+  Each entry is {{"element": name}} with optional "constraints":
+{constraints}
+  Empty for "not_assessable_from_sample".
+- unmapped_reason: if it is about record content but no catalogue element
+  expresses it, leave elements empty and say here what it needs. Otherwise
+  null.
+
+Return one object for each of the {len(sentences)} sentences, keeping its number. Reply
+with one JSON object and nothing else, shaped like this example (its content is invented):
+
+{json.dumps(SWEEP_EXAMPLE, indent=2)}
+
+SENTENCES:
+{listing}
+"""
+
+
+def parse_sweep(text: str | None) -> tuple[dict[int, dict[str, Any]], list[str]]:
+    """``({n: item}, notes)`` from a sweep reply. Never raises."""
+    _, items, notes = parse_reply(
+        (text or "").replace('"sentences"', '"requirements"', 1)
+    )
+    out: dict[int, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            number = int(item.get("n"))
+        except (TypeError, ValueError):
+            continue
+        out.setdefault(number, item)
+    return out, notes
+
+
+def sweep_requirements(
+    sentences: list[dict[str, Any]], verdicts: dict[int, dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(raw_requirements, not_requirements, unclassified)`` from sweep verdicts.
+
+    A requirement's quote is the sentence as extracted here, never text the
+    model returned, so it is in the document by construction.
+    """
+    raw: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    unclassified: list[dict[str, Any]] = []
+    for sentence in sentences:
+        verdict = verdicts.get(sentence["n"])
+        where = {"page": sentence["page"], "text": sentence["text"][:400]}
+        if verdict is None:
+            unclassified.append(where)
+            continue
+        if verdict.get("requirement") in (False, "false", "no", 0):
+            rejected.append({**where, "why": str(verdict.get("why") or "")[:160]})
+            continue
+        raw.append(
+            {
+                "requirement_id": sentence["section_number"] or "",
+                "section": sentence["section"],
+                "page": sentence["page"],
+                "obligation": verdict.get("obligation"),
+                "assessable_from": verdict.get("assessable_from"),
+                "summary": verdict.get("summary"),
+                "quote": sentence["text"],
+                "elements": verdict.get("elements"),
+                "unmapped_reason": verdict.get("unmapped_reason"),
+            }
+        )
+    return raw, rejected, unclassified
+
+
 def check_quotes(
     requirements: list[dict[str, Any]], pages: list[str]
 ) -> dict[str, int]:
@@ -326,3 +551,25 @@ def check_quotes(
             requirement["quote_status"] = "quote_not_found"
         counts[requirement["quote_status"]] += 1
     return counts
+
+
+def in_document_order(
+    requirements: list[dict[str, Any]], pages: list[str]
+) -> list[dict[str, Any]]:
+    """Requirements sorted by where their quote sits in the document.
+
+    A requirement whose quote was not located keeps its place after the last
+    located one before it.
+    """
+    whole = " ".join(_squash(page) for page in pages)
+    keyed = []
+    last = -1.0
+    for index, requirement in enumerate(requirements):
+        quote = _squash(requirement.get("quote") or "")
+        at = whole.find(quote) if quote and whole.strip() else -1
+        if at >= 0:
+            last = float(at)
+            keyed.append((float(at), index, requirement))
+        else:
+            keyed.append((last + 0.5, index, requirement))
+    return [requirement for _, _, requirement in sorted(keyed, key=lambda k: k[:2])]

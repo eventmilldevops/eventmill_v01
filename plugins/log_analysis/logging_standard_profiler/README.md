@@ -31,14 +31,31 @@ Three things make the review quicker:
   the catalogue cannot express is kept with no elements and an
   `unmapped_reason`. It shows in the audit as `not_evaluated`.
 
+## Two calls, and a count of what was covered
+
+A model asked to read a standard returns a selection, not everything: on a
+14-page standard a single read quoted 25 of 144 obligation sentences. So the
+tool also finds every sentence worded shall, must, should or required in the
+text it extracted itself, and makes a second call (the sweep) that asks the
+model to classify the ones the first read left out. Those requirements carry
+`extracted_by: sentence_sweep` and quote the document's own sentence.
+
+The profile's `statement_coverage` block accounts for every such sentence:
+quoted by the first read, added by the sweep, judged not a requirement (listed
+with the model's reason, worth a skim), or not classified. `--skip_sweep`
+leaves the second call out. The count is a wording match: it includes
+sentences that merely define "shall", and it cannot see a requirement worded
+another way.
+
 A scanned PDF with no text layer can still be read natively by the model, but
-its quotes come back `not_checked`, because there is nothing local to search.
+there is no sweep and its quotes come back `not_checked`, because there is no
+local text to search.
 
 ## Actions
 
 | Action | Model | What it does |
 |---|---|---|
-| `extract_profile` | heavy tier, 1 call (more for a long text-only document) | Reads the standard, writes `logging_profile_<stamp>.json`, registers it as a `json_events` artifact |
+| `extract_profile` | heavy tier, 2 calls (more for a long text-only document) | Reads the standard, writes `logging_profile_<stamp>.json`, registers it as a `json_events` artifact |
 | `validate_profile` | none | Checks any profile, generated or hand-written, and lists errors and warnings |
 
 ```

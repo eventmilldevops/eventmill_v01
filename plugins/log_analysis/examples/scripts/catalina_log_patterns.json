@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "application": "YMMV Legacy Invoicing",
+  "service": "invoice-web",
+  "container": "Apache Tomcat/9.0.89",
+  "database": "YMMV_INVOICE",
+  "timezone": "UTC-07:00",
+  "hosts": ["invapp01.ymmv.example", "invapp02.ymmv.example"],
+  "database_accounts": {
+    "read_only": "ymmv_inv_ro",
+    "read_write": "ymmv_inv_rw",
+    "config_change": "ymmv_inv_cfg"
+  },
+  "tables": {
+    "YMMV.CUSTOMER": ["customer_id", "legal_name", "billing_email", "credit_status"],
+    "YMMV.CUSTOMER_CONTACT": ["contact_id", "customer_id", "contact_type", "status"],
+    "YMMV.INVOICE_HEADER": ["invoice_id", "customer_id", "invoice_date", "status", "total_amount"],
+    "YMMV.INVOICE_LINE": ["invoice_id", "line_number", "item_code", "quantity", "line_amount"],
+    "YMMV.PAYMENT": ["payment_id", "invoice_id", "payment_date", "amount", "payment_status"],
+    "YMMV.TAX_RATE": ["tax_code", "jurisdiction", "effective_date", "rate"],
+    "YMMV.APP_CONFIG": ["config_key", "config_scope", "value_hash", "updated_by"],
+    "YMMV.AUDIT_QUEUE": ["queue_id", "event_type", "created_at", "delivery_status"]
+  },
+  "java_operations": [
+    {
+      "class": "com.ymmv.invoice.web.InvoiceController",
+      "methods": ["listInvoices", "getInvoice", "createInvoice", "updateStatus"]
+    },
+    {
+      "class": "com.ymmv.invoice.web.CustomerController",
+      "methods": ["searchCustomers", "getCustomer", "updateContact"]
+    },
+    {
+      "class": "com.ymmv.invoice.web.PaymentController",
+      "methods": ["applyPayment", "getPaymentStatus"]
+    },
+    {
+      "class": "com.ymmv.invoice.service.InvoiceService",
+      "methods": ["findInvoice", "createInvoice", "recalculateTotals", "changeStatus"]
+    },
+    {
+      "class": "com.ymmv.invoice.service.PaymentService",
+      "methods": ["recordPayment", "reconcilePayment"]
+    }
+  ],
+  "event_weights": {
+    "HTTP_REQUEST": 28,
+    "SERVICE_CALL": 14,
+    "DAO_SELECT": 18,
+    "DAO_WRITE": 12,
+    "DB_CONNECTION": 8,
+    "AUTHENTICATION": 7,
+    "VALIDATION_WARNING": 4,
+    "CONFIG_REFRESH": 2,
+    "BACKGROUND_JOB": 4,
+    "SESSION_EVENT": 3
+  },
+  "fixed_scenarios": [
+    {
+      "id": "TOMCAT_STARTUP",
+      "description": "Container startup, WAR deployment, connection-pool initialization, and application readiness."
+    },
+    {
+      "id": "DATABASE_POOL_EXHAUSTION",
+      "description": "Three application requests fail with multiline SQL connection-pool exceptions."
+    }
+  ]
+}

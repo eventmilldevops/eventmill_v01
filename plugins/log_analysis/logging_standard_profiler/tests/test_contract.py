@@ -130,6 +130,8 @@ class FakeLLM:
         hints=None,
     ):
         self.prompts.append(prompt)
+        if not self.replies:
+            return FakeResponse(ok=False, error="no scripted reply left")
         item = self.replies.pop(0)
         return item if isinstance(item, FakeResponse) else FakeResponse(text=item)
 
@@ -529,3 +531,120 @@ class TestValidateInputs:
 
     def test_default_action(self, plugin):
         assert plugin.validate_inputs({"artifact_id": "art_0001"}).ok
+
+
+SWEEP_STANDARD = """Example Corp Application Logging Standard v2.1
+
+1 Purpose
+The word shall states a mandatory requirement in this standard.
+
+4.2 Record content
+Each log entry shall include a timestamp in UTC with at least millisecond
+resolution. Authentication events shall record the user identity and the
+outcome of the attempt. Records should name the host that produced them.
+
+6 Retention
+Log data shall be retained for a minimum of twelve months. Archives must be
+encrypted at rest.
+"""
+
+SWEEP_REPLY = {
+    "sentences": [
+        {"n": 1, "requirement": False, "why": "defines a term"},
+        {
+            "n": 4,
+            "requirement": True,
+            "obligation": "should",
+            "assessable_from": "record_content",
+            "summary": "Records name their host.",
+            "elements": [{"element": "host"}, {"element": "made_up"}],
+            "unmapped_reason": None,
+        },
+    ]
+}
+
+
+class TestSentenceSweep:
+    """The first read is selective; the sweep classifies what it left."""
+
+    @pytest.fixture
+    def swept(self, plugin, tmp_path):
+        path = tmp_path / "standard.txt"
+        path.write_text(SWEEP_STANDARD, encoding="utf-8")
+        result, context = extract(
+            plugin, path, [json.dumps(GOOD_REPLY), json.dumps(SWEEP_REPLY)]
+        )
+        profile = json.loads(
+            open(context.registered[0].file_path, encoding="utf-8").read()
+        )
+        return result, context, profile
+
+    def test_obligation_sentences_carry_their_heading(self):
+        found = ex.obligation_sentences([SWEEP_STANDARD])
+        assert [s["section_number"] for s in found] == [
+            "1",
+            "4.2",
+            "4.2",
+            "4.2",
+            "6",
+            "6",
+        ]
+        assert found[3]["text"] == "Records should name the host that produced them."
+        assert found[1]["section"] == "4.2 Record content"
+
+    def test_only_unquoted_sentences_are_sent(self, swept):
+        _, context, _ = swept
+        prompt = context.llm_query.prompts[1]
+        assert "Records should name the host" in prompt
+        assert "Archives must be encrypted at rest." in prompt
+        listing = prompt.split("SENTENCES:")[1]
+        assert "Log data shall be retained" not in listing
+
+    def test_swept_requirement_quotes_the_document_not_the_model(self, swept):
+        _, _, profile = swept
+        host = [
+            r for r in profile["requirements"] if r["extracted_by"] == "sentence_sweep"
+        ]
+        assert len(host) == 1
+        assert host[0]["quote"] == "Records should name the host that produced them."
+        assert host[0]["quote_status"] == "found"
+        assert host[0]["requirement_id"] == "4.2"
+        assert [e["element"] for e in host[0]["elements"]] == ["host"]
+
+    def test_requirements_are_in_document_order(self, swept):
+        _, _, profile = swept
+        quotes = [r["quote"][:12] for r in profile["requirements"]]
+        assert quotes.index("Records shou") < quotes.index("Log data sha")
+
+    def test_coverage_accounts_for_every_sentence(self, plugin, swept):
+        result, _, profile = swept
+        coverage = profile["statement_coverage"]
+        assert coverage["obligation_sentences"] == 6
+        assert coverage["quoted_by_document_read"] == 2
+        assert coverage["swept_requirements"] == 1
+        assert coverage["swept_not_a_requirement"] == 1
+        assert coverage["not_classified"] == 2
+        assert coverage["not_classified_sentences"][1]["text"].startswith("Archives")
+        assert coverage["not_a_requirement_sentences"][0]["why"] == "defines a term"
+        assert result.result["statement_coverage"]["obligation_sentences"] == 6
+        assert "6 sentences" in plugin.summarize_for_llm(result)
+
+    def test_failed_sweep_keeps_the_first_read(self, plugin, tmp_path):
+        path = tmp_path / "standard.txt"
+        path.write_text(SWEEP_STANDARD, encoding="utf-8")
+        result, context = extract(plugin, path, [json.dumps(GOOD_REPLY)])
+        assert result.ok
+        assert result.result["statement_coverage"]["sweep"] == "failed"
+        assert result.result["statement_coverage"]["not_classified"] == 4
+        assert any("sweep call failed" in n for n in result.result["notes"])
+
+    def test_skip_sweep_makes_one_call(self, plugin, tmp_path):
+        path = tmp_path / "standard.txt"
+        path.write_text(SWEEP_STANDARD, encoding="utf-8")
+        context = FakeContext(FakeLLM([json.dumps(GOOD_REPLY)]))
+        result = plugin.execute(
+            {"action": "extract_profile", "file_path": str(path), "skip_sweep": True},
+            context,
+        )
+        assert len(context.llm_query.prompts) == 1
+        assert result.result["statement_coverage"]["sweep"] == "skipped_on_request"

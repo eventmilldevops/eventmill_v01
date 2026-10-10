@@ -253,6 +253,8 @@ against.
 | `obligation` | `must`, `should`, `may`, as the standard words it |
 | `review_status` | `draft_unreviewed` (a model's reading nobody has confirmed), `reviewed`. Set to `reviewed` by a person editing the profile, never by a tool. |
 | `quote_status` | `found`, `quote_not_found`, `not_checked` (no local text to search, or no quote). A flag, never a reason to drop the requirement. |
+| `extracted_by` | `document_read` (the model's read of the whole standard), `sentence_sweep` (a locally extracted obligation sentence the model then classified; its quote is the tool's text). Absent on a hand-written profile. |
+| `statement_coverage.sweep` | `not_needed`, `run`, `failed`, `skipped_time_budget`, `skipped_on_request`, `not_run` |
 | Finding `state` | `observed` (all elements valid in at least 99% of records), `partially_observed`, `not_observed`, `not_assessable_from_sample`, `not_evaluated` (about records, but names no element). **None of these means compliant.** |
 | Mapping `status` | `converged`, `stopped_round_limit`, `stopped_time_budget`, `stopped_no_progress`, `stopped_llm_failure`, `assessed_without_model`. Anything but the first and last means findings cover part of the file. |
 | Timestamp `format` | A strptime format, or `iso8601`, `epoch_s`, `epoch_ms`, `epoch_us` |

@@ -330,6 +330,67 @@ STATE_WORDS = {
 }
 
 
+SHORT_TYPES_SHOWN = 8
+_COUNT_PREFIX = re.compile(r"^\d+ of \d+ ")
+
+
+def _element_rows(finding: dict[str, Any]) -> list[str]:
+    """One table row per required element, summed over record types."""
+    order: list[str] = []
+    merged: dict[str, dict[str, Any]] = {}
+    for record_type in finding["by_record_type"]:
+        for element in record_type["elements"]:
+            name = element["element"]
+            if name not in merged:
+                order.append(name)
+                merged[name] = {"records": 0, "fields": [], "examples": [], "extra": []}
+            entry = merged[name]
+            entry["records"] += element["records"]
+            if element["field"] and element["field"] not in entry["fields"]:
+                entry["fields"].append(element["field"])
+            for value in element.get("examples", []):
+                if value not in entry["examples"] and len(entry["examples"]) < 3:
+                    entry["examples"].append(value)
+            for note in element.get("notes", []) + element.get("flags", []):
+                note = _COUNT_PREFIX.sub("", note)
+                if note not in entry["extra"]:
+                    entry["extra"].append(note)
+    rows = []
+    for name in order:
+        entry = merged[name]
+        detail = ", ".join(f"`{v}`" for v in entry["examples"])
+        extra = "; ".join(entry["extra"])
+        if extra:
+            detail = f"{detail} - {extra}" if detail else extra
+        rows.append(
+            f"| {name} | {entry['records']} of {finding['records']} | "
+            f"{', '.join(entry['fields']) or '*no field*'} | {detail} |"
+        )
+    return rows
+
+
+def _short_types(finding: dict[str, Any]) -> list[str]:
+    """Record types where a required element is missing or not always valid."""
+    short = []
+    for record_type in finding["by_record_type"]:
+        gaps = []
+        for element in record_type["elements"]:
+            if not element["field"]:
+                gaps.append(f"no {element['element']}")
+            elif element["records"] < record_type["records"]:
+                gaps.append(f"{element['element']} valid in {element['records']}")
+        if gaps:
+            short.append(
+                f"`{record_type['pattern_id']}` ({record_type['records']} of its records: "
+                + ", ".join(gaps)
+                + ")"
+            )
+    if len(short) > SHORT_TYPES_SHOWN:
+        more = len(short) - SHORT_TYPES_SHOWN
+        short = short[:SHORT_TYPES_SHOWN] + [f"and {more} more"]
+    return short
+
+
 def markdown_report(
     profile: dict[str, Any],
     assessment: dict[str, Any],
@@ -414,20 +475,13 @@ def markdown_report(
         )
         lines += [
             "",
-            "| Record type | Records | Element | Field | Valid in | Examples / notes |",
-            "|---|---|---|---|---|---|",
+            "| Element | Valid in | Fields | Examples / notes |",
+            "|---|---|---|---|",
         ]
-        for record_type in finding["by_record_type"]:
-            for element in record_type["elements"]:
-                detail = ", ".join(f"`{v}`" for v in element.get("examples", []))
-                extra = "; ".join(element.get("notes", []) + element.get("flags", []))
-                if extra:
-                    detail = f"{detail} - {extra}" if detail else extra
-                lines.append(
-                    f"| {record_type['pattern_id']} | {record_type['records']} | "
-                    f"{element['element']} | {element['field'] or '*no field*'} | "
-                    f"{element['records']} | {detail} |"
-                )
+        lines += _element_rows(finding)
+        short = _short_types(finding)
+        if short:
+            lines += ["", "Record types falling short: " + "; ".join(short) + "."]
         lines.append("")
 
     others = [f for f in assessment["findings"] if f["state"] == "not_evaluated"]

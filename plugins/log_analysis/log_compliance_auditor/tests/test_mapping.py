@@ -582,3 +582,25 @@ class TestOutputs:
         saved = json.loads(text)
         assert "_residue" not in saved["mapping_state"]
         assert saved["mapping_state"]["test"]["matched"] == TOTAL - COUNT_JUNK
+
+
+class TestJavaStackTrace:
+    """A live Catalina log: the exception line starts at column 0."""
+
+    def test_unindented_exception_line_is_a_continuation(self, tmp_path):
+        log = tmp_path / "catalina.log"
+        log.write_text(
+            "15-Sep-2026 10:14:32.000 SEVERE [exec-1] com.a.B.c Request failed\n"
+            "java.sql.SQLTransientConnectionException: pool timed out after 30000ms.\n"
+            "\tat com.zaxxer.hikari.pool.HikariPool.createTimeoutException(HikariPool.java:696)\n"
+            "Caused by: java.net.SocketTimeoutException: connect timed out\n"
+            "15-Sep-2026 10:14:33.000 INFO [exec-2] com.a.B.d Completed request\n"
+            "Error: this unqualified line is a record of its own\n",
+            encoding="utf-8",
+        )
+        records = list(sv.iter_records(log))
+        assert [(number, extra) for number, _, extra in records] == [
+            (1, 3),
+            (5, 0),
+            (6, 0),
+        ]

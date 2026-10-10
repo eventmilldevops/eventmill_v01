@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "system": "YMMV Legacy Invoicing application server",
+  "host": "invapp01",
+  "fqdn": "invapp01.ymmv.example",
+  "platform": "Ubuntu 22.04.4 LTS",
+  "kernel": "5.15.0-107-generic",
+  "timezone": "UTC-07:00",
+  "services": [
+    "cron.service",
+    "dbus.service",
+    "networkd-dispatcher.service",
+    "postgresql.service",
+    "rsyslog.service",
+    "ssh.service",
+    "systemd-journald.service",
+    "systemd-logind.service",
+    "systemd-timesyncd.service",
+    "tomcat9.service"
+  ],
+  "cron_commands": [
+    "/usr/local/sbin/ymmv-healthcheck --quiet",
+    "/usr/local/sbin/archive-invoice-reports",
+    "/usr/sbin/logrotate /etc/logrotate.conf",
+    "test -x /usr/lib/sysstat/sa1 && /usr/lib/sysstat/sa1 1 1",
+    "command -v debian-sa1 > /dev/null && debian-sa1 1 1",
+    "cd / && run-parts --report /etc/cron.hourly",
+    "/usr/local/sbin/check-filesystem-capacity",
+    "/usr/local/sbin/publish-service-heartbeat"
+  ],
+  "event_weights": {
+    "CRON_COMMAND": 42,
+    "SYSTEMD_SESSION": 13,
+    "SYSTEMD_STATUS": 9,
+    "TIMESYNC": 7,
+    "RSYSLOG_STATUS": 5,
+    "KERNEL_INFO": 5,
+    "NETWORK_STATUS": 4,
+    "LOGROTATE": 4,
+    "TOMCAT_SERVICE": 4,
+    "DATABASE_SERVICE": 3,
+    "DISK_STATUS": 3,
+    "PACKAGE_UPDATE": 1
+  },
+  "fixed_scenarios": [
+    {
+      "id": "OS_STARTUP",
+      "description": "A conventional Linux boot followed by PostgreSQL and Tomcat service startup."
+    }
+  ]
+}

@@ -338,21 +338,85 @@ class LoggingStandardProfiler:
                 raw_requirements.extend(part_requirements)
 
         requirements: list[dict[str, Any]] = []
-        used_ids: set[str] = set()
-        for index, raw in enumerate(raw_requirements, start=1):
-            requirement, requirement_notes = ps.normalise_requirement(
-                raw, catalogue, index
+
+        def take(raws: list[Any], origin: str) -> None:
+            for raw in raws:
+                requirement, requirement_notes = ps.normalise_requirement(
+                    raw, catalogue, len(requirements) + 1
+                )
+                notes.extend(requirement_notes)
+                if requirement is not None:
+                    requirement["extracted_by"] = origin
+                    requirements.append(requirement)
+
+        take(raw_requirements, "document_read")
+
+        # The read above is selective however it is asked: a live run quoted 25
+        # of 144 obligation sentences. The sweep hands the model the rest, as
+        # extracted here, so coverage does not depend on its diligence.
+        sentences = ex.obligation_sentences(pages)
+        remaining = ex.not_quoted(sentences, requirements) if requirements else []
+        coverage: dict[str, Any] | None = None
+        if sentences:
+            coverage = {
+                "obligation_sentences": len(sentences),
+                "quoted_by_document_read": len(sentences) - len(remaining),
+                "sweep": "not_needed" if not remaining else "not_run",
+                "swept_requirements": 0,
+                "swept_not_a_requirement": 0,
+                "not_classified": len(remaining),
+                "not_a_requirement_sentences": [],
+                "not_classified_sentences": [
+                    {"page": s["page"], "text": s["text"][:400]} for s in remaining
+                ][: ex.NOT_REQUIREMENT_KEPT],
+            }
+        out_of_time = (
+            time.monotonic() - started > TIME_BUDGET_SECONDS - CALL_ALLOWANCE_SECONDS
+        )
+        if remaining and payload.get("skip_sweep"):
+            coverage["sweep"] = "skipped_on_request"
+        elif remaining and out_of_time:
+            coverage["sweep"] = "skipped_time_budget"
+            notes.append(
+                f"{len(remaining)} obligation sentence(s) were not classified: "
+                "no time was left for the sweep"
             )
-            notes.extend(requirement_notes)
-            if requirement is None:
-                continue
-            base = requirement["requirement_id"]
-            suffix = 2
-            while requirement["requirement_id"] in used_ids:
-                requirement["requirement_id"] = f"{base}#{suffix}"
-                suffix += 1
-            used_ids.add(requirement["requirement_id"])
-            requirements.append(requirement)
+        elif remaining:
+            batch = remaining[: ex.SWEEP_SENTENCES]
+            response = llm.query_text(
+                prompt=ex.build_sweep_prompt(catalogue, batch),
+                system_context=ex.SYSTEM_CONTEXT,
+                max_tokens=_max_tokens(llm, thinking_level),
+                hints=_hints(thinking_level),
+            )
+            call = self._call_record(response, "sentence sweep")
+            calls.append(call)
+            if response.ok and response.text:
+                verdicts, parse_notes = ex.parse_sweep(response.text)
+                notes.extend(f"sweep: {n}" for n in parse_notes)
+                if getattr(response, "truncated", False):
+                    notes.append("sweep: the reply stopped at the output cap")
+                swept, rejected, unclassified = ex.sweep_requirements(batch, verdicts)
+                before = len(requirements)
+                take(swept, "sentence_sweep")
+                unclassified += [
+                    {"page": s["page"], "text": s["text"][:400]}
+                    for s in remaining[ex.SWEEP_SENTENCES :]
+                ]
+                coverage.update(
+                    sweep="run",
+                    swept_requirements=len(requirements) - before,
+                    swept_not_a_requirement=len(rejected),
+                    not_classified=len(unclassified),
+                    not_a_requirement_sentences=rejected[: ex.NOT_REQUIREMENT_KEPT],
+                    not_classified_sentences=unclassified[: ex.NOT_REQUIREMENT_KEPT],
+                )
+            else:
+                coverage["sweep"] = "failed"
+                notes.append(
+                    f"sweep call failed ({call['error'] or 'empty reply'}); "
+                    f"{len(remaining)} obligation sentence(s) were not classified"
+                )
 
         if not requirements:
             failures = [c for c in calls if c["error"]]
@@ -367,6 +431,15 @@ class LoggingStandardProfiler:
             )
 
         quote_counts = ex.check_quotes(requirements, pages)
+        requirements = ex.in_document_order(requirements, pages)
+        used_ids: set[str] = set()
+        for requirement in requirements:
+            base = requirement["requirement_id"]
+            suffix = 2
+            while requirement["requirement_id"] in used_ids:
+                requirement["requirement_id"] = f"{base}#{suffix}"
+                suffix += 1
+            used_ids.add(requirement["requirement_id"])
         stamp = datetime.now(timezone.utc)
         last_call = next((c for c in reversed(calls) if not c["error"]), calls[-1])
         profile = {
@@ -390,6 +463,7 @@ class LoggingStandardProfiler:
                 "calls": len(calls),
             },
             "review_status": "draft_unreviewed",
+            "statement_coverage": coverage,
             "catalogue": catalogue,
             "requirements": requirements,
         }
@@ -428,6 +502,11 @@ class LoggingStandardProfiler:
                 "profile_artifact_id": profile_artifact_id,
                 "counts": _counts(requirements),
                 "quote_check": quote_counts,
+                "statement_coverage": (
+                    {k: v for k, v in coverage.items() if not isinstance(v, list)}
+                    if coverage
+                    else None
+                ),
                 "validation": report,
                 "notes": notes,
                 "calls": calls,
@@ -496,6 +575,16 @@ class LoggingStandardProfiler:
             f"{quotes.get('quote_not_found', 0)} not found, "
             f"{quotes.get('not_checked', 0)} not checked.",
         ]
+        coverage = data.get("statement_coverage")
+        if coverage:
+            lines.append(
+                f"Of {coverage.get('obligation_sentences', 0)} sentences worded shall, "
+                f"must, should or required: {coverage.get('quoted_by_document_read', 0)} "
+                f"quoted by the first read, {coverage.get('swept_requirements', 0)} "
+                f"added by the sweep, {coverage.get('swept_not_a_requirement', 0)} judged "
+                f"not a requirement, {coverage.get('not_classified', 0)} not classified "
+                f"(sweep: {coverage.get('sweep')})."
+            )
         if data.get("profile_artifact_id"):
             lines.append(
                 f"Profile artifact: {data['profile_artifact_id']} "

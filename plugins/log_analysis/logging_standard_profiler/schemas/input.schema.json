@@ -34,6 +34,11 @@
       "type": "boolean",
       "default": false,
       "description": "Skip native PDF ingestion and send locally extracted text instead."
+    },
+    "skip_sweep": {
+      "type": "boolean",
+      "default": false,
+      "description": "Do not run the second call that classifies obligation sentences the first read left unquoted. The profile then lists them as not classified."
     }
   },
   "anyOf": [

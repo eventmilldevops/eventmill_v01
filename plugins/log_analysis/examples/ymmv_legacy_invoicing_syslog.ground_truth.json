@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "system": "YMMV Legacy Invoicing application server",
+  "host": "invapp01",
+  "platform": "Ubuntu 22.04.4 LTS",
+  "kernel": "5.15.0-107-generic",
+  "seed": 260921,
+  "date_range": {
+    "start": "2026-09-15",
+    "end": "2026-09-17"
+  },
+  "record_count": 3000,
+  "event_counts": {
+    "CRON_COMMAND": 1216,
+    "DATABASE_SERVICE": 69,
+    "DISK_STATUS": 112,
+    "KERNEL_INFO": 165,
+    "LOGROTATE": 109,
+    "NETWORK_STATUS": 88,
+    "OS_STARTUP": 28,
+    "PACKAGE_UPDATE": 25,
+    "RSYSLOG_STATUS": 149,
+    "SYSTEMD_SESSION": 422,
+    "SYSTEMD_STATUS": 279,
+    "TIMESYNC": 221,
+    "TOMCAT_SERVICE": 117
+  },
+  "interactive_user_events": 0,
+  "fixed_scenarios": {
+    "OS_STARTUP": 28
+  },
+  "investigative_scope_note": "Routine host operations only. Application requests and database transactions require the companion Catalina and database logs.",
+  "line_sha256": "ea76dadb69933b4955637065b724543c36666d93eeb00d31eb8b7b283fbc67ed"
+}

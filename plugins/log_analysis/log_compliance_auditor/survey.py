@@ -25,7 +25,12 @@ MAX_CLUSTERS = 300
 OVERFLOW_KEY = "overflow"
 MAX_LINE_CHARS = 1000
 
-_CONTINUATION = re.compile(r"^(\s+\S|Caused by:|Traceback \(most recent call last\))")
+# The last alternative is the unindented first line of a Java stack trace: a
+# package-qualified class ending in Exception, Error or Throwable.
+_CONTINUATION = re.compile(
+    r"^(\s+\S|Caused by:|Traceback \(most recent call last\)"
+    r"|(?:[A-Za-z_$][\w$]*\.)+[A-Z][\w$]*(?:Exception|Error|Throwable)\b)"
+)
 _KV_TOKEN = re.compile(r"^([A-Za-z_][\w.\-]*)=(.*)$")
 _HAS_DIGIT = re.compile(r"\d")
 

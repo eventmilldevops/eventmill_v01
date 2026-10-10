@@ -136,7 +136,15 @@ reason sent back.
 ## Limitations
 
 - **A multi-line record is read by its first line.** Indented lines and stack
-  traces are joined to the record above and counted, not parsed.
+  traces (including the unindented `java.x.SomeException: ...` line that
+  opens one) are joined to the record above and counted, not parsed.
+- **Which field is the event type is a judgment, and it varies.** Two audits
+  of the same file can map different fields to an element, and the finding
+  moves with the mapping. Once a mapping is right, keep the extraction spec
+  and re-check with `assess`.
+- **A conditional requirement is counted against every record.** "Where
+  applicable" is not interpreted; the report lists the record types that
+  fall short and leaves applicability to the reader.
 - **Record counts for a requirement are an upper bound when it needs several
   elements.** The pass keeps per-field counts, not per-record combinations, so
   the smallest field count is reported as the number of records carrying all

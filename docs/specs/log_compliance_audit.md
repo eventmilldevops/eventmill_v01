@@ -8,8 +8,9 @@ an application's log output contain what a logging standard requires?
 | `logging_standard_profiler` | A standard (PDF or text) | A requirement profile (JSON) |
 | `log_compliance_auditor` | A log sample and a profile | An alignment report and an extraction pack |
 
-Status: built 2026-10-10, scripted tests only. **No live model run yet**; see
-section 9.
+Status: built 2026-10-10 and run live the same day on one provider against
+the example corpus in `plugins/log_analysis/examples/`. Section 9 lists what
+that covered and what it did not.
 
 ## 1. Why two steps
 
@@ -42,6 +43,16 @@ against.
    quote, ignoring case, whitespace, line-break hyphenation and typographic
    quotes. A miss sets `quote_status: quote_not_found`. It is a flag for the
    reviewer, not a rejection.
+3a. **One read is not exhaustive, so coverage is counted and swept.** A live
+   run quoted 25 of 144 obligation sentences however the prompt was worded.
+   The profiler now finds every sentence worded shall, must, should or
+   required in the local text, and a second call classifies the ones the
+   first read left unquoted. A swept requirement's quote is the local
+   sentence, not model text. The profile's `statement_coverage` block
+   accounts for every such sentence: quoted, added by the sweep, judged not
+   a requirement (with the reason), or not classified. It is a wording
+   match, so it over-collects, and a requirement worded another way is seen
+   only by the first read.
 4. **A generated profile is `draft_unreviewed`.** Only a person sets
    `reviewed`. An audit against a draft says so first, in the summary and the
    report.
@@ -204,23 +215,42 @@ costs itself, not the run:
 Failure messages carry the diagnosis: which round, what came back, where state
 was saved.
 
-## 9. Not yet verified
+## 9. Verified live, and not yet
 
-- **No live run of either plugin.** The prompts have never been answered by a
-  real model. How many rounds a real log needs, whether the 480 s budget
-  holds, and how well a model sorts a real standard into the three
-  `assessable_from` kinds are all unknown.
+Run live on 2026-10-10 (Gemini heavy tier, through the shell); details in
+`docs/change_log/2026-10-10-log-compliance-live-runs.md`:
+
+- The profiler on a 14-page standard: 122 requirements in two calls, 145 s.
+- The auditor on a key-value database audit log (200 records, 11 record types,
+  2 rounds, 58 s) and a Tomcat log with stack traces (240 records, 12 record
+  types, 1 round, 64 s). Record counts match the corpus ground truth; actor
+  counts for the database log match exactly.
+
+Not yet:
+
+- Any provider but Gemini.
+- `resume` against a real model; neither audit stopped short.
+- A file larger than 249 lines against a real model, so the 480 s budget is
+  untested where it matters.
+- Classic syslog input (no year in the timestamp).
 - The Drain similarity threshold (0.5) and the sampling sizes were chosen, not
   tuned.
 - Splunk and Elastic renderings have not been loaded into either product.
-- The native PDF path was exercised with a fake client only.
-- The clusterer and patterns have not been tried on a file larger than the
-  1,000-record fixture, except the 2,000-line regex-safety case.
+
+Known from those runs and not addressed:
+
+- Which field a model maps to `event_type` varies between runs on the same
+  file, and the finding moves with it. Pin the mapping in the extraction spec
+  and use `assess`.
+- A conditional requirement ("where applicable") is counted against every
+  record.
 
 ## 10. Later
 
 - URL input for the standard.
 - Multi-line record bodies.
 - Per-record element combinations, to turn the upper bound into a count.
+- An applicability field on a requirement, so a conditional one is not
+  counted against record types it does not apply to.
 - `record_set` checks beyond timestamp ordering: gaps, expected event kinds.
 - Masking of sample lines before they are sent.
