@@ -1,0 +1,61 @@
+{
+  "tool_name": "log_compliance_auditor",
+  "version": "0.1.0",
+  "pillar": "log_analysis",
+  "display_name": "Log Compliance Auditor",
+  "description_short": "Test whether a log sample contains what a logging standard requires, and produce tested extraction patterns for ingesting it.",
+  "description_long": "Checks an uploaded application or service log against a requirement profile from logging_standard_profiler. The records may take any shape, with elements in any position and custom event codes. A model is shown at most 200 sample lines per round and proposes RE2 patterns with named fields; every pattern is then run over the whole file locally, each captured value is checked against what it was claimed to be (a timestamp parses, an address is an address), and only the failures and unmatched lines go back for another round. The file itself is never uploaded. Returns an alignment report that states, per requirement, in what share of records the required elements were observed, and keeps requirements a log sample cannot show separate from ones it failed; and an extraction pack: a neutral spec plus BigQuery, Splunk and Elastic renderings. Actions: survey (free; record shapes only), audit (the mapping loop and report), resume (continue an incomplete run), assess (free; re-test saved patterns against a new sample). Use it for logging compliance and for building parsers for an unfamiliar log. Not auto-invocable: it sends raw log lines to the model and costs heavy-tier calls.",
+  "author": "Event Mill Contributors",
+  "entry_point": "tool.py",
+  "class_name": "LogComplianceAuditor",
+  "artifacts_consumed": [
+    "text",
+    "log_stream",
+    "json_events"
+  ],
+  "artifacts_produced": [
+    "json_events",
+    "text"
+  ],
+  "capabilities": [
+    "artifact:log_stream",
+    "artifact:text",
+    "operation:audit",
+    "operation:extract",
+    "operation:validate",
+    "entity:logging_requirement",
+    "entity:log_record",
+    "domain:log_analysis",
+    "output:json",
+    "output:report"
+  ],
+  "input_schema": "schemas/input.schema.json",
+  "output_schema": "schemas/output.schema.json",
+  "timeout_class": "slow",
+  "cost_hint": "moderate",
+  "model_tier": "heavy",
+  "safe_for_auto_invoke": false,
+  "requires_llm": true,
+  "external_connectivity": false,
+  "dependencies": [
+    "google-re2"
+  ],
+  "stability": "experimental",
+  "tags": [
+    "compliance",
+    "audit",
+    "logging_standard",
+    "parsing",
+    "regex",
+    "normalization",
+    "splunk",
+    "elastic",
+    "bigquery"
+  ],
+  "chains_to": [],
+  "chains_from": [
+    "logging_standard_profiler",
+    "log_navigator",
+    "log_pattern_analyzer"
+  ]
+}

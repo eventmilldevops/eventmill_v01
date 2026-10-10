@@ -1,0 +1,52 @@
+{
+  "tool_name": "logging_standard_profiler",
+  "version": "0.1.0",
+  "pillar": "log_analysis",
+  "display_name": "Logging Standard Profiler",
+  "description_short": "Read a logging or audit standard and extract a requirement profile that log samples can be tested against.",
+  "description_long": "Reads a logging, auditing or observability standard (a PDF or text artifact, public or internal) and writes a requirement profile as JSON: one entry per requirement with its clause, an exact quote, its obligation level, the record elements it needs from a closed catalogue (timestamp, event type, outcome, actor identity, source address and others), and whether a log sample can show it at all. Requirements about retention, protection or review are kept and marked not_assessable_from_sample. Every quote is searched for in the locally extracted document text and flagged when it is not found. Use it once per standard, before log_compliance_auditor, which takes the profile as its grounding. Actions: extract_profile (one or a few heavy-tier calls; the result is marked draft_unreviewed until a person confirms it) and validate_profile (deterministic and free; checks a generated or hand-written profile). Not auto-invocable because extract_profile costs heavy-tier calls.",
+  "author": "Event Mill Contributors",
+  "entry_point": "tool.py",
+  "class_name": "LoggingStandardProfiler",
+  "artifacts_consumed": [
+    "pdf_report",
+    "text",
+    "json_events"
+  ],
+  "artifacts_produced": [
+    "json_events"
+  ],
+  "capabilities": [
+    "artifact:pdf_report",
+    "artifact:text",
+    "operation:extract",
+    "operation:validate",
+    "entity:logging_requirement",
+    "domain:log_analysis",
+    "output:json"
+  ],
+  "input_schema": "schemas/input.schema.json",
+  "output_schema": "schemas/output.schema.json",
+  "timeout_class": "slow",
+  "cost_hint": "moderate",
+  "model_tier": "heavy",
+  "safe_for_auto_invoke": false,
+  "requires_llm": true,
+  "external_connectivity": false,
+  "dependencies": [
+    "pypdf"
+  ],
+  "stability": "experimental",
+  "tags": [
+    "compliance",
+    "audit",
+    "logging_standard",
+    "requirements",
+    "nist",
+    "grounding"
+  ],
+  "chains_to": [
+    "log_compliance_auditor"
+  ],
+  "chains_from": []
+}

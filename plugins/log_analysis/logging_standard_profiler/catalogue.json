@@ -1,0 +1,67 @@
+{
+  "catalogue_version": "1.0.0",
+  "value_types": ["timestamp", "category", "identity", "address", "identifier", "integer", "text"],
+  "elements": {
+    "timestamp": {
+      "value_type": "timestamp",
+      "description": "When the event occurred or was recorded."
+    },
+    "event_type": {
+      "value_type": "category",
+      "description": "What kind of event this is: an action name, event code or message class. Custom application codes belong here."
+    },
+    "outcome": {
+      "value_type": "category",
+      "description": "Whether the event succeeded or failed: success/failure, allow/deny, a status or result code."
+    },
+    "severity": {
+      "value_type": "category",
+      "description": "Log level or priority: INFO, WARN, ERROR, a syslog severity number."
+    },
+    "actor_identity": {
+      "value_type": "identity",
+      "description": "The user, account, service principal or subject that caused the event."
+    },
+    "source_component": {
+      "value_type": "identity",
+      "description": "The program, service, module or process name that generated the record."
+    },
+    "host": {
+      "value_type": "identity",
+      "description": "The host, node or device the record was generated on."
+    },
+    "source_address": {
+      "value_type": "address",
+      "description": "Network address the event originated from: an IP address or hostname, without a port."
+    },
+    "destination_address": {
+      "value_type": "address",
+      "description": "Network address the event was directed at: an IP address or hostname, without a port."
+    },
+    "target_object": {
+      "value_type": "text",
+      "description": "The resource acted on: a file, URL path, table, record id or object name."
+    },
+    "session_id": {
+      "value_type": "identifier",
+      "description": "Session, request, trace or correlation identifier linking related records."
+    },
+    "event_id": {
+      "value_type": "identifier",
+      "description": "Unique identifier or sequence number of this individual record."
+    },
+    "process_id": {
+      "value_type": "integer",
+      "description": "Operating system process or thread id."
+    },
+    "message": {
+      "value_type": "text",
+      "description": "Free-text description of the event."
+    }
+  },
+  "constraints": {
+    "timezone_required": "boolean; timestamp values must carry a UTC offset or zone designator",
+    "min_precision": "one of second, millisecond, microsecond; minimum timestamp resolution",
+    "allowed_values": "list of strings; the element's value must be one of these"
+  }
+}

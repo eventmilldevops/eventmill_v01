@@ -49,5 +49,8 @@ remain in the bucket.
   (upload succeeds; upload fails). Both fail on the previous analyzer code and
   pass now.
 - Full suite: 1891 passed, 1 skipped.
-- **Not run:** a Cloud Run redeploy and rerun. `ruff` is not installed in this
-  environment, so lint was not run.
+- **Live, on Cloud Run (09-27, after redeploying `fe97050`):** the operator
+  ran summarize and then `export` on all three providers (`gcp_gemini`,
+  OpenAI, Anthropic). Every export completed.
+- **Not run:** `ruff` is not installed in this environment, so lint was not
+  run.

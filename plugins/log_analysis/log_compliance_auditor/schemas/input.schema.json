@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "survey",
+        "audit",
+        "resume",
+        "assess"
+      ],
+      "default": "audit",
+      "description": "survey: record shapes only, free. audit: map the records and report against the profile. resume: continue an incomplete audit. assess: re-test saved patterns against a log with no model call."
+    },
+    "artifact_id": {
+      "type": "string",
+      "description": "Artifact id of the log file."
+    },
+    "file_path": {
+      "type": "string",
+      "description": "Path to the log file, as an alternative to artifact_id."
+    },
+    "profile_artifact_id": {
+      "type": "string",
+      "description": "Artifact id of the requirement profile JSON. Required for audit, resume and assess."
+    },
+    "profile_path": {
+      "type": "string",
+      "description": "Path to the requirement profile JSON, as an alternative to profile_artifact_id."
+    },
+    "state_artifact_id": {
+      "type": "string",
+      "description": "Artifact id of a previous run's result or extraction spec. Required for resume and assess."
+    },
+    "state_path": {
+      "type": "string",
+      "description": "Path to the same file, as an alternative to state_artifact_id."
+    },
+    "max_rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "default": 4,
+      "description": "Model rounds allowed in this run."
+    },
+    "target_coverage": {
+      "type": "number",
+      "minimum": 0.5,
+      "maximum": 1.0,
+      "default": 0.98,
+      "description": "Share of records that must match a pattern before mapping counts as complete."
+    },
+    "sample_lines": {
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 200,
+      "default": 160,
+      "description": "Most log lines shown to the model in the first round."
+    },
+    "max_records": {
+      "type": "integer",
+      "minimum": 100,
+      "description": "Read only the first N records of the file. Default is the whole file."
+    },
+    "time_budget_seconds": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 560,
+      "default": 480,
+      "description": "Stop starting model calls after this long and save what was mapped."
+    },
+    "thinking_level": {
+      "type": "string",
+      "enum": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium",
+      "description": "Reasoning depth requested for pattern proposals. Higher is slower."
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "artifact_id"
+      ]
+    },
+    {
+      "required": [
+        "file_path"
+      ]
+    }
+  ]
+}

@@ -580,12 +580,13 @@ export <artifact_id> [subfolder]
 export --all [subfolder]          # every tool-produced artifact in the session
 ```
 
-On Cloud Run (detected via `K_SERVICE`) outputs of `attack_path_visualizer`
-are exported automatically after each run. Two optional variables tune this:
+On Cloud Run (detected via `K_SERVICE`) outputs of `attack_path_visualizer`,
+`logging_standard_profiler` and `log_compliance_auditor` are exported
+automatically after each run. Two optional variables tune this:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `EVENTMILL_AUTO_EXPORT_TOOLS` | `attack_path_visualizer` | Comma-separated tool names to auto-export; `*` for all, empty string to disable |
+| `EVENTMILL_AUTO_EXPORT_TOOLS` | `attack_path_visualizer,logging_standard_profiler,log_compliance_auditor` | Comma-separated tool names to auto-export; `*` for all, empty string to disable |
 | `EVENTMILL_AUTO_EXPORT` | unset | Set to `1` to enable auto-export outside Cloud Run (local testing) |
 
 Download exported files with `gcloud storage cp gs://<prefix>-common/exports/... .`

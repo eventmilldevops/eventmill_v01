@@ -1044,7 +1044,9 @@ class EventMillShell(cmd.Cmd):
     # Tools whose outputs are exported to the common bucket automatically
     # after each run when the shell is on Cloud Run (or EVENTMILL_AUTO_EXPORT=1).
     # Override with EVENTMILL_AUTO_EXPORT_TOOLS ("*" = every tool, "" = none).
-    DEFAULT_AUTO_EXPORT_TOOLS = "attack_path_visualizer"
+    DEFAULT_AUTO_EXPORT_TOOLS = (
+        "attack_path_visualizer,logging_standard_profiler,log_compliance_auditor"
+    )
 
     def do_export(self, arg: str) -> None:
         """Export session artifacts to the common storage bucket.

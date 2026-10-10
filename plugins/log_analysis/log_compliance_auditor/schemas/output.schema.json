@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "survey",
+        "audit",
+        "resume",
+        "assess"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "converged",
+        "stopped_round_limit",
+        "stopped_time_budget",
+        "stopped_no_progress",
+        "stopped_llm_failure",
+        "assessed_without_model"
+      ],
+      "description": "How mapping ended. Anything but converged or assessed_without_model means the findings cover only part of the file."
+    },
+    "stop_reason": {
+      "type": "string"
+    },
+    "log_file": {
+      "type": "string"
+    },
+    "standard": {
+      "type": "object"
+    },
+    "profile_review_status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rounds_run": {
+      "type": "integer"
+    },
+    "sent_to_model": {
+      "type": "object",
+      "description": "Exactly how many log lines and characters left the container, and in how many calls.",
+      "properties": {
+        "calls": {
+          "type": "integer"
+        },
+        "lines": {
+          "type": "integer"
+        },
+        "chars": {
+          "type": "integer"
+        },
+        "truncated_lines": {
+          "type": "integer"
+        }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "description": "Per-requirement findings with the records behind them.",
+      "properties": {
+        "records": {
+          "type": "integer"
+        },
+        "records_mapped": {
+          "type": "integer"
+        },
+        "records_unmapped": {
+          "type": "integer"
+        },
+        "coverage": {
+          "type": "number"
+        },
+        "requirements": {
+          "type": "integer"
+        },
+        "requirements_assessed": {
+          "type": "integer"
+        },
+        "counts": {
+          "type": "object"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "requirement_id": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "observed",
+                  "partially_observed",
+                  "not_observed",
+                  "not_assessable_from_sample",
+                  "not_evaluated"
+                ]
+              }
+            },
+            "required": [
+              "requirement_id",
+              "state"
+            ]
+          }
+        }
+      }
+    },
+    "unmatched_groups": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Shapes of the records no pattern matched, with a few samples."
+    },
+    "survey": {
+      "type": "object",
+      "description": "Record count, container format and record shapes."
+    },
+    "extraction_spec": {
+      "type": "object",
+      "description": "The tested, neutral description of how to split this log into fields."
+    },
+    "mapping_state": {
+      "type": "object",
+      "description": "Patterns, per-round history and settings; what resume and assess read."
+    },
+    "outputs": {
+      "type": "object",
+      "description": "Files written and their artifact ids: result, report, extraction spec, BigQuery, Splunk, Elastic."
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "elapsed_seconds": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "action"
+  ]
+}

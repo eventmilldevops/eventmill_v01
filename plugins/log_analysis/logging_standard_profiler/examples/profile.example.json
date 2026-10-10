@@ -1,0 +1,202 @@
+{
+  "profile_version": "1.0",
+  "standard": {
+    "title": "Example Corp Application Logging Standard",
+    "version": "v2.1 (invented example)",
+    "source_file": null,
+    "document_sha256": null,
+    "pages": null
+  },
+  "provenance": {
+    "generated_by": "hand-written example",
+    "generated_at": "2026-10-10T00:00:00+00:00"
+  },
+  "review_status": "reviewed",
+  "catalogue": {
+    "catalogue_version": "1.0.0",
+    "value_types": [
+      "timestamp",
+      "category",
+      "identity",
+      "address",
+      "identifier",
+      "integer",
+      "text"
+    ],
+    "elements": {
+      "timestamp": {
+        "value_type": "timestamp",
+        "description": "When the event occurred or was recorded."
+      },
+      "event_type": {
+        "value_type": "category",
+        "description": "What kind of event this is: an action name, event code or message class. Custom application codes belong here."
+      },
+      "outcome": {
+        "value_type": "category",
+        "description": "Whether the event succeeded or failed: success/failure, allow/deny, a status or result code."
+      },
+      "severity": {
+        "value_type": "category",
+        "description": "Log level or priority: INFO, WARN, ERROR, a syslog severity number."
+      },
+      "actor_identity": {
+        "value_type": "identity",
+        "description": "The user, account, service principal or subject that caused the event."
+      },
+      "source_component": {
+        "value_type": "identity",
+        "description": "The program, service, module or process name that generated the record."
+      },
+      "host": {
+        "value_type": "identity",
+        "description": "The host, node or device the record was generated on."
+      },
+      "source_address": {
+        "value_type": "address",
+        "description": "Network address the event originated from: an IP address or hostname, without a port."
+      },
+      "destination_address": {
+        "value_type": "address",
+        "description": "Network address the event was directed at: an IP address or hostname, without a port."
+      },
+      "target_object": {
+        "value_type": "text",
+        "description": "The resource acted on: a file, URL path, table, record id or object name."
+      },
+      "session_id": {
+        "value_type": "identifier",
+        "description": "Session, request, trace or correlation identifier linking related records."
+      },
+      "event_id": {
+        "value_type": "identifier",
+        "description": "Unique identifier or sequence number of this individual record."
+      },
+      "process_id": {
+        "value_type": "integer",
+        "description": "Operating system process or thread id."
+      },
+      "message": {
+        "value_type": "text",
+        "description": "Free-text description of the event."
+      }
+    },
+    "constraints": {
+      "timezone_required": "boolean; timestamp values must carry a UTC offset or zone designator",
+      "min_precision": "one of second, millisecond, microsecond; minimum timestamp resolution",
+      "allowed_values": "list of strings; the element's value must be one of these"
+    }
+  },
+  "requirements": [
+    {
+      "requirement_id": "4.2.1",
+      "section": "4.2 Record content",
+      "page": 7,
+      "obligation": "must",
+      "assessable_from": "record_content",
+      "summary": "Every record carries a timestamp with a UTC offset and at least millisecond precision.",
+      "quote": "Each log entry shall include a timestamp with a UTC offset and at least millisecond resolution.",
+      "quote_status": "not_checked",
+      "elements": [
+        {
+          "element": "timestamp",
+          "constraints": {
+            "timezone_required": true,
+            "min_precision": "millisecond"
+          }
+        }
+      ],
+      "unmapped_reason": null
+    },
+    {
+      "requirement_id": "4.2.2",
+      "section": "4.2 Record content",
+      "page": 7,
+      "obligation": "must",
+      "assessable_from": "record_content",
+      "summary": "Every record names the component that produced it and the type of event.",
+      "quote": "Each log entry shall identify the originating component and the event type.",
+      "quote_status": "not_checked",
+      "elements": [
+        {
+          "element": "source_component"
+        },
+        {
+          "element": "event_type"
+        }
+      ],
+      "unmapped_reason": null
+    },
+    {
+      "requirement_id": "4.2.3",
+      "section": "4.2 Record content",
+      "page": 7,
+      "obligation": "must",
+      "assessable_from": "record_content",
+      "summary": "Every record identifies the acting user and the outcome of the action.",
+      "quote": "Each log entry shall record the identity of the actor and the outcome of the action.",
+      "quote_status": "not_checked",
+      "elements": [
+        {
+          "element": "actor_identity"
+        },
+        {
+          "element": "outcome"
+        }
+      ],
+      "unmapped_reason": null
+    },
+    {
+      "requirement_id": "4.2.4",
+      "section": "4.2 Record content",
+      "page": 8,
+      "obligation": "should",
+      "assessable_from": "record_content",
+      "summary": "Records of network-originated events carry the source address.",
+      "quote": "Entries for network-originated events should include the source address.",
+      "quote_status": "not_checked",
+      "elements": [
+        {
+          "element": "source_address"
+        }
+      ],
+      "unmapped_reason": null
+    },
+    {
+      "requirement_id": "4.3.1",
+      "section": "4.3 Sensitive data",
+      "page": 9,
+      "obligation": "must",
+      "assessable_from": "record_content",
+      "summary": "Records must not contain passwords or session secrets.",
+      "quote": "Log entries shall not contain passwords, tokens or other authentication secrets.",
+      "quote_status": "not_checked",
+      "elements": [],
+      "unmapped_reason": "a prohibition on content; no catalogue element expresses the absence of secrets"
+    },
+    {
+      "requirement_id": "6.1",
+      "section": "6 Retention",
+      "page": 12,
+      "obligation": "must",
+      "assessable_from": "not_assessable_from_sample",
+      "summary": "Logs are retained for at least twelve months.",
+      "quote": "Log data shall be retained for a minimum of twelve months.",
+      "quote_status": "not_checked",
+      "elements": [],
+      "unmapped_reason": null
+    },
+    {
+      "requirement_id": "6.3",
+      "section": "6 Protection",
+      "page": 13,
+      "obligation": "must",
+      "assessable_from": "not_assessable_from_sample",
+      "summary": "Access to logs is restricted to authorised staff.",
+      "quote": "Access to log data shall be limited to authorised personnel.",
+      "quote_status": "not_checked",
+      "elements": [],
+      "unmapped_reason": null
+    }
+  ]
+}

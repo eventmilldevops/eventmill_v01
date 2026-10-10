@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "extract_profile",
+        "validate_profile"
+      ]
+    },
+    "standard": {
+      "type": "object",
+      "description": "Title, version as printed, source file, sha256 and page count of the document."
+    },
+    "review_status": {
+      "type": "string",
+      "enum": [
+        "draft_unreviewed",
+        "reviewed"
+      ]
+    },
+    "profile_file": {
+      "type": "string",
+      "description": "Where the profile JSON was written, or the file that was validated."
+    },
+    "profile_artifact_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Session artifact id of the profile; pass it to log_compliance_auditor."
+    },
+    "counts": {
+      "type": "object",
+      "description": "Requirement counts: total, testable against records, by assessable_from and by obligation."
+    },
+    "quote_check": {
+      "type": "object",
+      "description": "How many quotes were found, not found, or not checked in the document text."
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "valid": {
+      "type": "boolean"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "What was dropped, coerced or could not be read."
+    },
+    "calls": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "One entry per model call: provider, model version, transport, truncation."
+    },
+    "elapsed_seconds": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "action"
+  ]
+}
