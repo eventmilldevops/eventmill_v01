@@ -119,6 +119,43 @@ against.
 }
 ```
 
+A requirement about records also carries `kind`, which says what sort of
+rule it is:
+
+| Kind | The sentence asks | Counted |
+|---|---|---|
+| `presence` | A record carries an element, possibly in a stated format | Yes |
+| `prohibition` | Something must not be in a record, or must not be done | No |
+| `quality` | Values are correct, stable, consistent or unambiguous | No |
+| `event_selection` | A kind of event is logged at all | No |
+| `permission` | Something is allowed | No |
+
+Counting the records that carry an element answers a presence rule and no
+other. A prohibition scored that way reports the compliant case (the banned
+thing is absent) as a shortfall, and an event-selection rule reports
+"observed" whenever records have an event type at all. So only `presence` is
+counted; the others are listed in the report with what the sample holds for
+their elements, for a person to judge.
+
+`kind` is null for `not_assessable_from_sample`. A profile without `kind` is
+read as all `presence`. When a profile is extracted, a requirement whose quote
+is worded as a ban ("shall not", "must not", "never", "prohibited") and that
+the model called `presence` is set to `prohibition`: a wrong label may cost a
+finding and may not invent one. That rule is applied at extraction only, so a
+reviewer's edit stands.
+
+An entry in `elements` is one of two things:
+
+- `{"element": name, "constraints": {...}}`: the record must carry it.
+- `{"any_of": [{"element": a}, {"element": b}], "label": "origin"}`: the record
+  must carry at least one member. For a clause that lists interchangeable ways
+  to satisfy one thing ("a host, service, component or other stable
+  identifier"). At least two members; `label` is optional and only for the
+  report. An element may appear in more than one group.
+
+Entries side by side are all required. A profile written before groups existed
+is a list of plain entries and is read as it always was.
+
 A complete hand-written example is
 `plugins/log_analysis/logging_standard_profiler/examples/profile.example.json`.
 Enumerations are in `docs/specs/reserved_vocabulary.md` section 7a.
@@ -173,16 +210,73 @@ Value checks by type:
 field fails, the feedback names a known format that does parse the failing
 values, if one exists.
 
+### 5a. Envelopes and depth
+
+Coverage alone does not show that a log was understood: a header followed by
+`.*` matches every record. Two mechanisms address that.
+
+**Syslog envelope.** `survey.detect_envelope` tries three fixed header regexes
+(RFC 5424, BSD / RFC 3164, BSD with an ISO 8601 timestamp) on the first 2,000
+records and adopts one when at least 90% fit. From then on:
+
+- The header pattern is the tool's own (`pattern_id: envelope`), held from the
+  start and ordered last. Its element mapping is fixed: `timestamp`, `host`,
+  `program` as `source_component`, `pid` as `process_id`, `message`, and for
+  RFC 5424 `msgid` as `event_type`. PRI is captured and left unmapped.
+- Clustering is done on the message and separately per program.
+- The model is asked for `{"program", "message_regex", "fields"}`. The tool
+  composes the whole-line regex as header (pinned to that program) plus the
+  message regex wrapped in the `message` group. A group named like a header
+  field is renamed with a `msg_` prefix.
+- An optional header field that is always empty for a program, such as a
+  process id the kernel does not write, is not a failing field.
+
+**Under-split check.** `shallow_patterns` flags the envelope pattern, and any
+other regex pattern that takes at least 5% of the file (and 20 records) and
+has one field, unmapped or mapped to `message`, holding at least half the
+characters of its records with values that vary. `depth` is the share of
+records not taken by such a pattern.
+
+The loop's finishing rule is now: coverage at target, no failing field, and
+either depth at `target_depth` (0.85) or one round already spent without gain.
+A round's candidates are compared on depth as well as coverage. In a later
+round the model is shown clustered samples of what the shallow patterns hold.
+
 ## 6. Assessment
 
-For each testable requirement and each record type, the field carrying each
-required element is found, and the count of its valid values that also meet
-the element's constraints is taken. The record type's count for the
-requirement is the smallest of those. Counts are summed over record types and
-divided by all records.
+The test pass records, for every record, which elements it carried with a
+valid value, the timestamp's timezone and precision, and the value of any
+element a requirement restricts. A requirement's count is the number of
+records whose combination carries every required element, and at least one
+member of every `any_of` group, meeting their constraints. Each finding has
+`needs`: one entry per required element or group, with the records that
+filled it.
 
-This is an upper bound when a requirement needs several elements: the pass
-keeps per-field counts, not per-record combinations.
+A requirement whose `kind` is not `presence` gets no count: its state is
+`not_evaluated`, `basis` says why, and `reference_elements` gives the records
+carrying each element it names. `not_counted_by_kind` totals them. The count is exact; `count_is_exact` is false only when a record
+type had more than 5,000 distinct combinations.
+
+### 6a. Comparing two runs
+
+A model proposes the mapping, so repeat runs can differ. A result identifies
+itself in two ways:
+
+- `run.inputs_fingerprint` hashes the log, profile, catalogue version, prompt
+  version, plugin version, settings, provider and model. Equal fingerprints
+  mean the same question was asked.
+- `run.outcome_fingerprint` hashes the findings and each element's signature.
+
+An element's signature hashes `(line number, value)` over every record that
+carried it; a record type's `line_signature` hashes the line numbers it took.
+Both identify a mapping by what it captured, so different field names and
+different regexes that capture the same thing compare equal.
+
+Scope decision (2026-10-10): this tool assesses a log as though nobody has
+seen it before. Pinning a reviewed mapping, comparing audits over time and
+carrying review decisions forward belong to a longer-running audit tool and
+are out of scope here. `scripts/audit_repeatability.py` measures agreement
+between repeat runs; the measured figures are in the auditor's README.
 
 ## 7. Outputs
 
@@ -240,8 +334,13 @@ Not yet:
 Known from those runs and not addressed:
 
 - Which field a model maps to `event_type` varies between runs on the same
-  file, and the finding moves with it. Pin the mapping in the extraction spec
-  and use `assess`.
+  file. Measured: the finding's state held in at least 4 of 5 runs for 138 of
+  144 cases; the record count behind it moved more often.
+- On free-text syslog, Gemini returned a two-pattern split (header plus
+  message) in 3 of 5 runs, which mapped every record and almost no elements.
+  Section 5a was added for this. Re-measured: Gemini's syslog findings held
+  in at least 4 of 5 runs for 18 of 18 (was 14), and the two providers'
+  majority findings agreed for 17 of 18 (was 12).
 - A conditional requirement ("where applicable") is counted against every
   record.
 
@@ -249,7 +348,6 @@ Known from those runs and not addressed:
 
 - URL input for the standard.
 - Multi-line record bodies.
-- Per-record element combinations, to turn the upper bound into a count.
 - An applicability field on a requirement, so a conditional one is not
   counted against record types it does not apply to.
 - `record_set` checks beyond timestamp ordering: gaps, expected event kinds.

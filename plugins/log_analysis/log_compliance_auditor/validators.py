@@ -160,6 +160,7 @@ class FieldStats:
         self.records = 0
         self.filled = 0
         self.valid = 0
+        self.chars = 0
         self.values: Counter[str] = Counter()
         self.distinct_capped = False
         self.failures: list[str] = []
@@ -176,16 +177,23 @@ class FieldStats:
         if len(self.failures) < 5 and value[:120] not in self.failures:
             self.failures.append(value[:120])
 
-    def add(self, value: Any) -> None:
+    def add(self, value: Any) -> tuple[bool, bool, int] | None:
+        """Count one captured value and say what it was.
+
+        Returns None for an empty or placeholder value, otherwise
+        ``(valid, has_timezone, fraction_digits)``; the last two are only ever
+        set for a valid timestamp.
+        """
         self.records += 1
         if value is None:
-            return
+            return None
         if not isinstance(value, str):
             value = str(value)
         stripped = value.strip()
         if stripped.lower() in PLACEHOLDERS:
-            return
+            return None
         self.filled += 1
+        self.chars += len(stripped)
         key = stripped[:200]
         if len(self.values) < self.MAX_DISTINCT or key in self.values:
             self.values[key] += 1
@@ -197,11 +205,11 @@ class FieldStats:
             parsed = parse_timestamp(stripped, self.format)
             if parsed is None:
                 self._fail(stripped)
-                return
+                return (False, False, 0)
             if not _plausible(parsed["moment"], parsed["year_assumed"], self._now):
                 self.implausible += 1
                 self._fail(stripped)
-                return
+                return (False, False, 0)
             self.valid += 1
             self.tz_count += 1 if parsed["has_tz"] else 0
             self.year_assumed += 1 if parsed["year_assumed"] else 0
@@ -213,30 +221,23 @@ class FieldStats:
             if self._previous is not None and comparable < self._previous:
                 self.out_of_order += 1
             self._previous = comparable
-        elif kind == "address":
+            return (True, bool(parsed["has_tz"]), min(parsed["digits"], 9))
+        if kind == "address":
             ok, is_ip = is_address(stripped)
-            if ok:
-                self.valid += 1
-                self.ip_count += 1 if is_ip else 0
-            else:
-                self._fail(stripped)
+            self.ip_count += 1 if ok and is_ip else 0
         elif kind == "integer":
-            if re.fullmatch(r"[+-]?\d+", stripped):
-                self.valid += 1
-            else:
-                self._fail(stripped)
+            ok = bool(re.fullmatch(r"[+-]?\d+", stripped))
         elif kind == "identifier":
-            if not re.search(r"\s", stripped):
-                self.valid += 1
-            else:
-                self._fail(stripped)
+            ok = not re.search(r"\s", stripped)
         elif kind == "category":
-            if len(stripped) <= 64:
-                self.valid += 1
-            else:
-                self._fail(stripped)
+            ok = len(stripped) <= 64
         else:
+            ok = True
+        if ok:
             self.valid += 1
+        else:
+            self._fail(stripped)
+        return (ok, False, 0)
 
     def flags(self) -> list[str]:
         """Observations about the value set. Questions for a reader, not failures."""
@@ -271,6 +272,7 @@ class FieldStats:
             "fill_rate": round(self.filled / self.records, 4) if self.records else 0.0,
             "pass_rate": round(self.valid / self.filled, 4) if self.filled else 0.0,
             "distinct": len(self.values),
+            "chars": self.chars,
             "distinct_capped": self.distinct_capped,
             "top_values": [
                 {"value": value, "count": count}

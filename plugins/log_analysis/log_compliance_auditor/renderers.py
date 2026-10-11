@@ -123,6 +123,11 @@ def extraction_spec(
             entry["regex"] = pattern["regex"]
         else:
             entry["requires"] = pattern.get("requires", [])
+        # Envelope facts: which program a message pattern belongs to, and
+        # which record type is the tool's own header-only pattern.
+        for key in ("envelope", "program", "message_regex"):
+            if pattern.get(key):
+                entry[key] = pattern[key]
         record_types.append(entry)
     return {
         "spec_version": "1.0",
@@ -331,6 +336,13 @@ STATE_WORDS = {
 
 
 SHORT_TYPES_SHOWN = 8
+KIND_HEADINGS = {
+    "prohibition": "Prohibitions: something must not be in a record",
+    "quality": "Quality of values: correct, consistent, unambiguous",
+    "event_selection": "Event selection: a kind of event must be logged at all",
+    "permission": "Permissions: allowed, with nothing to fall short of",
+    "presence": "No catalogue element to count",
+}
 _COUNT_PREFIX = re.compile(r"^\d+ of \d+ ")
 
 
@@ -369,12 +381,63 @@ def _element_rows(finding: dict[str, Any]) -> list[str]:
     return rows
 
 
+def _needs_lines(finding: dict[str, Any]) -> list[str]:
+    """What the requirement needs of a record, and how many records met it."""
+    needs = finding.get("needs") or []
+    groups = [n for n in needs if n["any_of"]]
+    met = (
+        f"{finding['records_with_all_elements']} of {finding['records']} records "
+        f"({_pct(finding['share'])})"
+    )
+    optional = finding["obligation"] == "may"
+    if len(needs) == 1 and groups:
+        lead = "Optional. At least one" if optional else "At least one"
+        return [f"{lead} of the elements below is present in {met}."]
+    if not groups:
+        if optional:
+            return [f"Optional. Present in {met}."]
+        return [f"All required elements present in {met}."]
+    parts = []
+    for need in needs:
+        if need["any_of"]:
+            label = f"{need['label']}: " if need["label"] else ""
+            parts.append(f"{label}one of " + " / ".join(need["elements"]))
+        else:
+            parts.append(need["elements"][0])
+    lines = [
+        ("Optional. Everything needed" if optional else "Everything needed")
+        + f" is present in {met}.",
+        "",
+        "Needs: " + "; ".join(parts) + ".",
+    ]
+    for need in groups:
+        lines.append(
+            f"- One of {' / '.join(need['elements'])}: "
+            f"{need['records']} of {finding['records']} records."
+        )
+    return lines
+
+
 def _short_types(finding: dict[str, Any]) -> list[str]:
     """Record types where a required element is missing or not always valid."""
     short = []
     for record_type in finding["by_record_type"]:
         gaps = []
-        for element in record_type["elements"]:
+        by_name = {e["element"]: e for e in record_type["elements"]}
+        needs = record_type.get("needs") or [
+            {"elements": [e["element"]]} for e in record_type["elements"]
+        ]
+        for need in needs:
+            if len(need["elements"]) > 1:
+                if need["records"] < record_type["records"]:
+                    names = " / ".join(need["elements"])
+                    gaps.append(
+                        f"none of {names}"
+                        if not need["records"]
+                        else f"one of {names} in {need['records']}"
+                    )
+                continue
+            element = by_name[need["elements"][0]]
             if not element["field"]:
                 gaps.append(f"no {element['element']}")
             elif element["records"] < record_type["records"]:
@@ -389,6 +452,37 @@ def _short_types(finding: dict[str, Any]) -> list[str]:
         more = len(short) - SHORT_TYPES_SHOWN
         short = short[:SHORT_TYPES_SHOWN] + [f"and {more} more"]
     return short
+
+
+def _depth_lines(survey: dict[str, Any], state: dict[str, Any]) -> list[str]:
+    """What the envelope check and the under-split check found."""
+    envelope = survey.get("envelope")
+    depth = state.get("depth") or {}
+    lines: list[str] = []
+    if envelope:
+        lines.append(
+            f"- Envelope: {envelope['describes']}. {envelope['records']} of "
+            f"{survey['records']} records fit it. PRI present in "
+            f"{envelope['with_pri']}; process id present in {envelope['with_pid']}. "
+            "The header was parsed by this tool, not proposed by a model."
+        )
+        lines.append(
+            f"- Programs: {envelope['program_count']}. Messages were compared only "
+            "within one program. Messages broken down into fields: "
+            f"{depth.get('records_broken_down', 0)} records "
+            f"({_pct(depth.get('share'))}); "
+            f"{depth.get('records_held_as_free_text', 0)} keep the message whole."
+        )
+    elif depth.get("records_held_as_free_text"):
+        named = ", ".join(
+            f"`{item['pattern_id']}`" for item in depth.get("shallow_patterns", [])
+        )
+        lines.append(
+            f"- {depth['records_held_as_free_text']} records are matched by a pattern "
+            f"that leaves most of the line in one free-text field ({named}). Elements "
+            "inside that text were not looked for."
+        )
+    return lines
 
 
 def markdown_report(
@@ -428,6 +522,9 @@ def markdown_report(
         f"({_pct(assessment['coverage'])}); not mapped: {assessment['records_unmapped']}",
         f"- Requirements in the profile: {assessment['requirements']}; "
         f"assessed against records: {assessment['requirements_assessed']}",
+    ]
+    lines += _depth_lines(survey, state)
+    lines += [
         "",
         "This report describes what this sample contains. `Observed` means the element was "
         "captured, with values that pass a format check, in at least 99% of records. It is "
@@ -469,10 +566,7 @@ def markdown_report(
                 else ""
             )
             lines += [f"> {finding['quote']}{flag}", ""]
-        lines.append(
-            f"All required elements present in {finding['records_with_all_elements']} of "
-            f"{finding['records']} records ({_pct(finding['share'])})."
-        )
+        lines += _needs_lines(finding)
         lines += [
             "",
             "| Element | Valid in | Fields | Examples / notes |",
@@ -486,13 +580,40 @@ def markdown_report(
 
     others = [f for f in assessment["findings"] if f["state"] == "not_evaluated"]
     if others:
-        lines += ["## Requirements about records that could not be evaluated", ""]
+        lines += [
+            "## Requirements about records that were not counted",
+            "",
+            "Counting the records that carry an element answers a rule that the "
+            "element must be there. The requirements below ask something else, or "
+            "name nothing the catalogue has. They are neither met nor unmet by this "
+            "report and need a person to look.",
+            "",
+        ]
+        groups: dict[str, list[dict[str, Any]]] = {}
         for finding in others:
-            lines.append(
-                f"- **{finding['requirement_id']}** ({finding['obligation']}): "
-                f"{finding['summary']} - {finding['basis']}"
+            kind = finding.get("kind") or "presence"
+            groups.setdefault(kind if kind in KIND_HEADINGS else "presence", []).append(
+                finding
             )
-        lines.append("")
+        for kind, heading in KIND_HEADINGS.items():
+            if kind not in groups:
+                continue
+            lines += [f"### {heading}", ""]
+            for finding in groups[kind]:
+                line = (
+                    f"- **{finding['requirement_id']}** ({finding['obligation']}): "
+                    f"{finding['summary']}"
+                )
+                if kind == "presence":
+                    line += f" - {finding['basis']}"
+                reference = finding.get("reference_elements")
+                if reference:
+                    line += " For reference, in this sample: " + ", ".join(
+                        f"{item['element']} in {item['records']} of {finding['records']}"
+                        for item in reference
+                    ) + "."
+                lines.append(line)
+            lines.append("")
     out_of_reach = [
         f for f in assessment["findings"] if f["state"] == "not_assessable_from_sample"
     ]

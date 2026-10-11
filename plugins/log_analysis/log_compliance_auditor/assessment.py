@@ -19,6 +19,24 @@ STATES = (
     "not_evaluated",
 )
 OBSERVED_THRESHOLD = 0.99
+# Why a requirement about records is listed without a count. Counting the
+# records that carry an element answers a presence rule and nothing else.
+KIND_BASIS = {
+    "prohibition": (
+        "a prohibition: counting records that carry an element cannot show "
+        "that something is absent or not exposed"
+    ),
+    "quality": (
+        "a rule about the quality or consistency of values, which an element "
+        "being present does not show"
+    ),
+    "event_selection": (
+        "a rule that a kind of event is logged at all: this audit counts "
+        "elements in the records it was given and does not look for "
+        "particular events"
+    ),
+    "permission": "a permission, with nothing to fall short of",
+}
 
 
 def read_profile(profile: Any) -> tuple[dict[str, Any] | None, list[str]]:
@@ -52,6 +70,38 @@ def read_profile(profile: Any) -> tuple[dict[str, Any] | None, list[str]]:
     return profile, []
 
 
+def _slots(requirement: dict[str, Any], known: dict[str, Any]) -> list[dict[str, Any]]:
+    """What a requirement needs, as slots a record must each fill.
+
+    A plain ``{"element": name}`` entry is a slot with one member. An
+    ``{"any_of": [...]}`` entry is a slot any one of its members fills. An
+    element may sit in more than one slot.
+    """
+    slots: list[dict[str, Any]] = []
+    for entry in requirement.get("elements") or []:
+        if not isinstance(entry, dict):
+            continue
+        grouped = "any_of" in entry
+        raw = entry.get("any_of") if grouped else [entry]
+        members = []
+        for member in raw if isinstance(raw, list) else []:
+            if (
+                isinstance(member, dict)
+                and member.get("element") in known
+                and all(m["element"] != member["element"] for m in members)
+            ):
+                members.append(member)
+        if members:
+            slots.append(
+                {
+                    "members": members,
+                    "any_of": grouped and len(members) > 1,
+                    "label": str(entry.get("label") or "") if grouped else "",
+                }
+            )
+    return slots
+
+
 def wanted_elements(profile: dict[str, Any]) -> list[str]:
     """Catalogue elements that some testable requirement needs, in catalogue order."""
     needed: set[str] = set()
@@ -60,77 +110,59 @@ def wanted_elements(profile: dict[str, Any]) -> list[str]:
             continue
         if requirement.get("assessable_from") == "not_assessable_from_sample":
             continue
-        for entry in requirement.get("elements") or []:
-            if (
-                isinstance(entry, dict)
-                and entry.get("element") in profile["catalogue"]["elements"]
-            ):
-                needed.add(entry["element"])
+        for slot in _slots(requirement, profile["catalogue"]["elements"]):
+            needed.update(member["element"] for member in slot["members"])
     return [name for name in profile["catalogue"]["elements"] if name in needed]
 
 
-def _best_field(
-    pattern: dict[str, Any], result: dict[str, Any], element: str
-) -> tuple[str | None, dict[str, Any] | None]:
-    """The field in this pattern that best carries the element, if any does."""
-    best_name, best = None, None
+def constrained_value_elements(profile: dict[str, Any]) -> frozenset[str]:
+    """Elements some requirement restricts with ``allowed_values``."""
+    names: set[str] = set()
+    for requirement in profile["requirements"]:
+        if not isinstance(requirement, dict):
+            continue
+        for slot in _slots(requirement, profile["catalogue"]["elements"]):
+            for entry in slot["members"]:
+                if isinstance(
+                    (entry.get("constraints") or {}).get("allowed_values"), list
+                ):
+                    names.add(str(entry.get("element")))
+    return frozenset(names)
+
+
+def _first_field(pattern: dict[str, Any], element: str) -> str | None:
     for name, spec in pattern["fields"].items():
-        if spec.get("element") != element:
-            continue
-        summary = result["fields"].get(name)
-        if summary is None:
-            continue
-        if best is None or summary["valid"] > best["valid"]:
-            best_name, best = name, summary
-    return best_name, best
+        if spec.get("element") == element:
+            return name
+    return None
 
 
-def _constraint_valid(
-    summary: dict[str, Any], constraints: dict[str, Any], validators_module: Any
-) -> tuple[int, list[str]]:
-    """How many of the field's valid values also meet the constraints."""
-    limit = summary["valid"]
-    notes: list[str] = []
-    if constraints.get("timezone_required") and summary["value_type"] == "timestamp":
-        with_tz = summary.get("with_timezone", 0)
-        if with_tz < summary["valid"]:
-            notes.append(
-                f"{summary['valid'] - with_tz} of {summary['valid']} timestamps carry no "
-                "timezone or UTC offset"
-            )
-        limit = min(limit, with_tz)
-    precision = constraints.get("min_precision")
-    if precision and summary["value_type"] == "timestamp":
-        enough = validators_module.meets_precision(
-            summary.get("fraction_digits", {}), precision
-        )
-        if enough < summary["valid"]:
-            notes.append(
-                f"{summary['valid'] - enough} of {summary['valid']} timestamps are coarser "
-                f"than {precision}"
-            )
-        limit = min(limit, enough)
+def _meets(
+    combination: dict[str, Any], entry: dict[str, Any], validators_module: Any
+) -> tuple[bool, str | None]:
+    """Whether one record combination carries the element as the entry requires.
+
+    ``(ok, shortfall)``; ``shortfall`` names the constraint that failed when
+    the element was there but did not meet it.
+    """
+    element = entry["element"]
+    if element not in combination["elements"]:
+        return False, None
+    constraints = entry.get("constraints") or {}
+    if element == "timestamp":
+        if constraints.get("timezone_required") and not combination["timezone"]:
+            return False, "timestamps carry no timezone or UTC offset"
+        precision = constraints.get("min_precision")
+        if precision:
+            need = validators_module.PRECISION_DIGITS.get(precision, 0)
+            if combination["fraction_digits"] < need:
+                return False, f"timestamps are coarser than {precision}"
     allowed = constraints.get("allowed_values")
     if isinstance(allowed, list) and allowed:
         wanted = {str(v).strip().lower() for v in allowed}
-        counts = summary.get("value_counts")
-        if counts is None:
-            # Too many distinct values to have kept them all; count the most
-            # common ones, which understates rather than overstates.
-            counts = {top["value"]: top["count"] for top in summary["top_values"]}
-            notes.append(
-                "too many distinct values to check each against allowed_values; "
-                "only the most common were counted"
-            )
-        inside = sum(c for v, c in counts.items() if v.strip().lower() in wanted)
-        outside = [v for v in counts if v.strip().lower() not in wanted]
-        if outside:
-            notes.append(
-                "values outside the allowed set, e.g. "
-                + ", ".join(repr(v) for v in outside[:3])
-            )
-        limit = min(limit, inside)
-    return limit, notes
+        if combination["values"].get(element) not in wanted:
+            return False, "values outside the allowed set"
+    return True, None
 
 
 def _state(share: float) -> str:
@@ -165,12 +197,12 @@ def assess(
             "quote_status": requirement.get("quote_status") or "not_checked",
             "assessable_from": requirement.get("assessable_from"),
         }
-        elements = [
-            e
-            for e in (requirement.get("elements") or [])
-            if isinstance(e, dict)
-            and e.get("element") in profile["catalogue"]["elements"]
-        ]
+        slots = _slots(requirement, profile["catalogue"]["elements"])
+        elements = list(
+            {
+                member["element"]: member for slot in slots for member in slot["members"]
+            }.values()
+        )
         if requirement.get("assessable_from") == "not_assessable_from_sample":
             finding["state"] = "not_assessable_from_sample"
             finding["basis"] = (
@@ -178,9 +210,16 @@ def assess(
             )
             findings.append(finding)
             continue
+        kind = requirement.get("kind") or "presence"
+        finding["kind"] = kind
+        if kind != "presence" and kind not in KIND_BASIS:
+            finding["state"] = "not_evaluated"
+            finding["basis"] = f"its kind, {kind!r}, is not one this audit knows"
+            findings.append(finding)
+            continue
         if not elements:
             finding["state"] = "not_evaluated"
-            finding["basis"] = (
+            finding["basis"] = KIND_BASIS.get(kind) or (
                 requirement.get("unmapped_reason")
                 or "the requirement names no catalogue element to test"
             )
@@ -190,56 +229,89 @@ def assess(
         satisfied_records = 0
         per_type: list[dict[str, Any]] = []
         element_totals = {e["element"]: 0 for e in elements}
+        slot_totals = [0] * len(slots)
+        exact = True
         for result in results:
             pattern = by_id[result["pattern_id"]]
-            type_min = result["records"]
+            exact = exact and not result.get("combinations_capped")
+            type_all = 0
+            type_counts = {e["element"]: 0 for e in elements}
+            type_slots = [0] * len(slots)
+            shortfalls: dict[str, dict[str, int]] = {e["element"]: {} for e in elements}
+            for combination in result.get("combinations", []):
+                every = True
+                carried: set[str] = set()
+                for entry in elements:
+                    ok, shortfall = _meets(combination, entry, validators_module)
+                    if ok:
+                        carried.add(entry["element"])
+                        type_counts[entry["element"]] += combination["records"]
+                    elif shortfall:
+                        bucket = shortfalls[entry["element"]]
+                        bucket[shortfall] = (
+                            bucket.get(shortfall, 0) + combination["records"]
+                        )
+                for position, slot in enumerate(slots):
+                    if any(m["element"] in carried for m in slot["members"]):
+                        type_slots[position] += combination["records"]
+                    else:
+                        every = False
+                if every:
+                    type_all += combination["records"]
             type_elements: list[dict[str, Any]] = []
             for entry in elements:
-                name, summary = _best_field(pattern, result, entry["element"])
-                if summary is None:
-                    type_elements.append(
-                        {
-                            "element": entry["element"],
-                            "field": None,
-                            "records": 0,
-                            "notes": [],
-                        }
-                    )
-                    type_min = 0
-                    continue
-                count, notes = _constraint_valid(
-                    summary, entry.get("constraints") or {}, validators_module
-                )
-                element_totals[entry["element"]] += count
-                type_min = min(type_min, count)
-                type_elements.append(
-                    {
-                        "element": entry["element"],
-                        "field": name,
-                        "records": count,
-                        "examples": [t["value"] for t in summary["top_values"][:3]],
-                        "flags": summary["flags"],
-                        "notes": notes,
-                    }
-                )
-            # A record satisfies the requirement when it carries every element.
-            # Per-field counts are all this pass keeps, so the smallest one is
-            # the most records that can have carried all of them.
-            satisfied_records += type_min
+                element = entry["element"]
+                name = _first_field(pattern, element)
+                summary = result["fields"].get(name) if name else None
+                element_totals[element] += type_counts[element]
+                item: dict[str, Any] = {
+                    "element": element,
+                    "field": name,
+                    "records": type_counts[element],
+                    "notes": [
+                        f"{count} of {result['records']} {reason}"
+                        for reason, count in sorted(shortfalls[element].items())
+                    ],
+                }
+                if summary is not None:
+                    item["examples"] = [t["value"] for t in summary["top_values"][:3]]
+                    item["flags"] = summary["flags"]
+                type_elements.append(item)
+            satisfied_records += type_all
+            for position, count in enumerate(type_slots):
+                slot_totals[position] += count
             per_type.append(
                 {
                     "pattern_id": result["pattern_id"],
                     "records": result["records"],
-                    "records_with_all_elements": type_min,
-                    "state": _state(type_min / result["records"]),
+                    "records_with_all_elements": type_all,
+                    "state": _state(type_all / result["records"]),
                     "elements": type_elements,
+                    "needs": [
+                        {
+                            "elements": [m["element"] for m in slot["members"]],
+                            "records": type_slots[position],
+                        }
+                        for position, slot in enumerate(slots)
+                    ],
                 }
             )
+        if kind != "presence":
+            finding["state"] = "not_evaluated"
+            finding["basis"] = KIND_BASIS[kind]
+            finding["records"] = total
+            finding["reference_elements"] = [
+                {"element": name, "records": count}
+                for name, count in element_totals.items()
+            ]
+            findings.append(finding)
+            continue
         share = satisfied_records / total if total else 0.0
         finding["state"] = _state(share)
         finding["records_with_all_elements"] = satisfied_records
         finding["records"] = total
         finding["share"] = round(share, 4)
+        finding["count_is_exact"] = exact
         finding["elements"] = [
             {
                 "element": name,
@@ -247,6 +319,16 @@ def assess(
                 "share": round(count / total, 4) if total else 0.0,
             }
             for name, count in element_totals.items()
+        ]
+        finding["needs"] = [
+            {
+                "elements": [m["element"] for m in slot["members"]],
+                "any_of": slot["any_of"],
+                "label": slot["label"],
+                "records": slot_totals[position],
+                "share": round(slot_totals[position] / total, 4) if total else 0.0,
+            }
+            for position, slot in enumerate(slots)
         ]
         finding["by_record_type"] = per_type
         findings.append(finding)
@@ -260,14 +342,21 @@ def assess(
     assessed = (
         counts["observed"] + counts["partially_observed"] + counts["not_observed"]
     )
+    not_counted: dict[str, int] = {}
+    for finding in findings:
+        if finding["state"] == "not_evaluated" and finding.get("kind") in KIND_BASIS:
+            not_counted[finding["kind"]] = not_counted.get(finding["kind"], 0) + 1
     return {
         "records": total,
         "records_mapped": test["matched"],
         "records_unmapped": test["unmatched"],
         "coverage": test["coverage"],
+        "split_signature": test.get("split_signature"),
+        "elements": test.get("elements", {}),
         "requirements": len(findings),
         "requirements_assessed": assessed,
         "counts": counts,
+        "not_counted_by_kind": not_counted,
         "by_obligation": by_obligation,
         "findings": findings,
     }

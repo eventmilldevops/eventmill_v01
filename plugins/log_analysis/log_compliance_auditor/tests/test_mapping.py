@@ -408,7 +408,7 @@ class TestAssessment:
         assert auth["state"] == "not_observed"
         assert auth["elements"][0]["field"] is None
 
-    def test_allowed_values_constraint(self, catalogue):
+    def test_allowed_values_constraint(self, catalogue, tmp_path):
         profile = {
             "catalogue": catalogue,
             "requirements": [
@@ -425,29 +425,212 @@ class TestAssessment:
                 }
             ],
         }
-        stats = vd.FieldStats("category")
-        for value in ["success"] * 70 + ["failure"] * 20 + ["OK"] * 10:
-            stats.add(value)
+        log = tmp_path / "res.log"
+        log.write_text(
+            "\n".join(
+                f"res={value}"
+                for value in ["success"] * 70 + ["failure"] * 20 + ["OK"] * 10
+            ),
+            encoding="utf-8",
+        )
         patterns = [
             {
                 "pattern_id": "p",
                 "kind": "regex",
-                "regex": "x",
+                "regex": r"^res=(?P<res>\S+)$",
                 "fields": {"res": {"element": "outcome", "value_type": "category"}},
             }
         ]
-        test = {
-            "records": 100,
-            "matched": 100,
-            "unmatched": 0,
-            "coverage": 1.0,
-            "patterns": [
-                {"pattern_id": "p", "records": 100, "fields": {"res": stats.summary()}}
-            ],
-        }
+        test = ml.run_patterns(
+            log, patterns, sv, vd, value_elements=az.constrained_value_elements(profile)
+        )
         finding = az.assess(profile, patterns, test, vd)["findings"][0]
         assert finding["records_with_all_elements"] == 90
         assert finding["state"] == "partially_observed"
+
+    def test_alternatives_need_only_one_member(self, catalogue, tmp_path):
+        def requirement(rid, obligation, elements):
+            return {
+                "requirement_id": rid,
+                "obligation": obligation,
+                "assessable_from": "record_content",
+                "summary": rid,
+                "elements": elements,
+            }
+
+        origin = {
+            "any_of": [{"element": "host"}, {"element": "source_component"}],
+            "label": "origin",
+        }
+        profile = {
+            "catalogue": catalogue,
+            "requirements": [
+                requirement("FLAT", "must", [{"element": "host"}, {"element": "source_component"}]),
+                requirement("GROUP", "may", [origin]),
+                requirement("MIXED", "must", [{"element": "actor_identity"}, origin]),
+            ],
+        }
+        log = tmp_path / "origin.log"
+        log.write_text(
+            "\n".join(
+                ["host=h1 user=a"] * 60 + ["svc=api user=a"] * 30 + ["user=a"] * 10
+            ),
+            encoding="utf-8",
+        )
+        patterns = [
+            {
+                "pattern_id": "h",
+                "kind": "regex",
+                "regex": r"^host=(?P<host>\S+) user=(?P<user>\S+)$",
+                "fields": {
+                    "host": {"element": "host", "value_type": "identity"},
+                    "user": {"element": "actor_identity", "value_type": "identity"},
+                },
+            },
+            {
+                "pattern_id": "s",
+                "kind": "regex",
+                "regex": r"^svc=(?P<svc>\S+) user=(?P<user>\S+)$",
+                "fields": {
+                    "svc": {"element": "source_component", "value_type": "identity"},
+                    "user": {"element": "actor_identity", "value_type": "identity"},
+                },
+            },
+            {
+                "pattern_id": "u",
+                "kind": "regex",
+                "regex": r"^user=(?P<user>\S+)$",
+                "fields": {
+                    "user": {"element": "actor_identity", "value_type": "identity"}
+                },
+            },
+        ]
+        assert az.wanted_elements(profile) == [
+            n
+            for n in catalogue["elements"]
+            if n in ("host", "source_component", "actor_identity")
+        ]
+        test = ml.run_patterns(log, patterns, sv, vd)
+        f = {x["requirement_id"]: x for x in az.assess(profile, patterns, test, vd)["findings"]}
+        assert f["FLAT"]["records_with_all_elements"] == 0
+        assert f["GROUP"]["records_with_all_elements"] == 90
+        assert f["MIXED"]["records_with_all_elements"] == 90
+        assert f["MIXED"]["needs"][1] == {
+            "elements": ["host", "source_component"],
+            "any_of": True,
+            "label": "origin",
+            "records": 90,
+            "share": 0.9,
+        }
+        assert {e["element"]: e["records"] for e in f["GROUP"]["elements"]} == {
+            "host": 60,
+            "source_component": 30,
+        }
+
+        assert rn._needs_lines(f["FLAT"]) == [
+            "All required elements present in 0 of 100 records (0.0%)."
+        ]
+        assert rn._needs_lines(f["GROUP"]) == [
+            "Optional. At least one of the elements below is present in "
+            "90 of 100 records (90.0%)."
+        ]
+        mixed = "\n".join(rn._needs_lines(f["MIXED"]))
+        assert "Needs: actor_identity; origin: one of host / source_component." in mixed
+        assert "- One of host / source_component: 90 of 100 records." in mixed
+        short = "; ".join(rn._short_types(f["MIXED"]))
+        assert "`u` (10 of its records: none of host / source_component)" in short
+        assert "`h`" not in short and "`s`" not in short
+
+    def test_only_presence_rules_are_counted(self, catalogue, tmp_path):
+        def requirement(rid, kind, elements):
+            item = {
+                "requirement_id": rid,
+                "obligation": "must",
+                "assessable_from": "record_content",
+                "summary": rid,
+                "elements": elements,
+            }
+            if kind:
+                item["kind"] = kind
+            return item
+
+        user = [{"element": "actor_identity"}]
+        profile = {
+            "catalogue": catalogue,
+            "review_status": "reviewed",
+            "standard": {"title": "T", "version": "1"},
+            "requirements": [
+                requirement("OLD", None, user),
+                requirement("HAS", "presence", user),
+                requirement("BAN", "prohibition", [{"element": "message"}]),
+                requirement("LOGGED", "event_selection", user),
+                requirement("VALID", "quality", []),
+                requirement("ODD", "vibes", user),
+                requirement("NOTHING", "presence", []),
+            ],
+        }
+        log = tmp_path / "u.log"
+        log.write_text("\n".join(["user=a"] * 40), encoding="utf-8")
+        patterns = [
+            {
+                "pattern_id": "u",
+                "kind": "regex",
+                "regex": r"^user=(?P<user>\S+)$",
+                "fields": {
+                    "user": {"element": "actor_identity", "value_type": "identity"}
+                },
+            }
+        ]
+        test = ml.run_patterns(log, patterns, sv, vd)
+        assessment = az.assess(profile, patterns, test, vd)
+        f = {x["requirement_id"]: x for x in assessment["findings"]}
+        assert f["OLD"]["state"] == f["HAS"]["state"] == "observed"
+        for rid in ("BAN", "LOGGED", "VALID", "ODD", "NOTHING"):
+            assert f[rid]["state"] == "not_evaluated", rid
+            assert "share" not in f[rid] and "records_with_all_elements" not in f[rid]
+        assert "prohibition" in f["BAN"]["basis"]
+        assert f["BAN"]["reference_elements"] == [{"element": "message", "records": 0}]
+        assert f["LOGGED"]["reference_elements"] == [
+            {"element": "actor_identity", "records": 40}
+        ]
+        assert "reference_elements" not in f["VALID"]
+        assert "vibes" in f["ODD"]["basis"]
+        assert assessment["requirements_assessed"] == 2
+        assert assessment["not_counted_by_kind"] == {
+            "prohibition": 1,
+            "event_selection": 1,
+            "quality": 1,
+        }
+        # A banned element is still mapped, so its count can be shown.
+        assert "message" in az.wanted_elements(profile)
+
+        profile["profile_version"] = "1.0"
+        profile_file = tmp_path / "kinds.json"
+        profile_file.write_text(json.dumps(profile), encoding="utf-8")
+        plugin = tool.LogComplianceAuditor()
+        context = FakeContext(llm=FakeLLM([reply(patterns[0])]))
+        result = plugin.execute(
+            {
+                "action": "audit",
+                "file_path": str(log),
+                "profile_path": str(profile_file),
+            },
+            context,
+        )
+        assert result.ok, result.message
+        assert "1 event_selection" in plugin.summarize_for_llm(result)
+        report = open(
+            next(
+                a.file_path
+                for a in context.registered
+                if a.metadata["kind"] == "alignment_report"
+            ),
+            encoding="utf-8",
+        ).read()
+        assert "## Requirements about records that were not counted" in report
+        assert "### Prohibitions" in report and "### Event selection" in report
+        assert "For reference, in this sample: message in 0 of 40." in report
+        assert "### BAN" not in report and "### LOGGED" not in report
 
     def test_assess_action_makes_no_model_call(
         self, plugin, log_file, result, tmp_path
@@ -604,3 +787,402 @@ class TestJavaStackTrace:
             (5, 0),
             (6, 0),
         ]
+
+
+class TestRunEvidence:
+    """What a run keeps so that two runs can be compared."""
+
+    LINES = [
+        "evt=LOGIN user=alice",
+        "evt=LOGOUT",
+        "user=bob",
+        "evt=READ user=carol",
+    ]
+
+    def _log(self, tmp_path):
+        log = tmp_path / "mixed.log"
+        log.write_text("\n".join(self.LINES), encoding="utf-8")
+        return log
+
+    def _patterns(self, user_regex=r"\S+"):
+        field = lambda element: {
+            "element": element,
+            "value_type": "identity",
+        }  # noqa: E731
+        return [
+            {
+                "pattern_id": "both",
+                "kind": "regex",
+                "regex": rf"^evt=(?P<evt>\S+) user=(?P<user>{user_regex})$",
+                "fields": {"evt": field("event_type"), "user": field("actor_identity")},
+            },
+            {
+                "pattern_id": "evt_only",
+                "kind": "regex",
+                "regex": r"^evt=(?P<evt>\S+)$",
+                "fields": {"evt": field("event_type")},
+            },
+            {
+                "pattern_id": "user_only",
+                "kind": "regex",
+                "regex": r"^user=(?P<user>\S+)$",
+                "fields": {"user": field("actor_identity")},
+            },
+        ]
+
+    def test_combination_count_is_exact_not_an_upper_bound(self, catalogue, tmp_path):
+        test = ml.run_patterns(self._log(tmp_path), self._patterns(), sv, vd)
+        profile = {
+            "catalogue": catalogue,
+            "requirements": [
+                {
+                    "requirement_id": "R",
+                    "obligation": "must",
+                    "assessable_from": "record_content",
+                    "elements": [
+                        {"element": "event_type"},
+                        {"element": "actor_identity"},
+                    ],
+                }
+            ],
+        }
+        finding = az.assess(profile, self._patterns(), test, vd)["findings"][0]
+        # 3 records carry event_type and 3 carry actor_identity; only 2 carry both.
+        assert finding["records_with_all_elements"] == 2
+        assert finding["count_is_exact"] is True
+        assert {e["element"]: e["records"] for e in finding["elements"]} == {
+            "event_type": 3,
+            "actor_identity": 3,
+        }
+
+    def test_signature_follows_what_was_captured_not_the_regex(self, tmp_path):
+        log = self._log(tmp_path)
+        one = ml.run_patterns(log, self._patterns(), sv, vd)
+        renamed = self._patterns(user_regex=r"[a-z]+")
+        for pattern in renamed:
+            pattern["pattern_id"] = "x_" + pattern["pattern_id"]
+        two = ml.run_patterns(log, renamed, sv, vd)
+        assert one["split_signature"] == two["split_signature"]
+        assert one["elements"]["actor_identity"]["signature"] == (
+            two["elements"]["actor_identity"]["signature"]
+        )
+        assert one["elements"]["event_type"]["value_counts"] == {
+            "LOGIN": 1,
+            "LOGOUT": 1,
+            "READ": 1,
+        }
+
+    def test_signature_changes_when_another_field_is_the_element(self, tmp_path):
+        log = self._log(tmp_path)
+        one = ml.run_patterns(log, self._patterns(), sv, vd)
+        swapped = self._patterns()
+        swapped[0]["fields"]["evt"]["element"] = None
+        two = ml.run_patterns(log, swapped, sv, vd)
+        assert one["split_signature"] == two["split_signature"]
+        assert one["elements"]["event_type"]["signature"] != (
+            two["elements"]["event_type"]["signature"]
+        )
+
+    def test_same_scripted_run_has_the_same_fingerprints(self, plugin, tmp_path):
+        log = build_log(tmp_path / "app.log")
+        runs = []
+        for _ in range(2):
+            context = FakeContext(FakeLLM([reply(PATTERN_A, PATTERN_B, PATTERN_C)] * 4))
+            result = plugin.execute(
+                {
+                    "action": "audit",
+                    "file_path": str(log),
+                    "profile_path": str(PROFILE_EXAMPLE),
+                },
+                context,
+            )
+            runs.append(result.result["run"])
+        assert runs[0]["inputs_fingerprint"] == runs[1]["inputs_fingerprint"]
+        assert runs[0]["outcome_fingerprint"] == runs[1]["outcome_fingerprint"]
+        assert runs[0]["log_sha256"] and runs[0]["profile_sha256"]
+
+
+def build_syslog(path, with_pri=False):
+    """BSD syslog: three programs, each with its own message shapes."""
+    pri = "<38>" if with_pri else ""
+    lines = []
+    for i in range(120):
+        lines.append(
+            f"{pri}Sep {1 + i % 9:2d} 10:{i % 60:02d}:{i % 60:02d} web01 CRON[{900 + i}]: "
+            f"({'root' if i % 2 else 'backup'}) CMD (/usr/local/bin/job{i % 4})"
+        )
+    for i in range(60):
+        lines.append(
+            f"{pri}Sep 10 11:{i % 60:02d}:00 web01 sshd[{2000 + i}]: "
+            f"Accepted publickey for user{i % 5} from 10.0.0.{1 + i % 50} port {40000 + i} ssh2"
+        )
+    for i in range(20):
+        lines.append(
+            f"{pri}Sep 11 12:00:{i:02d} web01 kernel: something odd happened in zone {i} "
+            f"while the moon was {['full', 'new', 'half'][i % 3]}"
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+CRON_MSG = {
+    "pattern_id": "cron_cmd",
+    "program": "CRON",
+    "describes": "cron job start",
+    "message_regex": r"^\((?P<user>[^)]+)\) CMD \((?P<command>.*)\)$",
+    "fields": {
+        "user": {"element": "actor_identity"},
+        "command": {"element": "target_object"},
+    },
+}
+SSHD_MSG = {
+    "pattern_id": "sshd_accept",
+    "program": "sshd",
+    "message_regex": (
+        r"Accepted (?P<method>\S+) for (?P<user>\S+) from (?P<src>\S+) "
+        r"port (?P<port>\d+) ssh2"
+    ),
+    "fields": {
+        "user": {"element": "actor_identity"},
+        "src": {"element": "source_address"},
+        "method": {"element": None},
+    },
+}
+
+
+class TestSyslogEnvelope:
+    """The header is the tool's; the model only breaks messages down per program."""
+
+    def test_survey_recognises_the_envelope_and_clusters_by_program(self, tmp_path):
+        survey = sv.survey_file(build_syslog(tmp_path / "sys.log"))
+        envelope = survey["envelope"]
+        assert envelope["kind"] == "syslog_bsd"
+        assert envelope["records"] == 200 and envelope["share"] == 1.0
+        assert envelope["with_pri"] == 0
+        assert envelope["with_pid"] == 180
+        assert [(p["program"], p["records"]) for p in envelope["programs"]] == [
+            ("CRON", 120),
+            ("sshd", 60),
+            ("kernel", 20),
+        ]
+        assert {c["program"] for c in survey["clusters"]} == {"CRON", "sshd", "kernel"}
+        assert "CMD" in survey["clusters"][0]["samples"][0]["message"]
+        assert survey["clusters"][0]["samples"][0]["text"].startswith("Sep")
+
+    def test_pri_is_counted_when_present(self, tmp_path):
+        survey = sv.survey_file(build_syslog(tmp_path / "sys.log", with_pri=True))
+        assert survey["envelope"]["with_pri"] == 200
+
+    def test_application_log_has_no_envelope(self, log_file):
+        assert sv.survey_file(log_file)["envelope"] is None
+
+    def _audit(self, plugin, tmp_path, replies):
+        log = build_syslog(tmp_path / "sys.log")
+        context = FakeContext(FakeLLM(replies))
+        result = plugin.execute(
+            {
+                "action": "audit",
+                "file_path": str(log),
+                "profile_path": str(PROFILE_EXAMPLE),
+            },
+            context,
+        )
+        return result, context
+
+    def test_model_is_asked_for_messages_only_grouped_by_program(
+        self, plugin, tmp_path
+    ):
+        _, context = self._audit(plugin, tmp_path, [reply(CRON_MSG, SSHD_MSG), reply()])
+        prompt = context.llm_query.prompts[0]
+        assert "=== program CRON ===" in prompt and "=== program sshd ===" in prompt
+        listing = prompt.split("MESSAGES NOT YET BROKEN DOWN")[1]
+        assert "(root) CMD (/usr/local/bin/job" in listing
+        assert "web01 CRON[" not in listing
+        assert "Never compare or merge messages of different programs" in prompt
+
+    def test_envelope_fields_do_not_depend_on_the_model(self, plugin, tmp_path):
+        result, _ = self._audit(plugin, tmp_path, ["no patterns here"] * 4)
+        assert result.ok
+        data = result.result
+        assert data["assessment"]["records_mapped"] == 200
+        elements = data["assessment"]["elements"]
+        assert elements["timestamp"]["records"] == 200
+        assert elements["host"]["records"] == 200
+        assert elements["source_component"]["value_counts"] == {
+            "CRON": 120,
+            "sshd": 60,
+            "kernel": 20,
+        }
+        assert elements["process_id"]["records"] == 180
+        assert data["depth"]["records_broken_down"] == 0
+        assert "actor_identity" not in elements
+
+    def test_message_patterns_apply_to_their_program_only(self, plugin, tmp_path):
+        result, context = self._audit(
+            plugin, tmp_path, [reply(CRON_MSG, SSHD_MSG), reply()]
+        )
+        data = result.result
+        assert data["status"] == "converged"
+        types = {t["pattern_id"]: t for t in data["extraction_spec"]["record_types"]}
+        assert types["cron_cmd"]["records"] == 120
+        assert types["cron_cmd"]["program"] == "CRON"
+        assert types["sshd_accept"]["records"] == 60
+        assert types["envelope"]["records"] == 20
+        assert data["extraction_spec"]["record_types"][-1]["pattern_id"] == "envelope"
+        assert data["depth"]["records_broken_down"] == 180
+        assert data["depth"]["share"] == 0.9
+        elements = data["assessment"]["elements"]
+        assert elements["actor_identity"]["records"] == 180
+        assert elements["message"]["records"] == 200
+        assert elements["timestamp"]["records"] == 200
+        # 0.9 is above the depth target, so no second round was spent.
+        assert len(context.llm_query.prompts) == 1
+        summary = plugin.summarize_for_llm(result)
+        assert "Envelope: syslog_bsd" in summary and "PRI present in 0" in summary
+
+    def test_a_cron_pattern_cannot_take_an_sshd_record(self, plugin, tmp_path):
+        greedy = dict(CRON_MSG, message_regex=r"(?P<everything>.*)", fields={})
+        result, _ = self._audit(plugin, tmp_path, [reply(greedy), reply()])
+        types = {
+            t["pattern_id"]: t for t in result.result["extraction_spec"]["record_types"]
+        }
+        assert types["cron_cmd"]["records"] == 120
+        assert types["envelope"]["records"] == 80
+
+    def test_group_named_like_a_header_field_is_renamed(self, catalogue):
+        raw = dict(
+            CRON_MSG,
+            message_regex=r"\((?P<host>[^)]+)\) CMD \((?P<command>.*)\)",
+            fields={"host": {"element": "actor_identity"}},
+        )
+        pattern, notes = ml.compose_message_pattern(
+            raw, sv.envelope_by_kind("syslog_bsd"), catalogue, "x"
+        )
+        assert pattern is not None, notes
+        assert pattern["fields"]["msg_host"]["element"] == "actor_identity"
+        assert pattern["fields"]["host"]["element"] == "host"
+
+    def test_message_pattern_without_a_program_is_refused(self, catalogue):
+        raw = {k: v for k, v in CRON_MSG.items() if k != "program"}
+        pattern, notes = ml.compose_message_pattern(
+            raw, sv.envelope_by_kind("syslog_bsd"), catalogue, "x"
+        )
+        assert pattern is None and "program" in notes[0]
+
+    def test_assess_from_the_spec_keeps_the_envelope_last(self, plugin, tmp_path):
+        result, context = self._audit(
+            plugin, tmp_path, [reply(CRON_MSG, SSHD_MSG), reply()]
+        )
+        spec = result.result["outputs"]["extraction_spec"]["file"]
+        again = plugin.execute(
+            {
+                "action": "assess",
+                "file_path": str(tmp_path / "sys.log"),
+                "profile_path": str(PROFILE_EXAMPLE),
+                "state_path": spec,
+            },
+            FakeContext(None),
+        )
+        assert again.ok
+        assert again.result["run"]["outcome_fingerprint"] == (
+            result.result["run"]["outcome_fingerprint"]
+        )
+        assert again.result["depth"]["records_broken_down"] == 180
+
+
+class TestUnderSplit:
+    """A header and .* maps every record and finds nothing in it."""
+
+    HEADER_ONLY = {
+        "pattern_id": "generic",
+        "kind": "regex",
+        "regex": r"^(?P<ts>\S+) (?P<level>[A-Z]+) (?P<rest>.*)$",
+        "fields": {
+            "ts": {"element": "timestamp", "format": "iso8601"},
+            "level": {"element": "severity"},
+            "rest": {"element": "message"},
+        },
+    }
+    LOGIN = {
+        "pattern_id": "login",
+        "kind": "regex",
+        "regex": (
+            r"^(?P<ts>\S+) (?P<level>[A-Z]+) login user=(?P<user>\S+) "
+            r"from=(?P<src>\S+) result=(?P<result>\S+) trace=(?P<trace>\S+)$"
+        ),
+        "fields": {
+            "ts": {"element": "timestamp", "format": "iso8601"},
+            "level": {"element": "severity"},
+            "user": {"element": "actor_identity"},
+            "src": {"element": "source_address"},
+            "result": {"element": "outcome"},
+            "trace": {"element": "session_id"},
+        },
+    }
+
+    def _log(self, tmp_path):
+        log = tmp_path / "app.log"
+        log.write_text(
+            "\n".join(
+                f"2026-03-01T10:{i % 60:02d}:00Z INFO login user=u{i % 7} "
+                f"from=10.0.0.{1 + i % 90} result={'ok' if i % 3 else 'denied'} trace=t{i:05d}"
+                for i in range(200)
+            ),
+            encoding="utf-8",
+        )
+        return log
+
+    def test_header_and_free_text_is_flagged(self, tmp_path, catalogue):
+        log = self._log(tmp_path)
+        pattern, _ = ml.normalise_pattern(self.HEADER_ONLY, catalogue, "g")
+        test = ml.run_patterns(log, [pattern], sv, vd)
+        shallow = ml.shallow_patterns(test, [pattern])
+        assert [(i["pattern_id"], i["field"]) for i in shallow] == [("generic", "rest")]
+        assert ml.depth(test, [pattern])["share"] == 0.0
+
+    def test_a_split_record_is_not_flagged(self, tmp_path, catalogue):
+        log = self._log(tmp_path)
+        pattern, _ = ml.normalise_pattern(self.LOGIN, catalogue, "l")
+        test = ml.run_patterns(log, [pattern], sv, vd)
+        assert ml.shallow_patterns(test, [pattern]) == []
+        assert ml.depth(test, [pattern])["share"] == 1.0
+
+    def test_a_round_is_spent_asking_for_a_deeper_split(self, plugin, tmp_path):
+        log = self._log(tmp_path)
+        context = FakeContext(FakeLLM([reply(self.HEADER_ONLY), reply(self.LOGIN)]))
+        result = plugin.execute(
+            {
+                "action": "audit",
+                "file_path": str(log),
+                "profile_path": str(PROFILE_EXAMPLE),
+            },
+            context,
+        )
+        assert len(context.llm_query.prompts) == 2
+        second = context.llm_query.prompts[1]
+        assert "PATTERNS THAT MATCH BUT DO NOT BREAK THE RECORD DOWN" in second
+        assert "login user=u" in second
+        data = result.result
+        assert data["status"] == "converged"
+        assert data["depth"]["share"] == 1.0
+        assert data["assessment"]["elements"]["actor_identity"]["records"] == 200
+
+    def test_free_prose_is_accepted_after_one_more_round(self, plugin, tmp_path):
+        log = self._log(tmp_path)
+        context = FakeContext(FakeLLM([reply(self.HEADER_ONLY), reply()]))
+        result = plugin.execute(
+            {
+                "action": "audit",
+                "file_path": str(log),
+                "profile_path": str(PROFILE_EXAMPLE),
+            },
+            context,
+        )
+        data = result.result
+        assert data["status"] == "converged"
+        assert "held as free text" in data["stop_reason"]
+        assert data["depth"]["records_held_as_free_text"] == 200
+        assert (
+            "leaves most of the line in one free-text field"
+            in plugin.summarize_for_llm(result)
+        )

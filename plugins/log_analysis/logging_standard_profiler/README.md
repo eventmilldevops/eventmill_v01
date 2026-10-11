@@ -82,11 +82,52 @@ keep its `catalogue` block unchanged, replace the requirements, and run
 | `requirement_id` | Your clause number. Must be unique. |
 | `obligation` | `must`, `should` or `may` |
 | `assessable_from` | `record_content`, `record_set`, or `not_assessable_from_sample` |
+| `kind` | What sort of rule it is; see below. null when not assessable |
 | `elements` | `[{"element": "timestamp", "constraints": {...}}, ...]` from the catalogue; empty when not assessable |
 | `summary`, `quote`, `section`, `page` | For the report's reader |
 
 Constraints: `timezone_required` and `min_precision` (`second`, `millisecond`,
 `microsecond`) on a timestamp; `allowed_values` on any element.
+
+### Kinds of requirement
+
+| Kind | The sentence asks | Counted |
+|---|---|---|
+| `presence` | A record carries an element, possibly in a stated format | Yes |
+| `prohibition` | Something must not be in a record, or must not be done | No |
+| `quality` | Values are correct, stable, consistent or unambiguous | No |
+| `event_selection` | A kind of event is logged at all | No |
+| `permission` | Something is allowed | No |
+
+The auditor counts records for `presence` requirements only and lists the
+rest for a person to look at. This is the field most worth checking in a
+draft, because it decides whether a requirement produces a finding at all:
+
+- A requirement wrongly marked `presence` gives a number that means nothing
+  ("search and export activity shall be logged" scored as observed because
+  every record has an event type).
+- A requirement wrongly marked anything else silently drops a finding the
+  tool could have given.
+
+A requirement the model called `presence` whose quote is worded as a ban is
+changed to `prohibition` at extraction and noted. Edit `kind` by hand to
+overrule it.
+
+Entries side by side are all required in the same record. When the standard
+lists alternatives ("a host, service, component or other stable identifier"),
+group them, and a record needs only one:
+
+```json
+"elements": [
+  {"element": "timestamp"},
+  {"any_of": [{"element": "host"}, {"element": "source_component"}], "label": "origin"}
+]
+```
+
+**Check the groups when reviewing a draft.** A group that is too wide makes a
+requirement trivially met: "one of actor_identity / source_component" is
+satisfied by any record that names its program, whether or not it names a
+user.
 
 ## What to expect from a public standard
 

@@ -30,7 +30,7 @@ services:
       # by default: a provider whose key is absent or still "placeholder" is
       # skipped at runtime, so naming one costs nothing and forgetting to name
       # one costs a vendor that is silently absent.
-      - EVENTMILL_LLM_PROVIDERS=${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue}
+      - EVENTMILL_LLM_PROVIDERS=${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_blue}
       # Storage — must match the GCS bucket prefix used during provisioning
       - EVENTMILL_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX:-eventmill}
       # Native-document latency model; empty keeps the plugin's own values.

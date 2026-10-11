@@ -142,10 +142,19 @@ class PluginLoader:
                 
                 manifest_path = plugin_dir / "manifest.json"
                 if not manifest_path.exists():
-                    logger.warning(
-                        "Plugin directory %s missing manifest.json",
-                        plugin_dir.name,
-                    )
+                    # A pillar also holds directories that are not plugins
+                    # (postures/, examples/). Only one carrying a tool.py was
+                    # meant to be a plugin and is worth a warning.
+                    if (plugin_dir / "tool.py").exists():
+                        logger.warning(
+                            "Plugin directory %s missing manifest.json",
+                            plugin_dir.name,
+                        )
+                    else:
+                        logger.debug(
+                            "Skipping %s: not a plugin directory",
+                            plugin_dir.name,
+                        )
                     continue
                 
                 try:

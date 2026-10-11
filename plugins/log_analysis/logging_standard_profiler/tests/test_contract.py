@@ -228,6 +228,28 @@ class TestProfileContract:
         profile["requirements"][0]["elements"] = [{"element": "mood"}]
         assert any("'mood'" in e for e in ps.validate_profile(profile)["errors"])
 
+    def test_a_group_of_alternatives_is_valid(self):
+        profile = json.loads(EXAMPLE_PROFILE.read_text(encoding="utf-8"))
+        profile["requirements"][0]["elements"] = [
+            {"any_of": [{"element": "host"}, {"element": "source_component"}]}
+        ]
+        assert ps.validate_profile(profile)["errors"] == []
+        profile["requirements"][0]["elements"] = [
+            {"any_of": [{"element": "host"}, {"element": "mood"}]},
+            {"any_of": [{"element": "host"}]},
+        ]
+        errors = ps.validate_profile(profile)["errors"]
+        assert any("'mood'" in e for e in errors)
+        assert any("at least two" in e for e in errors)
+
+    def test_kind_is_optional_and_checked(self):
+        profile = json.loads(EXAMPLE_PROFILE.read_text(encoding="utf-8"))
+        for requirement in profile["requirements"]:
+            requirement.pop("kind", None)
+        assert ps.validate_profile(profile)["errors"] == []
+        profile["requirements"][0]["kind"] = "vibes"
+        assert any("kind must be one of" in e for e in ps.validate_profile(profile)["errors"])
+
     def test_duplicate_ids_are_an_error(self):
         profile = json.loads(EXAMPLE_PROFILE.read_text(encoding="utf-8"))
         profile["requirements"][1]["requirement_id"] = profile["requirements"][0][
@@ -292,6 +314,78 @@ class TestUntrustedRequirementShape:
         )
         assert [e["element"] for e in requirement["elements"]] == ["timestamp"]
         assert "geo_location" in requirement["unmapped_reason"]
+
+    def test_alternatives_are_kept_as_a_group(self, catalogue):
+        requirement, _ = ps.normalise_requirement(
+            {
+                "summary": "s",
+                "obligation": "must",
+                "assessable_from": "record_content",
+                "elements": [
+                    "timestamp",
+                    {
+                        "any_of": ["host", {"element": "source_component"}, "host"],
+                        "label": "origin",
+                    },
+                ],
+            },
+            catalogue,
+            1,
+        )
+        assert requirement["elements"] == [
+            {"element": "timestamp"},
+            {
+                "any_of": [{"element": "host"}, {"element": "source_component"}],
+                "label": "origin",
+            },
+        ]
+
+    def test_a_group_left_with_one_element_becomes_a_required_element(self, catalogue):
+        requirement, notes = ps.normalise_requirement(
+            {
+                "summary": "s",
+                "obligation": "must",
+                "assessable_from": "record_content",
+                "elements": [{"any_of": ["host", "tenant"]}, {"any_of": "host"}],
+            },
+            catalogue,
+            1,
+        )
+        assert requirement["elements"] == [{"element": "host"}]
+        assert "tenant" in requirement["unmapped_reason"]
+        assert any("one usable element" in n for n in notes)
+
+    @pytest.mark.parametrize(
+        "raw_kind,quote,assessable,expected",
+        [
+            (None, "Each entry shall include the user.", "record_content", "presence"),
+            ("QUALITY", "Values shall be valid.", "record_content", "quality"),
+            ("mood", "Each entry shall include the user.", "record_set", "presence"),
+            (
+                "presence",
+                "Identifiers shall be stable and shall not expose secrets.",
+                "record_content",
+                "prohibition",
+            ),
+            ("presence", "Records must never hold tokens.", "record_content", "prohibition"),
+            ("permission", "Time may be split across fields.", "record_content", "permission"),
+            ("presence", "Logs shall be kept a year.", "not_assessable_from_sample", None),
+        ],
+    )
+    def test_kind(self, catalogue, raw_kind, quote, assessable, expected):
+        requirement, _ = ps.normalise_requirement(
+            {
+                "summary": "s",
+                "quote": quote,
+                "obligation": "must",
+                "assessable_from": assessable,
+                "kind": raw_kind,
+                "elements": ["actor_identity"],
+            },
+            catalogue,
+            1,
+        )
+        assert requirement["kind"] == expected
 
     def test_timestamp_constraints_only_on_timestamps(self, catalogue):
         requirement, notes = ps.normalise_requirement(
@@ -405,6 +499,17 @@ class TestExtractProfile:
         assert '"assessable_from": "not_assessable_from_sample"' in prompt
         assert "actor_identity (identity)" in prompt
         assert "Each log entry shall include a timestamp" in prompt
+        assert '"any_of"' in prompt and "only one member of a group" in prompt
+        assert '"event_selection" - ' in prompt and '"kind": "prohibition"' in prompt
+
+    def test_only_presence_rules_count_as_testable(self, plugin, standard):
+        reply = json.loads(json.dumps(GOOD_REPLY))
+        reply["requirements"][1]["kind"] = "event_selection"
+        result, _ = extract(plugin, standard, [json.dumps(reply)])
+        counts = result.result["counts"]
+        assert counts["testable_against_records"] == 1
+        assert counts["by_kind"]["event_selection"] == 1
+        assert "not countable: 1 event_selection" in plugin.summarize_for_llm(result)
 
     def test_duplicate_ids_are_made_unique(self, plugin, standard):
         reply = json.loads(json.dumps(GOOD_REPLY))

@@ -32,6 +32,37 @@ Spec: `docs/specs/log_compliance_audit.md`.
 The file is never uploaded. The result states exactly how many lines and
 characters were sent.
 
+## Syslog, and logs that are a header plus free text
+
+Syslog fixes the header and leaves the message to each program, so one file
+holds as many message formats as it has programs. The tool handles the two
+parts differently:
+
+- **The header is parsed by the tool, not proposed by a model.** When at least
+  90% of the first 2,000 records fit a syslog envelope (BSD / RFC 3164, the
+  same with an ISO 8601 timestamp, or RFC 5424), the timestamp, host, program
+  and process id come from a fixed pattern. They are the same in every run.
+  The result says how many records fit, how many carry a PRI value and how
+  many a process id.
+- **The message is kept whole as one element, then broken down per program.**
+  Sample messages are grouped by program and the model writes patterns for one
+  program's messages at a time. A message pattern is joined to the header
+  pinned to its program, so it cannot take another program's records. Messages
+  of different programs are never compared.
+- **A record no message pattern takes still has its header.** It falls to the
+  header-only record type `envelope`, with its message whole.
+
+The same idea guards other logs. A pattern such as timestamp, level and `.*`
+matches every line and finds nothing in it. When a pattern takes at least 5%
+of the file and one free-text field holds half or more of each line, the next
+round shows the model what that field is holding and asks for specific
+patterns. If that changes nothing the text is accepted as prose and the result
+says how many records are held that way.
+
+`depth` in the result, and the report's opening section, give the count of
+records broken down beyond a free-text field. The loop keeps asking until that
+is 85% of records or a round adds nothing.
+
 ## Inputs
 
 - A log file, loaded as a `log_stream` or `text` artifact.
@@ -87,9 +118,13 @@ Each requirement gets one of five findings:
 |---|---|
 | `observed` | Every required element was captured, with valid values, in at least 99% of **all** records |
 | `partially_observed` | In some records and not others. The report shows which record types fall short and why. |
+
+A requirement can need several elements together, and can accept any one of a group of alternatives (the profile's `any_of`). The report says which: "All required elements present in ...", "At least one of the elements below is present in ...", or a `Needs:` line when both apply. A `may` requirement is marked `Optional`.
 | `not_observed` | No record carried all the required elements |
 | `not_assessable_from_sample` | The requirement is about retention, protection, review or the like. A log file cannot show it either way. |
-| `not_evaluated` | The requirement is about records but names no catalogue element, so nothing was tested |
+| `not_evaluated` | The requirement is about records, but it is not a rule that an element must be present (a prohibition, a rule about value quality, a rule that some event is logged, a permission), or it names no catalogue element. Nothing was counted. |
+
+**Only presence rules are counted.** The report lists the others under "Requirements about records that were not counted", grouped by kind, with how many records carry the elements each one names. Those lines are reference for a reviewer and are not findings: `message in 0 of 200` beside a rule that free text must not be the only representation is good news, not a gap.
 
 **None of these means compliant.** The report describes what this sample
 contains. It cannot see events the application never logged, and it does not
@@ -124,6 +159,42 @@ On Cloud Run all six are exported to the common bucket automatically. The
 result and the report contain sample lines and example values from the log, so
 treat them with the same care as the log.
 
+## Repeatability
+
+A model proposes the mapping, so two runs on the same file can differ. Each
+result carries what is needed to tell whether they did:
+
+- `run.inputs_fingerprint`: the log, profile, catalogue, prompt and plugin
+  versions, settings and model. The same value means the same question.
+- `run.outcome_fingerprint`: the findings and what each element captured.
+- `assessment.elements.<name>.signature`: a hash of `(line, value)` for every
+  record that carried the element. Two runs that chose differently named
+  fields or wrote different regexes still get the same signature when they
+  captured the same values from the same records.
+- `assessment.split_signature`: the same idea for how the file was divided
+  into record types.
+
+`scripts/audit_repeatability.py` runs the audit N times and reports agreement
+per element and per finding. On the example corpus (four logs, five runs each,
+Gemini and Anthropic heavy tier, 2026-10-10):
+
+| | Result |
+|---|---|
+| Runs mapping at least 85% of records | 40 of 40 (lowest 99.2%) |
+| Findings with the same state in at least 4 of 5 runs | 137 of 144 |
+| Findings with the same state in all 5 runs | 122 of 144 |
+| Majority finding the same on both providers | 66 of 72 |
+
+On the two syslog samples `timestamp`, `host`, `source_component` and
+`message` had the same signature in all 20 runs, and 97% to 100% of records
+had their message broken down. `process_id` matched in 18 of 20: in two runs a
+model also mapped a process id it found inside a message.
+
+The record count behind a finding moves more than its state does, because
+which field is mapped to `event_type`, `target_object` or `message` varies.
+When a finding matters, run the audit twice and compare the element
+signatures.
+
 ## Why RE2
 
 Patterns here are written by a model and run over files of a hundred thousand
@@ -139,16 +210,16 @@ reason sent back.
   traces (including the unindented `java.x.SomeException: ...` line that
   opens one) are joined to the record above and counted, not parsed.
 - **Which field is the event type is a judgment, and it varies.** Two audits
-  of the same file can map different fields to an element, and the finding
-  moves with the mapping. Once a mapping is right, keep the extraction spec
-  and re-check with `assess`.
+  of the same file can map different fields to an element, and the record
+  count behind a finding moves with the mapping, more often than the finding
+  itself does.
 - **A conditional requirement is counted against every record.** "Where
   applicable" is not interpreted; the report lists the record types that
   fall short and leaves applicability to the reader.
-- **Record counts for a requirement are an upper bound when it needs several
-  elements.** The pass keeps per-field counts, not per-record combinations, so
-  the smallest field count is reported as the number of records carrying all
-  of them.
+- **This is a first look at a log, not a controlled audit.** Each run maps the
+  log afresh. Measured over 40 runs on two providers, the finding for a
+  requirement was the same in at least 4 of 5 runs 96% of the time; see
+  *Repeatability* below. Nothing carries a mapping from one run to the next.
 - **Timestamps without a year** (classic syslog) parse and are flagged
   `year_absent`; their plausibility is not checked.
 - **`allowed_values`** is checked exactly for fields with up to 200 distinct
@@ -156,5 +227,8 @@ reason sent back.
 - **Sample lines go to the model provider selected with `use`.** If the log
   holds credentials or personal data, so may the sample. Lines are cut at 1,000
   characters; nothing is masked.
+- **Envelope detection is syslog only.** Other fixed headers (a web server's
+  combined log format, for instance) are left to the model like any other log.
+- **A PRI value is captured, not decoded** into facility and severity.
 - Splunk and Elastic output is unexecuted, as above. `TIME_PREFIX` is not set.
 - Requires `google-re2` (the `plugins-log-analysis` extra).

@@ -314,7 +314,7 @@ is keyed by tier, an `AnthropicClient` under `"heavy"` would evict Gemini Pro
 and route every heavy plugin to a vendor nobody chose. A test enforces it.
 
 Landed: `anthropic.json` / `openai.json` with both tiers
-(`claude-sonnet-5`/`claude-opus-5`, `gpt-5.6-terra`/`gpt-5.6-sol`);
+(`claude-sonnet-5-5`/`claude-opus-5-5`, `gpt-5.6-terra`/`gpt-5.6-sol`);
 `factory.py` with `PROVIDER_CLIENTS` and the first Python reader of
 `EVENTMILL_LLM_PROVIDERS`; `AnthropicClient` and `OpenAIClient` (text path);
 `probe()` on the protocol and all three clients; the `providers` and
@@ -590,6 +590,8 @@ nothing.
 ### Stage 7 — a specialist model as its own provider — **DONE 2026-09-14** (`llm_5`)
 
 **Decision: Daybreak Red and Blue are two providers, not two tiers of one.**
+
+*`openai_daybreak_red` was removed on 2026-10-10 (`docs/change_log/2026-10-10-daybreak-red-removed.md`). This stage is kept as written; `openai_daybreak_blue` is the one Daybreak provider left.*
 
 The three-vendor shape held, so this adds to it rather than reshaping it. Each
 colour is an ordinary provider with its own manifest, its own model declared

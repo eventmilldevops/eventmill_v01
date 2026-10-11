@@ -248,14 +248,19 @@ against.
 |---|---|
 | Record elements (closed) | `timestamp`, `event_type`, `outcome`, `severity`, `actor_identity`, `source_component`, `host`, `source_address`, `destination_address`, `target_object`, `session_id`, `event_id`, `process_id`, `message`. A requirement no element expresses keeps `elements: []` and an `unmapped_reason`; it is never forced onto a near fit. |
 | Element `value_type` | `timestamp`, `category`, `identity`, `address`, `identifier`, `integer`, `text` |
+| Element entry | `{"element": name, "constraints": {...}}` (required) or `{"any_of": [entry, entry, ...], "label": text}` (one member is enough; at least two members). `any_of` and `label` are reserved keys of an entry. |
 | Element constraints | `timezone_required`, `min_precision` (`second`, `millisecond`, `microsecond`), `allowed_values`. The first two apply to a timestamp only. |
+| Requirement `kind` | `presence`, `prohibition`, `quality`, `event_selection`, `permission`; null when `assessable_from` is `not_assessable_from_sample`. Only `presence` is counted against records. A missing `kind` reads as `presence`. |
 | `assessable_from` | `record_content` (visible inside one record), `record_set` (needs many records), `not_assessable_from_sample` (retention, protection, review: **never reported as met or unmet**) |
 | `obligation` | `must`, `should`, `may`, as the standard words it |
 | `review_status` | `draft_unreviewed` (a model's reading nobody has confirmed), `reviewed`. Set to `reviewed` by a person editing the profile, never by a tool. |
 | `quote_status` | `found`, `quote_not_found`, `not_checked` (no local text to search, or no quote). A flag, never a reason to drop the requirement. |
 | `extracted_by` | `document_read` (the model's read of the whole standard), `sentence_sweep` (a locally extracted obligation sentence the model then classified; its quote is the tool's text). Absent on a hand-written profile. |
 | `statement_coverage.sweep` | `not_needed`, `run`, `failed`, `skipped_time_budget`, `skipped_on_request`, `not_run` |
-| Finding `state` | `observed` (all elements valid in at least 99% of records), `partially_observed`, `not_observed`, `not_assessable_from_sample`, `not_evaluated` (about records, but names no element). **None of these means compliant.** |
+| Finding `state` | `observed` (all elements valid in at least 99% of records), `partially_observed`, `not_observed`, `not_assessable_from_sample`, `not_evaluated` (about records, but its `kind` is not `presence`, or it names no element). **None of these means compliant.** |
+| Run identity | `run.inputs_fingerprint` (same question), `run.outcome_fingerprint` (same conclusion), element `signature` and record-type `line_signature` (same captured values, whatever the field was called). 16 hex characters of a SHA-256. |
+| Envelope `kind` | `syslog_bsd`, `syslog_bsd_iso_time`, `syslog_rfc5424`. The header is parsed by a fixed pattern of the tool's; `envelope` is also the reserved `pattern_id` of the header-only record type. |
+| `depth` | Records split beyond a free-text field: `records_broken_down`, `records_held_as_free_text`, `share`, `shallow_patterns`. |
 | Mapping `status` | `converged`, `stopped_round_limit`, `stopped_time_budget`, `stopped_no_progress`, `stopped_llm_failure`, `assessed_without_model`. Anything but the first and last means findings cover part of the file. |
 | Timestamp `format` | A strptime format, or `iso8601`, `epoch_s`, `epoch_ms`, `epoch_us` |
 | Pattern `kind` | `regex` (RE2, whole-line match, every group named), `json` (fields keyed by dotted path) |

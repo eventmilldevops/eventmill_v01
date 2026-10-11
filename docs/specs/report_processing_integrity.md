@@ -214,7 +214,7 @@ Two things in this step were wrong as written.
 
 **Step 4's native `"medium"` is `gcp_gemini`'s default applied to every
 vendor.** The step justified it as preserving today's behaviour, but the
-manifests disagree: `gcp_gemini`, `openai` and both daybreak ids declare
+manifests disagree: `gcp_gemini`, `openai` and the daybreak id declare
 `medium`, and `anthropic` declares **`high`**. `anthropic.py:71-75` sends no
 effort control when `thinking_level` is `None` and `needs_reasoning` is
 `False`, so Anthropic's own default applies today. Pinning `"medium"` would

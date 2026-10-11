@@ -42,13 +42,12 @@ PROVIDER_CLIENTS: dict[str, tuple[str, str]] = {
     "gcp_gemini": ("framework.llm.clients.gemini", "GeminiClient"),
     "anthropic": ("framework.llm.clients.anthropic", "AnthropicClient"),
     "openai": ("framework.llm.clients.openai", "OpenAIClient"),
-    # Three ids, one class. These reach different models on a different key
-    # from "openai", so they bind, route and are attributed independently —
+    # Two ids, one class. This reaches a different model on a different key
+    # from "openai", so it binds, routes and is attributed independently —
     # but the SDK and the request shape are identical, so there is nothing to
     # subclass. OpenAIClient takes its provider_id per instance for exactly
     # this: every manifest lookup it makes and every response it stamps reads
     # that instead of the class.
-    "openai_daybreak_red": ("framework.llm.clients.openai", "OpenAIClient"),
     "openai_daybreak_blue": ("framework.llm.clients.openai", "OpenAIClient"),
 }
 
@@ -58,12 +57,10 @@ PROVIDER_SECRETS: dict[str, tuple[str, ...]] = {
     "gcp_gemini": ("eventmill-gemini-flash-api", "eventmill-gemini-pro-api"),
     "anthropic": ("eventmill-anthropic-api",),
     "openai": ("eventmill-openai-api",),
-    # Both colours read one secret — they are one credential reaching two
-    # models. Its "anthropic" substring is a storage label from how the secret
-    # was created, not a statement about what it holds: the value is an OpenAI
+    # The secret's "anthropic" substring is a storage label from how it was
+    # created, not a statement about what it holds: the value is an OpenAI
     # key, mounted to the OpenAI transport. Overridable at deploy time via
     # EVENTMILL_SECRET_OPENAI_DAYBREAK, so a rename is config, not code.
-    "openai_daybreak_red": ("eventmill-anthropic-daybreak",),
     "openai_daybreak_blue": ("eventmill-anthropic-daybreak",),
 }
 
@@ -76,7 +73,6 @@ PROVIDER_SDK_INSTALL: dict[str, str] = {
     "gcp_gemini": "eventmill",
     "anthropic": "eventmill[llm-anthropic]",
     "openai": "eventmill[llm-openai]",
-    "openai_daybreak_red": "eventmill[llm-openai]",
     "openai_daybreak_blue": "eventmill[llm-openai]",
 }
 

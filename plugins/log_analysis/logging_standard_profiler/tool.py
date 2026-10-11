@@ -607,6 +607,7 @@ def _counts(requirements: list[dict[str, Any]]) -> dict[str, Any]:
     by_assessable = {key: 0 for key in ps.ASSESSABLE_FROM}
     by_obligation = {key: 0 for key in ps.OBLIGATIONS}
     testable = 0
+    by_kind = {key: 0 for key in ps.KINDS}
     for requirement in requirements:
         assessable = requirement.get("assessable_from")
         if assessable in by_assessable:
@@ -614,13 +615,16 @@ def _counts(requirements: list[dict[str, Any]]) -> dict[str, Any]:
         obligation = requirement.get("obligation")
         if obligation in by_obligation:
             by_obligation[obligation] += 1
-        if assessable in ("record_content", "record_set") and requirement.get(
-            "elements"
-        ):
-            testable += 1
+        kind = requirement.get("kind") or "presence"
+        if assessable in ("record_content", "record_set"):
+            if kind in by_kind:
+                by_kind[kind] += 1
+            if kind == "presence" and requirement.get("elements"):
+                testable += 1
     return {
         "requirements": len(requirements),
         "testable_against_records": testable,
+        "by_kind": by_kind,
         "by_assessable_from": by_assessable,
         "by_obligation": by_obligation,
     }
@@ -628,8 +632,15 @@ def _counts(requirements: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _counts_line(counts: dict[str, Any]) -> str:
     by = counts.get("by_assessable_from") or {}
-    return (
+    kinds = counts.get("by_kind") or {}
+    others = ", ".join(
+        f"{count} {kind}" for kind, count in kinds.items() if count and kind != "presence"
+    )
+    line = (
         f"{counts.get('requirements', 0)} requirements: "
         f"{counts.get('testable_against_records', 0)} testable against log records, "
         f"{by.get('not_assessable_from_sample', 0)} not assessable from a log sample."
     )
+    if others:
+        line += f" About records but not countable: {others}."
+    return line

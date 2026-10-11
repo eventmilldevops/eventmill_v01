@@ -12,6 +12,7 @@ it dropped, so one bad requirement costs itself and not the run.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,14 @@ PROFILE_VERSION = "1.0"
 
 ASSESSABLE_FROM = ("record_content", "record_set", "not_assessable_from_sample")
 OBLIGATIONS = ("must", "should", "may")
+# What sort of rule a requirement about records is. Only ``presence`` can be
+# answered by counting the records that carry an element; the auditor lists
+# the others without a count.
+KINDS = ("presence", "prohibition", "quality", "event_selection", "permission")
+_PROHIBITION = re.compile(
+    r"\b(?:shall|must|should|may|will|can)\s+not\b|\bnever\b|\bprohibited\b",
+    re.IGNORECASE,
+)
 REVIEW_STATUSES = ("draft_unreviewed", "reviewed")
 QUOTE_STATUSES = ("found", "quote_not_found", "not_checked")
 PRECISIONS = ("second", "millisecond", "microsecond")
@@ -71,6 +80,35 @@ def _normalise_constraints(raw: Any, notes: list[str], where: str) -> dict[str, 
     return kept
 
 
+def _normalise_element(
+    entry: Any,
+    known: dict[str, Any],
+    notes: list[str],
+    where: str,
+    dropped: list[str],
+) -> dict[str, Any] | None:
+    """One ``{"element": name}`` entry, or None when it names nothing usable."""
+    if isinstance(entry, str):
+        entry = {"element": entry}
+    if not isinstance(entry, dict):
+        notes.append(f"{where}: an element entry was not an object and was dropped")
+        return None
+    name = _text(entry.get("element"), 60)
+    if name not in known:
+        dropped.append(name or "<empty>")
+        return None
+    constraints = _normalise_constraints(entry.get("constraints"), notes, where)
+    if constraints and known[name].get("value_type") != "timestamp":
+        for key in ("timezone_required", "min_precision"):
+            if key in constraints:
+                notes.append(f"{where}: {key} only applies to a timestamp, dropped")
+                constraints.pop(key)
+    item: dict[str, Any] = {"element": name}
+    if constraints:
+        item["constraints"] = constraints
+    return item
+
+
 def normalise_requirement(
     raw: Any, catalogue: dict[str, Any], index: int
 ) -> tuple[dict[str, Any] | None, list[str]]:
@@ -110,27 +148,35 @@ def normalise_requirement(
         raw_elements = []
     seen: set[str] = set()
     for entry in raw_elements:
-        if isinstance(entry, str):
-            entry = {"element": entry}
-        if not isinstance(entry, dict):
-            notes.append(f"{where}: an element entry was not an object and was dropped")
+        if isinstance(entry, dict) and "any_of" in entry:
+            raw_members = entry.get("any_of")
+            if not isinstance(raw_members, list):
+                notes.append(f"{where}: any_of was not a list and was dropped")
+                continue
+            members: list[dict[str, Any]] = []
+            for member in raw_members:
+                item = _normalise_element(member, known, notes, where, dropped)
+                if item and all(m["element"] != item["element"] for m in members):
+                    members.append(item)
+            if len(members) >= 2:
+                group: dict[str, Any] = {"any_of": members}
+                label = _text(entry.get("label"), 60)
+                if label:
+                    group["label"] = label
+                elements.append(group)
+                continue
+            if not members:
+                continue
+            notes.append(
+                f"{where}: an any_of group had one usable element, "
+                f"'{members[0]['element']}', kept as a required element"
+            )
+            item = members[0]
+        else:
+            item = _normalise_element(entry, known, notes, where, dropped)
+        if item is None or item["element"] in seen:
             continue
-        name = _text(entry.get("element"), 60)
-        if name not in known:
-            dropped.append(name or "<empty>")
-            continue
-        if name in seen:
-            continue
-        seen.add(name)
-        constraints = _normalise_constraints(entry.get("constraints"), notes, where)
-        if constraints and known[name].get("value_type") != "timestamp":
-            for key in ("timezone_required", "min_precision"):
-                if key in constraints:
-                    notes.append(f"{where}: {key} only applies to a timestamp, dropped")
-                    constraints.pop(key)
-        item: dict[str, Any] = {"element": name}
-        if constraints:
-            item["constraints"] = constraints
+        seen.add(item["element"])
         elements.append(item)
 
     unmapped_reason = _text(raw.get("unmapped_reason"), 400) or None
@@ -154,6 +200,22 @@ def normalise_requirement(
             "elements kept for reference and not tested"
         )
 
+    kind: str | None = None
+    if assessable != "not_assessable_from_sample":
+        kind = _text(raw.get("kind"), 30).lower()
+        if kind not in KINDS:
+            if kind:
+                notes.append(f"{where}: kind '{kind}' not recognised, set to 'presence'")
+            kind = "presence"
+        # A sentence worded as a ban is never counted as presence, whatever
+        # the model called it: a wrong label here would turn the absence of
+        # the banned thing into a reported shortfall.
+        if kind == "presence" and _PROHIBITION.search(quote):
+            notes.append(
+                f"{where}: worded as a prohibition, kind set to 'prohibition'"
+            )
+            kind = "prohibition"
+
     page = raw.get("page")
     if isinstance(page, bool) or not isinstance(page, int):
         try:
@@ -172,6 +234,7 @@ def normalise_requirement(
             "page": page,
             "obligation": obligation,
             "assessable_from": assessable,
+            "kind": kind,
             "summary": summary,
             "quote": quote,
             "quote_status": quote_status,
@@ -259,12 +322,26 @@ def validate_profile(profile: Any) -> dict[str, list[str]]:
             errors.append(f"requirement {rid}: elements must be a list")
             elements = []
         for entry in elements:
-            name = entry.get("element") if isinstance(entry, dict) else None
-            if name not in catalogue["elements"]:
-                errors.append(
-                    f"requirement {rid}: element {name!r} is not in the catalogue"
-                )
+            members = [entry]
+            if isinstance(entry, dict) and "any_of" in entry:
+                members = entry["any_of"]
+                if not isinstance(members, list) or len(members) < 2:
+                    errors.append(
+                        f"requirement {rid}: any_of must list at least two elements"
+                    )
+                    continue
+            for member in members:
+                name = member.get("element") if isinstance(member, dict) else None
+                if name not in catalogue["elements"]:
+                    errors.append(
+                        f"requirement {rid}: element {name!r} is not in the catalogue"
+                    )
+        kind = raw.get("kind")
+        if kind is not None and kind not in KINDS:
+            errors.append(f"requirement {rid}: kind must be one of {list(KINDS)}")
         if raw.get("assessable_from") in ("record_content", "record_set"):
+            if kind not in (None, "presence"):
+                continue
             if elements:
                 testable += 1
             else:

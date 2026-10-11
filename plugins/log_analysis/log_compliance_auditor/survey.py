@@ -32,6 +32,114 @@ _CONTINUATION = re.compile(
     r"|(?:[A-Za-z_$][\w$]*\.)+[A-Z][\w$]*(?:Exception|Error|Throwable)\b)"
 )
 _KV_TOKEN = re.compile(r"^([A-Za-z_][\w.\-]*)=(.*)$")
+
+# Syslog envelopes this tool recognises itself. The header is fixed by a
+# specification; the message is whatever the program chose to write, so only
+# the header is parsed here and messages are compared within one program.
+# ``prefix`` takes the program as ``{program}`` and ends where the message
+# starts. ``fields`` maps each header group to a catalogue element.
+_BSD_TAIL = r" (?P<host>\S+) (?P<program>{program})(?:\[(?P<pid>\d+)\])?: ?"
+ENVELOPES: tuple[dict[str, Any], ...] = (
+    {
+        "kind": "syslog_rfc5424",
+        "describes": "RFC 5424 syslog: <PRI>VERSION TIMESTAMP HOST APP PROCID MSGID SD MSG",
+        "prefix": (
+            r"^<(?P<pri>\d{{1,3}})>(?P<version>\d{{1,2}}) (?P<timestamp>\S+) (?P<host>\S+) "
+            r"(?P<program>{program}) (?P<pid>\S+) (?P<msgid>\S+) "
+            r"(?P<structured_data>-|\[.*\]) ?"
+        ),
+        "program": r"\S+",
+        "fields": {
+            "pri": {"element": None},
+            "version": {"element": None},
+            "timestamp": {"element": "timestamp", "format": "iso8601"},
+            "host": {"element": "host"},
+            "program": {"element": "source_component"},
+            "pid": {"element": None},
+            "msgid": {"element": "event_type"},
+            "structured_data": {"element": None},
+            "message": {"element": "message"},
+        },
+    },
+    {
+        "kind": "syslog_bsd",
+        "describes": "BSD syslog (RFC 3164): [<PRI>]Mmm dd hh:mm:ss HOST PROGRAM[PID]: MSG",
+        "prefix": (
+            r"^(?:<(?P<pri>\d{{1,3}})>)?"
+            r"(?P<timestamp>[A-Z][a-z]{{2}} [ \d]\d \d{{2}}:\d{{2}}:\d{{2}})"
+            + _BSD_TAIL
+        ),
+        "program": r"[^\s\[:]+",
+        "fields": {
+            "pri": {"element": None},
+            "timestamp": {"element": "timestamp", "format": "%b %d %H:%M:%S"},
+            "host": {"element": "host"},
+            "program": {"element": "source_component"},
+            "pid": {"element": "process_id"},
+            "message": {"element": "message"},
+        },
+    },
+    {
+        "kind": "syslog_bsd_iso_time",
+        "describes": "BSD-style syslog with an ISO 8601 timestamp: TIMESTAMP HOST PROGRAM[PID]: MSG",
+        "prefix": (
+            r"^(?:<(?P<pri>\d{{1,3}})>)?"
+            r"(?P<timestamp>\d{{4}}-\d{{2}}-\d{{2}}T[\d:.,]+(?:Z|[+-]\d{{2}}:?\d{{2}})?)"
+            + _BSD_TAIL
+        ),
+        "program": r"[^\s\[:]+",
+        "fields": {
+            "pri": {"element": None},
+            "timestamp": {"element": "timestamp", "format": "iso8601"},
+            "host": {"element": "host"},
+            "program": {"element": "source_component"},
+            "pid": {"element": "process_id"},
+            "message": {"element": "message"},
+        },
+    },
+)
+# Share of probed records that must fit an envelope for it to be adopted.
+ENVELOPE_SHARE = 0.9
+ENVELOPE_PROBE_RECORDS = 2000
+MAX_PROGRAMS_LISTED = 60
+
+
+def envelope_regex(envelope: dict[str, Any], program: str | None = None) -> str:
+    """The envelope's whole-line regex; ``program`` pins it to one program."""
+    name = re.escape(program) if program is not None else envelope["program"]
+    return envelope["prefix"].format(program=name) + r"(?P<message>.*)$"
+
+
+def envelope_by_kind(kind: str | None) -> dict[str, Any] | None:
+    return next((e for e in ENVELOPES if e["kind"] == kind), None)
+
+
+def detect_envelope(
+    path: Path, max_records: int | None = None
+) -> dict[str, Any] | None:
+    """The syslog envelope most records fit, or None.
+
+    Decided on the first records only; ``survey_file`` then counts how many
+    records of the whole file fit it.
+    """
+    compiled = [(e, re.compile(envelope_regex(e))) for e in ENVELOPES]
+    hits = [0] * len(compiled)
+    probed = 0
+    limit = min(max_records or ENVELOPE_PROBE_RECORDS, ENVELOPE_PROBE_RECORDS)
+    for _, line, _ in iter_records(path, limit):
+        probed += 1
+        for index, (_, matcher) in enumerate(compiled):
+            if matcher.match(line):
+                hits[index] += 1
+                break
+    if not probed:
+        return None
+    best = max(range(len(compiled)), key=lambda i: hits[i])
+    if hits[best] / probed < ENVELOPE_SHARE:
+        return None
+    return compiled[best][0]
+
+
 _HAS_DIGIT = re.compile(r"\d")
 
 
@@ -123,8 +231,9 @@ def mask_tokens(line: str) -> list[str]:
 class Clusterer:
     """Drain-style template clustering: same length, similar tokens."""
 
-    def __init__(self, sample_size: int = 12) -> None:
+    def __init__(self, sample_size: int = 12, prefix: str = "c") -> None:
         self.sample_size = max(2, sample_size)
+        self.prefix = prefix
         self.clusters: dict[str, dict[str, Any]] = {}
         self._by_length: dict[int, list[dict[str, Any]]] = {}
         self._json_keys: dict[tuple[str, ...], str] = {}
@@ -169,7 +278,7 @@ class Clusterer:
                     if key not in self.clusters:
                         self._new(key, "overflow", [])
                 else:
-                    key = f"c{len(self.clusters) + 1}"
+                    key = f"{self.prefix}{len(self.clusters) + 1}"
                     self._new(key, "json", list(keys))
                 self._json_keys[keys] = key
             self._note(self.clusters[key], line_no, line)
@@ -197,7 +306,7 @@ class Clusterer:
                 self._new(OVERFLOW_KEY, "overflow", [])
             self._note(self.clusters[OVERFLOW_KEY], line_no, line)
             return OVERFLOW_KEY
-        key = f"c{len(self.clusters) + 1}"
+        key = f"{self.prefix}{len(self.clusters) + 1}"
         cluster = self._new(key, "text", tokens)
         bucket.append(cluster)
         self._note(cluster, line_no, line)
@@ -219,11 +328,116 @@ def detect_container(shares: dict[str, float]) -> str:
     return "free_text"
 
 
+class _ProgramClusters:
+    """Clusters records by message within each program of a syslog envelope.
+
+    A record that does not fit the envelope is clustered on its whole line.
+    Each sample keeps the whole line and, for an envelope record, the message.
+    """
+
+    def __init__(self, envelope: dict[str, Any] | None, sample_size: int) -> None:
+        self.envelope = envelope
+        self.matcher = re.compile(envelope_regex(envelope)) if envelope else None
+        self.sample_size = sample_size
+        self.other = Clusterer(sample_size=sample_size)
+        self.by_program: dict[str, Clusterer] = {}
+        self.program_records: dict[str, int] = {}
+        self.fitted = 0
+        self.with_pri = 0
+        self.with_pid = 0
+        self._lines: dict[int, str] = {}
+
+    def add(self, line_no: int, line: str) -> dict[str, Any]:
+        match = self.matcher.match(line) if self.matcher else None
+        if match is None:
+            return self.other.clusters[self.other.add(line_no, line)]
+        self.fitted += 1
+        groups = match.groupdict()
+        self.with_pri += 1 if groups.get("pri") else 0
+        self.with_pid += 1 if groups.get("pid") not in (None, "-") else 0
+        program = groups["program"]
+        self.program_records[program] = self.program_records.get(program, 0) + 1
+        clusterer = self.by_program.get(program)
+        if clusterer is None:
+            clusterer = Clusterer(
+                sample_size=self.sample_size, prefix=f"p{len(self.by_program) + 1}m"
+            )
+            self.by_program[program] = clusterer
+        cluster = clusterer.clusters[clusterer.add(line_no, groups["message"])]
+        cluster["program"] = program
+        self._lines[line_no] = line
+        return cluster
+
+    def ranked(self, records: int) -> list[dict[str, Any]]:
+        raw = list(self.other.clusters.values())
+        for clusterer in self.by_program.values():
+            raw.extend(clusterer.clusters.values())
+        raw.sort(key=lambda c: (-c["count"], c["cluster_id"]))
+        out = []
+        for cluster in raw:
+            program = cluster.get("program")
+            samples = []
+            for number, text in cluster["samples"]:
+                if program is None:
+                    samples.append({"line": number, "text": text})
+                else:
+                    samples.append(
+                        {"line": number, "text": self._lines[number], "message": text}
+                    )
+            out.append(
+                {
+                    "cluster_id": cluster["cluster_id"],
+                    "kind": cluster["kind"],
+                    "program": program,
+                    "count": cluster["count"],
+                    "share": round(cluster["count"] / records, 4) if records else 0.0,
+                    "template": (
+                        " ".join(cluster["template"])
+                        if cluster["kind"] == "text"
+                        else ", ".join(cluster["template"])
+                    )[:400],
+                    "first_line": cluster["first_line"],
+                    "samples": samples,
+                }
+            )
+        # Only sampled lines are needed again.
+        keep = {s["line"] for c in out for s in c["samples"]}
+        self._lines = {n: t for n, t in self._lines.items() if n in keep}
+        return out
+
+    def describe(self, records: int) -> dict[str, Any] | None:
+        if not self.envelope:
+            return None
+        programs = sorted(self.program_records.items(), key=lambda kv: (-kv[1], kv[0]))
+        return {
+            "kind": self.envelope["kind"],
+            "describes": self.envelope["describes"],
+            "records": self.fitted,
+            "share": round(self.fitted / records, 4) if records else 0.0,
+            "with_pri": self.with_pri,
+            "with_pid": self.with_pid,
+            "program_count": len(programs),
+            "programs": [
+                {
+                    "program": name,
+                    "records": count,
+                    "message_shapes": len(self.by_program[name].clusters),
+                }
+                for name, count in programs[:MAX_PROGRAMS_LISTED]
+            ],
+        }
+
+
 def survey_file(
     path: Path, max_records: int | None = None, sample_size: int = 12
 ) -> dict[str, Any]:
-    """One pass over the file: counts, container, clusters and their samples."""
-    clusterer = Clusterer(sample_size=sample_size)
+    """One pass over the file: counts, container, clusters and their samples.
+
+    When most records fit a syslog envelope, clustering is done on the message
+    and separately for each program, and ``envelope`` describes the fit.
+    """
+    envelope = detect_envelope(path, max_records)
+    clusterer = _ProgramClusters(envelope, sample_size)
     records = 0
     continuation = 0
     json_records = 0
@@ -233,8 +447,8 @@ def survey_file(
         records += 1
         continuation += extra
         longest = max(longest, len(line))
-        key = clusterer.add(line_no, line)
-        if clusterer.clusters[key]["kind"] == "json":
+        cluster = clusterer.add(line_no, line)
+        if cluster["kind"] == "json":
             json_records += 1
         elif sum(1 for token in line.split() if _KV_TOKEN.match(token)) >= 3:
             kv_records += 1
@@ -242,26 +456,7 @@ def survey_file(
         "json": json_records / records if records else 0.0,
         "key_value": kv_records / records if records else 0.0,
     }
-    clusters = []
-    for cluster in clusterer.ranked():
-        clusters.append(
-            {
-                "cluster_id": cluster["cluster_id"],
-                "kind": cluster["kind"],
-                "count": cluster["count"],
-                "share": round(cluster["count"] / records, 4) if records else 0.0,
-                "template": (
-                    " ".join(cluster["template"])
-                    if cluster["kind"] == "text"
-                    else ", ".join(cluster["template"])
-                )[:400],
-                "first_line": cluster["first_line"],
-                "samples": [
-                    {"line": number, "text": text}
-                    for number, text in cluster["samples"]
-                ],
-            }
-        )
+    clusters = clusterer.ranked(records)
     return {
         "records": records,
         "continuation_lines": continuation,
@@ -269,26 +464,27 @@ def survey_file(
         "scan": "full" if max_records is None else f"first {max_records} records",
         "container": detect_container(shares),
         "container_shares": {k: round(v, 4) for k, v in shares.items()},
+        "envelope": clusterer.describe(records),
         "cluster_count": len(clusters),
         "clusters": clusters,
     }
 
 
 def cluster_lines(
-    lines: list[tuple[int, str]], sample_size: int = 8
+    lines: list[tuple[int, str]],
+    sample_size: int = 8,
+    envelope: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Cluster an in-memory list of lines; used on what no pattern matched."""
-    clusterer = Clusterer(sample_size=sample_size)
+    """Cluster an in-memory list of lines; used on what was not broken down.
+
+    With an envelope, lines are clustered by message within each program.
+    """
+    clusterer = _ProgramClusters(envelope, sample_size)
     for line_no, line in lines:
         clusterer.add(line_no, line)
     return [
-        {
-            "cluster_id": cluster["cluster_id"],
-            "kind": cluster["kind"],
-            "count": cluster["count"],
-            "samples": [{"line": n, "text": t} for n, t in cluster["samples"]],
-        }
-        for cluster in clusterer.ranked()
+        {k: c[k] for k in ("cluster_id", "kind", "program", "count", "samples")}
+        for c in clusterer.ranked(len(lines))
     ]
 
 
@@ -298,7 +494,8 @@ def pick_samples(
     """Choose which lines a model is shown, largest clusters first.
 
     Returns the chosen groups and an exact account of what was chosen, because
-    these lines leave the container.
+    these lines leave the container. For a cluster inside a syslog envelope
+    only the message is shown: the header is already parsed.
     """
     chosen: list[dict[str, Any]] = []
     lines_used = 0
@@ -310,7 +507,7 @@ def pick_samples(
         take = min(per_cluster, max_lines - lines_used, len(cluster["samples"]))
         texts: list[str] = []
         for sample in cluster["samples"][:take]:
-            text = sample["text"]
+            text = sample.get("message", sample["text"])
             if len(text) > MAX_LINE_CHARS:
                 text = text[:MAX_LINE_CHARS]
                 truncated += 1
@@ -325,6 +522,7 @@ def pick_samples(
             {
                 "cluster_id": cluster["cluster_id"],
                 "kind": cluster.get("kind", "text"),
+                "program": cluster.get("program"),
                 "count": cluster["count"],
                 "lines": texts,
             }

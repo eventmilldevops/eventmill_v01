@@ -132,7 +132,7 @@ Substitutions:
 |---|---|---|
 | `_REGION` | **none — required** | Cloud Run region. Must match the region you provisioned in; the build fails fast if unset rather than guessing. |
 | `_BUCKET_PREFIX` | `${PROJECT_ID}-eventmill` | GCS bucket prefix — must match provisioned buckets |
-| `_LLM_PROVIDERS` | `gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue` | Space-separated provider IDs. Set to `gcp_gemini anthropic openai` for the three-provider setup in this guide. |
+| `_LLM_PROVIDERS` | `gcp_gemini anthropic openai openai_daybreak_blue` | Space-separated provider IDs. Set to `gcp_gemini anthropic openai` for the three-provider setup in this guide. |
 
 Cloud Build cannot read `~/.eventmill/deploy.env`, so `_REGION` has to be passed
 explicitly here even though the shell scripts pick it up automatically. When
@@ -397,9 +397,9 @@ export EVENTMILL_LLM_PROVIDERS="gcp_gemini anthropic openai"
 ```
 
 If an older config lists only `gcp_gemini`, update it or the other providers will
-not bind. The scripts' built-in default also includes `openai_daybreak_red` and
-`openai_daybreak_blue`; those are optional OpenAI profiles using a separate
-credential, not requirements for the standard `openai` provider. Cloud Build
+not bind. The scripts' built-in default also includes
+`openai_daybreak_blue`; that is an optional OpenAI profile using a separate
+credential, not a requirement for the standard `openai` provider. Cloud Build
 uses `_LLM_PROVIDERS` instead of reading this file.
 
 ```bash
@@ -545,7 +545,7 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | `EVENTMILL_BUCKET_PREFIX` | No | Bucket naming prefix — must match `provision-gcp-project.sh` (default: `${GOOGLE_CLOUD_PROJECT}-eventmill`) |
 | `CLOUD_RUN_REGION` | **Yes** | Deploy region. No default — must match the region you provisioned in, because the Artifact Registry image path embeds it. Every script refuses to guess. |
 | `GCS_LOG_BUCKET` | No | Legacy single-bucket override — leave empty for new deployments |
-| `EVENTMILL_LLM_PROVIDERS` | No | Space-separated provider IDs. Script default: `gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue`. This guide explicitly selects the first three. Missing or `placeholder` keys stay dormant; unknown IDs are refused. |
+| `EVENTMILL_LLM_PROVIDERS` | No | Space-separated provider IDs. Script default: `gcp_gemini anthropic openai openai_daybreak_blue`. This guide explicitly selects the first three. Missing or `placeholder` keys stay dormant; unknown IDs are refused. |
 | `EVENTMILL_SECRET_GEMINI_FLASH` | No | Secret Manager name for Flash API key (default: `eventmill-gemini-flash-api`) |
 | `EVENTMILL_SECRET_GEMINI_PRO` | No | Secret Manager name for Pro API key (default: `eventmill-gemini-pro-api`) |
 | `EVENTMILL_SECRET_ANTHROPIC` | No | Secret Manager name for the Anthropic API key (default: `eventmill-anthropic-api`) |
@@ -562,7 +562,7 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | `GEMINI_PRO_API_KEY` | Gemini Pro API key — heavy tier (injected from Secret Manager) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (injected from Secret Manager; `placeholder` until adopted) |
 | `OPENAI_API_KEY` | OpenAI API key (injected from Secret Manager; `placeholder` until adopted) |
-| `EVENTMILL_LLM_PROVIDERS` | Providers this deployment may bind; script defaults include the three standard providers and two optional Daybreak profiles. Unkeyed providers stay dormant. |
+| `EVENTMILL_LLM_PROVIDERS` | Providers this deployment may bind; script defaults include the three standard providers and one optional Daybreak profile. Unkeyed providers stay dormant. |
 | `TTYD_USERNAME` | ttyd basic auth username |
 | `TTYD_PASSWORD` | ttyd basic auth password |
 | `EVENTMILL_BUCKET_PREFIX` | Bucket prefix for pillar-based storage resolution |

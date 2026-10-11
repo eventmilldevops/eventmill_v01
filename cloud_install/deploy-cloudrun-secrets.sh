@@ -124,7 +124,7 @@ AR_REPO="${EVENTMILL_AR_REPO:-eventmill}"
 IMAGE_NAME="${EVENTMILL_IMAGE_NAME:-${SERVICE_NAME}}"
 MIN_INSTANCES="${CLOUD_RUN_MIN_INSTANCES:-0}"
 MAX_INSTANCES="${CLOUD_RUN_MAX_INSTANCES:-3}"
-# 0 leaves the Daybreak secret unmounted and drops both Daybreak providers from
+# 0 leaves the Daybreak secret unmounted and drops the Daybreak provider from
 # the default provider list. The secret need not exist in that case.
 MOUNT_DAYBREAK="${EVENTMILL_MOUNT_DAYBREAK:-1}"
 
@@ -140,8 +140,7 @@ SECRET_GEMINI_FLASH="${EVENTMILL_SECRET_GEMINI_FLASH:-eventmill-gemini-flash-api
 SECRET_GEMINI_PRO="${EVENTMILL_SECRET_GEMINI_PRO:-eventmill-gemini-pro-api}"
 SECRET_ANTHROPIC="${EVENTMILL_SECRET_ANTHROPIC:-eventmill-anthropic-api}"
 SECRET_OPENAI="${EVENTMILL_SECRET_OPENAI:-eventmill-openai-api}"
-# One secret, two providers. openai_daybreak_red and openai_daybreak_blue are
-# one credential reaching two models, so they share this. The name's
+# The key openai_daybreak_blue reads. The name's
 # "anthropic" substring is a storage label from how the secret was created; it
 # holds an OpenAI key and is mounted to the OpenAI transport. Override the name
 # here rather than correcting it in code if that is ever renamed.
@@ -163,7 +162,7 @@ SECRET_TTYD_CRED="${EVENTMILL_SECRET_TTYD_CRED:-eventmill-ttyd-cred}"
 # already where the operator's real decision lives, and this variable stops
 # being a second switch that has to agree with it.
 if [ "${MOUNT_DAYBREAK}" = "1" ]; then
-    LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue}"
+    LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_blue}"
 else
     LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai}"
 fi
@@ -291,7 +290,7 @@ LLM_SECRETS=(
 for _provider in ${LLM_PROVIDERS}; do
     case "${_provider}" in
         gcp_gemini|anthropic|openai) ;;
-        openai_daybreak_red|openai_daybreak_blue)
+        openai_daybreak_blue)
             if [ "${MOUNT_DAYBREAK}" != "1" ]; then
                 echo "ERROR: EVENTMILL_LLM_PROVIDERS names '${_provider}', but"
                 echo "       EVENTMILL_MOUNT_DAYBREAK=0 leaves its key unmounted."
@@ -300,7 +299,7 @@ for _provider in ${LLM_PROVIDERS}; do
         *)
             echo "ERROR: unknown provider '${_provider}' in EVENTMILL_LLM_PROVIDERS."
             echo "       Known: gcp_gemini anthropic openai"
-            echo "              openai_daybreak_red openai_daybreak_blue"
+            echo "              openai_daybreak_blue"
             echo ""
             echo "  Refused rather than ignored: a typo here would deploy with"
             echo "  that provider silently absent, which looks like a working"

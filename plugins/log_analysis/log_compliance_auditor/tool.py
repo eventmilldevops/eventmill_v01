@@ -64,6 +64,7 @@ az = _load_sibling("assessment.py", "log_compliance_auditor_assessment")
 rn = _load_sibling("renderers.py", "log_compliance_auditor_renderers")
 
 TOOL_NAME = "log_compliance_auditor"
+PLUGIN_VERSION = "0.4.0"
 ACTIONS = ("survey", "audit", "resume", "assess")
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 # The plugin's limit is 600 s. Stop starting model calls well before it, so a
@@ -160,6 +161,67 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _fingerprint(parts: dict[str, Any]) -> str:
+    body = json.dumps(parts, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(body).hexdigest()[:16]
+
+
+def _run_record(
+    log_info: dict[str, Any],
+    profile_path: Path,
+    profile: dict[str, Any],
+    state: dict[str, Any],
+    assessment: dict[str, Any],
+    baseline: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """What this run was, and what it concluded, each reduced to a fingerprint.
+
+    Two runs with the same ``inputs_fingerprint`` were asked the same question;
+    if their ``outcome_fingerprint`` differs, the model is what varied.
+    """
+    calls = [c for c in state.get("calls", []) if c.get("ok")]
+    inputs = {
+        "log_sha256": log_info["sha256"],
+        "profile_sha256": _sha256(profile_path),
+        "profile_review_status": profile.get("review_status"),
+        "catalogue_version": (profile.get("catalogue") or {}).get("catalogue_version"),
+        "baseline_sha256": (baseline or {}).get("sha256"),
+        "plugin_version": PLUGIN_VERSION,
+        "prompt_version": ml.PROMPT_VERSION,
+        "settings": {
+            k: state["settings"].get(k)
+            for k in (
+                "target_coverage",
+                "target_pass_rate",
+                "target_depth",
+                "sample_lines",
+                "thinking_level",
+            )
+        },
+        "provider_ids": sorted({str(c.get("provider_id")) for c in calls}),
+        "model_versions": sorted(
+            {str(c.get("model_version") or c.get("model_used")) for c in calls}
+        ),
+    }
+    outcome = {
+        "records": assessment["records"],
+        "records_mapped": assessment["records_mapped"],
+        "elements": {
+            name: entry["signature"] for name, entry in assessment["elements"].items()
+        },
+        "findings": {
+            f["requirement_id"]: [f["state"], f.get("records_with_all_elements")]
+            for f in assessment["findings"]
+        },
+    }
+    return {
+        **inputs,
+        "split_signature": assessment.get("split_signature"),
+        "inputs_fingerprint": _fingerprint(inputs),
+        "outcome_fingerprint": _fingerprint(outcome),
+    }
+
+
 def _patterns_from_document(document: Any) -> tuple[list[Any], dict[str, Any] | None]:
     """Raw patterns, and the saved state if there is one, from a prior output.
 
@@ -206,6 +268,9 @@ def _patterns_from_document(document: Any) -> tuple[list[Any], dict[str, Any] | 
                             "regex",
                             "requires",
                             "describes",
+                            "envelope",
+                            "program",
+                            "message_regex",
                         )
                     },
                     "fields": fields,
@@ -219,7 +284,11 @@ class LogComplianceAuditor:
     """Map a log's record elements and report them against a requirement profile."""
 
     def metadata(self) -> dict[str, Any]:
-        return {"tool_name": TOOL_NAME, "version": "0.1.0", "pillar": "log_analysis"}
+        return {
+            "tool_name": TOOL_NAME,
+            "version": PLUGIN_VERSION,
+            "pillar": "log_analysis",
+        }
 
     def validate_inputs(self, payload: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []
@@ -391,6 +460,7 @@ class LogComplianceAuditor:
             )
         catalogue = profile["catalogue"]
         wanted = az.wanted_elements(profile)
+        value_elements = az.constrained_value_elements(profile)
 
         llm = getattr(context, "llm_query", None) if context else None
         if action in ("audit", "resume") and llm is None:
@@ -429,7 +499,7 @@ class LogComplianceAuditor:
                 )
                 notes.extend(pattern_notes)
                 if pattern is not None:
-                    prior_patterns.append(pattern)
+                    prior_patterns.append(ml.restore_flags(pattern, raw))
             if not prior_patterns and action == "assess":
                 return ToolResult(
                     ok=False,
@@ -493,9 +563,12 @@ class LogComplianceAuditor:
             )
 
         if action == "assess":
-            test = ml.run_patterns(log_path, prior_patterns, sv, vd, max_records)
+            test = ml.run_patterns(
+                log_path, prior_patterns, sv, vd, max_records, value_elements
+            )
             state["patterns"] = ml.order_patterns(prior_patterns)
-            state["test"] = {k: v for k, v in test.items() if k != "residue"}
+            state["test"] = ml._strip_test(test)
+            state["depth"] = ml.depth(test, prior_patterns)
             state["_residue"] = test["residue"]
             state["status"] = "assessed_without_model"
             state["stop_reason"] = "saved patterns re-tested; no model call was made"
@@ -543,6 +616,7 @@ class LogComplianceAuditor:
                 vd,
                 deadline=started + budget,
                 max_records=max_records,
+                value_elements=value_elements,
             )
 
         residue = state.pop("_residue", [])
@@ -585,8 +659,13 @@ class LogComplianceAuditor:
             "standard": profile.get("standard") or {},
             "profile_file": profile_path.name,
             "profile_review_status": profile.get("review_status"),
+            "run": _run_record(
+                log_info, profile_path, profile, state, assessment, None
+            ),
             "rounds_run": state["rounds_run"],
             "sent_to_model": state["sent"],
+            "envelope": survey.get("envelope"),
+            "depth": state.get("depth"),
             "assessment": assessment,
             "unmatched_groups": unmatched,
             "survey": self._survey_for_result(survey),
@@ -704,6 +783,22 @@ class LogComplianceAuditor:
             f"{len((data.get('extraction_spec') or {}).get('record_types') or [])} record type(s) "
             f"in {data.get('rounds_run')} round(s).",
         ]
+        envelope = data.get("envelope")
+        depth = data.get("depth") or {}
+        if envelope:
+            lines.append(
+                f"Envelope: {envelope['kind']}, {envelope['records']} records fit it; "
+                f"PRI present in {envelope['with_pri']}, process id in "
+                f"{envelope['with_pid']}; {envelope['program_count']} program(s). "
+                f"Messages broken down per program for "
+                f"{depth.get('records_broken_down', 0)} records "
+                f"({(depth.get('share') or 0) * 100:.0f}%); the rest keep the message whole."
+            )
+        elif depth.get("records_held_as_free_text"):
+            lines.append(
+                f"{depth['records_held_as_free_text']} records are matched by a pattern "
+                "that leaves most of the line in one free-text field."
+            )
         if data.get("profile_review_status") != "reviewed":
             lines.append(
                 "The requirement profile is draft_unreviewed: findings rest on an "
@@ -718,6 +813,14 @@ class LogComplianceAuditor:
             f"{counts.get('not_assessable_from_sample', 0)} cannot be shown by a log sample; "
             f"{counts.get('not_evaluated', 0)} not evaluated."
         )
+        not_counted = assessment.get("not_counted_by_kind") or {}
+        if not_counted:
+            lines.append(
+                "Not counted because they are not rules about an element being "
+                "present: "
+                + ", ".join(f"{n} {kind}" for kind, n in sorted(not_counted.items()))
+                + ". These need a person to look."
+            )
         gaps = [
             f
             for f in assessment.get("findings") or []

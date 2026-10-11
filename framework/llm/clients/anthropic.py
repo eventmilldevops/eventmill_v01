@@ -121,7 +121,7 @@ class AnthropicClient:
 
     def __init__(
         self,
-        model_id: str = "claude-opus-5",
+        model_id: str = "claude-opus-5-5",
         tier: str | None = None,
         api_key_env_var: str | None = "ANTHROPIC_API_KEY",
         max_retries: int = 3,
@@ -131,7 +131,7 @@ class AnthropicClient:
         """Initialize the Anthropic client.
 
         Args:
-            model_id: Model identifier, e.g. "claude-opus-5".
+            model_id: Model identifier, e.g. "claude-opus-5-5".
             tier: Tier this client is bound to, for capability lookups.
             api_key_env_var: Environment variable holding the key. One key
                 serves both tiers — this provider does not split keys by tier.

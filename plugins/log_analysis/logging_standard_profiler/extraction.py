@@ -29,6 +29,7 @@ EXAMPLE_REPLY = {
             "page": 7,
             "obligation": "must",
             "assessable_from": "record_content",
+            "kind": "presence",
             "summary": "Every record carries a UTC timestamp with millisecond precision.",
             "quote": "Each log entry shall include a timestamp in UTC with at least millisecond resolution.",
             "elements": [
@@ -48,9 +49,52 @@ EXAMPLE_REPLY = {
             "page": 7,
             "obligation": "must",
             "assessable_from": "record_content",
+            "kind": "presence",
             "summary": "Authentication events identify the user and whether the attempt succeeded.",
             "quote": "Authentication events shall record the user identity and the outcome of the attempt.",
             "elements": [{"element": "actor_identity"}, {"element": "outcome"}],
+            "unmapped_reason": None,
+        },
+        {
+            "requirement_id": "4.2.4",
+            "section": "4.2 Record content",
+            "page": 7,
+            "obligation": "must",
+            "assessable_from": "record_content",
+            "kind": "presence",
+            "summary": "Every record says when and where the event happened.",
+            "quote": "Each log entry shall carry its time and the originating host, service or component.",
+            "elements": [
+                {"element": "timestamp"},
+                {
+                    "any_of": [{"element": "host"}, {"element": "source_component"}],
+                    "label": "origin",
+                },
+            ],
+            "unmapped_reason": None,
+        },
+        {
+            "requirement_id": "4.3.1",
+            "section": "4.3 Sensitive content",
+            "page": 8,
+            "obligation": "must",
+            "assessable_from": "record_content",
+            "kind": "prohibition",
+            "summary": "Free-text messages never carry passwords or tokens.",
+            "quote": "Message text shall not contain passwords or session tokens.",
+            "elements": [{"element": "message"}],
+            "unmapped_reason": None,
+        },
+        {
+            "requirement_id": "4.4.2",
+            "section": "4.4 Event selection",
+            "page": 9,
+            "obligation": "must",
+            "assessable_from": "record_set",
+            "kind": "event_selection",
+            "summary": "Changes to user privileges are logged.",
+            "quote": "Changes to user privileges shall be logged.",
+            "elements": [{"element": "event_type"}, {"element": "actor_identity"}],
             "unmapped_reason": None,
         },
         {
@@ -59,6 +103,7 @@ EXAMPLE_REPLY = {
             "page": 12,
             "obligation": "must",
             "assessable_from": "not_assessable_from_sample",
+            "kind": None,
             "summary": "Logs are retained for at least twelve months.",
             "quote": "Log data shall be retained for a minimum of twelve months.",
             "elements": [],
@@ -171,11 +216,34 @@ For each requirement return:
       kind of event appears at all).
     "not_assessable_from_sample" - cannot be seen in a log file at all:
       retention, access control, protection, review, roles, storage.
-- elements: for the first two kinds, which record elements the requirement
-  needs, chosen ONLY from this catalogue:
+- kind: what sort of rule it is. Only the first is answered by counting
+  records, so choose with care. null for "not_assessable_from_sample".
+    "presence" - a record must or should carry something, possibly in a
+      stated format ("every record shall include the date and time",
+      "timestamps should conform to ISO 8601", "shall identify the user").
+      A sentence that requires an element and also qualifies it ("with
+      enough specificity for investigation") is still presence.
+    "prohibition" - something must not appear or must not be done ("shall
+      not expose credentials", "shall not be the sole representation").
+    "quality" - values must be correct, valid, stable, consistent or
+      unambiguous in a way no single value shows ("field meanings shall be
+      consistent", "values shall be reasonable for their role").
+    "event_selection" - a kind of event or activity must be logged at all
+      ("export activity shall be logged", "the system shall produce audit
+      records for selected events").
+    "permission" - something is allowed, with nothing to fall short of
+      ("date and time may be split across fields").
+- elements: for the first two values of assessable_from, which record
+  elements the requirement is about, chosen ONLY from this catalogue:
 {elements}
   Each entry is {{"element": name}} with optional "constraints":
 {constraints}
+  When the standard lists interchangeable ways to satisfy one thing ("a host,
+  service, component or other stable identifier"; "a user, service account or
+  process"), put the catalogue elements that fit in one group:
+  {{"any_of": [{{"element": "host"}}, {{"element": "source_component"}}], "label": "origin"}}
+  A record needs only one member of a group. List elements side by side only
+  when the standard requires every one of them in the same record.
   Use an empty list for "not_assessable_from_sample".
   A requirement worded as conditional ("where applicable", "when an outcome
   exists") still names its elements.
@@ -329,6 +397,7 @@ SWEEP_EXAMPLE = {
             "requirement": True,
             "obligation": "should",
             "assessable_from": "record_content",
+            "kind": "presence",
             "summary": "Records name the host that produced them.",
             "elements": [{"element": "host"}],
             "unmapped_reason": None,
@@ -448,11 +517,34 @@ For each sentence return an object with:
       retention, access control, protection, review, roles, storage,
       configuration, documentation.
 - summary: one plain sentence of at most 20 words.
-- elements: for the first two kinds, which record elements it needs, chosen
-  ONLY from this catalogue:
+- kind: what sort of rule it is. Only the first is answered by counting
+  records, so choose with care. null for "not_assessable_from_sample".
+    "presence" - a record must or should carry something, possibly in a
+      stated format ("every record shall include the date and time",
+      "timestamps should conform to ISO 8601", "shall identify the user").
+      A sentence that requires an element and also qualifies it ("with
+      enough specificity for investigation") is still presence.
+    "prohibition" - something must not appear or must not be done ("shall
+      not expose credentials", "shall not be the sole representation").
+    "quality" - values must be correct, valid, stable, consistent or
+      unambiguous in a way no single value shows ("field meanings shall be
+      consistent", "values shall be reasonable for their role").
+    "event_selection" - a kind of event or activity must be logged at all
+      ("export activity shall be logged", "the system shall produce audit
+      records for selected events").
+    "permission" - something is allowed, with nothing to fall short of
+      ("date and time may be split across fields").
+- elements: for the first two values of assessable_from, which record
+  elements it is about, chosen ONLY from this catalogue:
 {elements}
   Each entry is {{"element": name}} with optional "constraints":
 {constraints}
+  When the standard lists interchangeable ways to satisfy one thing ("a host,
+  service, component or other stable identifier"; "a user, service account or
+  process"), put the catalogue elements that fit in one group:
+  {{"any_of": [{{"element": "host"}}, {{"element": "source_component"}}], "label": "origin"}}
+  A record needs only one member of a group. List elements side by side only
+  when the standard requires every one of them in the same record.
   Empty for "not_assessable_from_sample".
 - unmapped_reason: if it is about record content but no catalogue element
   expresses it, leave elements empty and say here what it needs. Otherwise
@@ -512,6 +604,7 @@ def sweep_requirements(
                 "page": sentence["page"],
                 "obligation": verdict.get("obligation"),
                 "assessable_from": verdict.get("assessable_from"),
+                "kind": verdict.get("kind"),
                 "summary": verdict.get("summary"),
                 "quote": sentence["text"],
                 "elements": verdict.get("elements"),
