@@ -514,7 +514,8 @@ def _coverage_lines(
         "its requirements were read. A category is covered by a record that carries "
         "any one of its elements with a valid value. Both scores are bins of five. "
         "For the log: 1 is under 20% of records, 5 is 80% or better. For the "
-        "standard: 1 is not asked for, 5 is a plain, mandatory, unhedged requirement.",
+        "standard: 1 is not asked for, 5 is a plain, mandatory, unhedged requirement; "
+        "the clause the grade rests on is named beside it.",
         "",
         "| An investigator needs | Elements | Records | Share | Log | Standard |",
         "|---|---|---|---|---|---|",
@@ -531,7 +532,12 @@ def _coverage_lines(
             f"| {item['question']} | {elements} | {item['records']} of {total}"
             + ("" if item.get("count_is_exact", True) else " (at least)")
             + f" | {_pct(item['share'])} | {item['bin']} of 5 | "
-            + (f"{grade['bin']} of 5" if grade else "not graded")
+            + (
+                f"{grade['bin']} of 5"
+                + (f" ({grade['graded_on']})" if grade.get("graded_on") else "")
+                if grade
+                else "not graded"
+            )
             + " |"
         )
     lines.append("")
@@ -562,6 +568,116 @@ def _coverage_lines(
     return lines
 
 
+REVIEW_NOTE = (
+    "**A note on reliance.** This report is a first-look assessment produced by "
+    "automated analysis. Where a log supports a regulatory obligation, or where "
+    "the organization would bear a material consequence if critical information "
+    "proved to be missing when it was needed, the owner of that risk should have "
+    "a reasonable sample of the records reviewed by a qualified person before "
+    "relying on these results. The depth of that review should be proportionate "
+    "to the impact on the organization."
+)
+_TOKEN_PARTS = (
+    ("prompt_tokens", "in"),
+    ("completion_tokens", "out"),
+    ("thinking_tokens", "thinking"),
+)
+
+
+def _tokens(usage: Any) -> str:
+    if not isinstance(usage, dict) or not usage:
+        return "not recorded"
+    parts = [
+        f"{usage[key]:,} {word}"
+        for key, word in _TOKEN_PARTS
+        if isinstance(usage.get(key), int)
+    ]
+    total = usage.get("total_tokens")
+    if not isinstance(total, int):
+        total = sum(
+            usage[key] for key, _ in _TOKEN_PARTS if isinstance(usage.get(key), int)
+        )
+    return f"{total:,}" + (f" ({', '.join(parts)})" if parts else "")
+
+
+def run_record(
+    profile: dict[str, Any], state: dict[str, Any], run_at: str | None
+) -> dict[str, Any]:
+    """Who and what produced this report: dates, models and tokens."""
+    calls = [c for c in state.get("calls") or [] if isinstance(c, dict)]
+    usage: dict[str, int] = {}
+    for call in calls:
+        counted = {
+            key: value
+            for key, value in (call.get("token_usage") or {}).items()
+            if isinstance(value, int) and not isinstance(value, bool)
+        }
+        if counted and "total_tokens" not in counted:
+            # A provider that reports no total: the parts are the total.
+            counted["total_tokens"] = sum(
+                counted.get(key, 0) for key, _ in _TOKEN_PARTS
+            )
+        for key, value in counted.items():
+            usage[key] = usage.get(key, 0) + value
+    models = sorted(
+        {
+            f"{c.get('provider_id')}/{c.get('model_version') or c.get('model_used')}"
+            for c in calls
+            if c.get("provider_id") or c.get("model_used")
+        }
+    )
+    provenance = profile.get("provenance")
+    provenance = provenance if isinstance(provenance, dict) else {}
+    profile_model = provenance.get("model_version") or provenance.get("model_used")
+    return {
+        "run_at": run_at,
+        "audit_models": models,
+        "audit_calls": len(calls),
+        "audit_token_usage": usage,
+        "profile_generated_at": provenance.get("generated_at"),
+        "profile_model": (
+            f"{provenance.get('provider_id')}/{profile_model}" if profile_model else None
+        ),
+        "profile_token_usage": provenance.get("token_usage"),
+    }
+
+
+def _run_record_lines(record: dict[str, Any], status: str) -> list[str]:
+    if record["audit_models"]:
+        mapped_by = ", ".join(record["audit_models"])
+    elif status == "assessed_without_model":
+        mapped_by = "no model: saved patterns were re-tested"
+    else:
+        mapped_by = "not recorded"
+    if record["profile_model"]:
+        read_by = record["profile_model"]
+        if record["profile_generated_at"]:
+            read_by += f", {record['profile_generated_at']}"
+    else:
+        read_by = "not recorded: the profile names no model (written by hand?)"
+    lines = [
+        "## Run record",
+        "",
+        "| | |",
+        "|---|---|",
+        f"| Report produced | {record['run_at'] or 'not recorded'} |",
+        f"| Log mapped by | {mapped_by} |",
+        f"| Model calls for this audit | {record['audit_calls']} |",
+        "| Tokens for this audit | "
+        + (_tokens(record["audit_token_usage"]) if record["audit_calls"] else "0")
+        + " |",
+        f"| Standard read by | {read_by} |",
+    ]
+    if record["profile_model"]:
+        lines.append(
+            "| Tokens to read the standard | "
+            + _tokens(record["profile_token_usage"])
+            + " |"
+        )
+    lines += ["", REVIEW_NOTE, ""]
+    return lines
+
+
 def markdown_report(
     profile: dict[str, Any],
     assessment: dict[str, Any],
@@ -569,6 +685,7 @@ def markdown_report(
     state: dict[str, Any],
     survey: dict[str, Any],
     clarity: dict[str, Any] | None = None,
+    run_at: str | None = None,
 ) -> str:
     standard = profile.get("standard") or {}
     counts = assessment["counts"]
@@ -586,6 +703,7 @@ def markdown_report(
             "Findings cover only the records the patterns below matched.",
             "",
         ]
+    lines += _run_record_lines(run_record(profile, state, run_at), state["status"])
     lines += [
         "## What was checked",
         "",

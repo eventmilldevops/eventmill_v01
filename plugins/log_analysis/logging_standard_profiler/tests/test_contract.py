@@ -300,24 +300,88 @@ class TestProfileContract:
             "who": 4,
             "outcome": 1,
             "where": 5,
-            "link": 3,
-            "target": 3,
+            "link": 4,
+            "target": 4,
+        }
+        assert {k: v["graded_on"] for k, v in got.items()} == {
+            "when": "A",
+            "what": None,
+            "who": "B",
+            "outcome": None,
+            "where": "F",
+            "link": "C",
+            "target": "D",
         }
         assert got["when"]["gaps"] == []
         assert got["what"]["gaps"] == [cl.NOT_ADDRESSED] and not got["what"]["addressed"]
         assert got["who"]["gaps"] == [cl.MISSING["unconditional"]]
         assert got["outcome"]["addressed"] and got["outcome"]["value_rules"] == 1
         assert got["outcome"]["gaps"][0] == cl.MISSING["countable"]
-        assert got["link"]["gaps"] == [
-            cl.MISSING["mandatory"],
-            cl.MISSING["unconditional"],
-        ]
-        assert got["target"]["gaps"][0] == cl.MISSING["specific"]
+        assert got["link"]["gaps"] == [cl.MISSING["mandatory"]]
+        assert got["target"]["gaps"] == [cl.MISSING["specific"]]
         assert got["who"]["clauses"] == ["B"]
         assert clarity["requirements_sha256"] == cl.requirements_digest(
             profile["requirements"]
         )
-        assert "who 4" in cl.summary_line(clarity)
+        assert "who 4 (on B)" in cl.summary_line(clarity)
+
+    def test_clarity_rests_on_one_clause(self):
+        catalogue = ps.load_catalogue()
+
+        def requirement(rid, obligation, elements, quote, section="5"):
+            return {
+                "requirement_id": rid,
+                "section": section,
+                "obligation": obligation,
+                "assessable_from": "record_content",
+                "kind": "presence",
+                "quote": quote,
+                "elements": elements,
+            }
+
+        actor = {"element": "actor_identity"}
+        wide = [{"any_of": [actor, {"element": "host"}]}]
+
+        def who(requirements):
+            profile = {"catalogue": catalogue, "requirements": requirements}
+            return next(
+                c for c in cl.grade(profile)["categories"] if c["category"] == "who"
+            )
+
+        # A mandatory clause that hides the actor in a list and an advisory
+        # clause that names it do not add up to a clause that does both.
+        pooled = who(
+            [
+                requirement("M", "must", wide, "Records shall identify a subject."),
+                requirement("S", "should", [actor], "Records should name the user."),
+            ]
+        )
+        assert pooled["bin"] == 4 and pooled["graded_on"] == "S"
+        assert pooled["gaps"] == [cl.MISSING["mandatory"]]
+        assert pooled["clauses"] == ["S", "M"]
+
+        # Equal clauses: the one written for the category is named, not the
+        # summary that lists everything.
+        summary = [actor, {"element": "timestamp"}, {"element": "outcome"}]
+        tied = who(
+            [
+                requirement("SUM", "must", summary, "Records shall hold these."),
+                requirement("OWN", "must", [actor], "Records shall name the user."),
+            ]
+        )
+        assert tied["bin"] == 5 and tied["graded_on"] == "OWN"
+        assert tied["clauses"] == ["OWN", "SUM"]
+
+        # A list item is read with the sentence that introduces the list.
+        lead = requirement(
+            "L", "must", [], "Records shall, in proportion to risk, identify:"
+        )
+        item = requirement("L (1)", "must", [actor], "the user;")
+        assert who([lead, item])["gaps"] == [cl.MISSING["unconditional"]]
+        plain = requirement("N", "must", [], "Records shall identify:")
+        assert who([plain, item])["bin"] == 5
+        other = requirement("X", "must", [actor], "the user;", section="6")
+        assert who([lead, other])["bin"] == 5
         assert cl.grade({"catalogue": {"elements": {}}, "requirements": []}) is None
 
     def test_example_profile_carries_a_current_grade(self):
@@ -500,6 +564,37 @@ class TestUntrustedRequirementShape:
             1,
         )
         assert requirement["kind"] == expected
+
+    @pytest.mark.parametrize(
+        "quote,kept",
+        [
+            (
+                "The record shall distinguish success, failure, denial, or "
+                "another documented state.",
+                False,
+            ),
+            ("The result field shall be one of OK, FAIL or DENY.", True),
+            ("Outcomes such as OK and FAIL shall be recorded.", False),
+        ],
+    )
+    def test_a_prose_list_is_not_a_set_of_allowed_values(self, catalogue, quote, kept):
+        entry = {"element": "outcome", "constraints": {"allowed_values": ["OK", "FAIL"]}}
+        for elements in ([entry], [{"any_of": [entry, {"element": "severity"}]}]):
+            requirement, notes = ps.normalise_requirement(
+                {
+                    "summary": "s",
+                    "quote": quote,
+                    "obligation": "must",
+                    "assessable_from": "record_content",
+                    "elements": json.loads(json.dumps(elements)),
+                },
+                catalogue,
+                1,
+            )
+            first = requirement["elements"][0]
+            member = (first.get("any_of") or [first])[0]
+            assert ("constraints" in member) is kept
+            assert any("allowed_values" in n for n in notes) is not kept
 
     def test_timestamp_constraints_only_on_timestamps(self, catalogue):
         requirement, notes = ps.normalise_requirement(

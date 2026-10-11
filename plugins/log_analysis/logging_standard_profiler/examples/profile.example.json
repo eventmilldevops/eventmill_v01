@@ -24,6 +24,7 @@
         ],
         "bin": 5,
         "addressed": true,
+        "graded_on": "4.2.1",
         "criteria": {
           "countable": true,
           "mandatory": true,
@@ -45,6 +46,7 @@
         ],
         "bin": 5,
         "addressed": true,
+        "graded_on": "4.2.2",
         "criteria": {
           "countable": true,
           "mandatory": true,
@@ -66,6 +68,7 @@
         ],
         "bin": 5,
         "addressed": true,
+        "graded_on": "4.2.3",
         "criteria": {
           "countable": true,
           "mandatory": true,
@@ -87,6 +90,7 @@
         ],
         "bin": 5,
         "addressed": true,
+        "graded_on": "4.2.3",
         "criteria": {
           "countable": true,
           "mandatory": true,
@@ -110,6 +114,7 @@
         ],
         "bin": 5,
         "addressed": true,
+        "graded_on": "4.2.2",
         "criteria": {
           "countable": true,
           "mandatory": true,
@@ -132,6 +137,7 @@
         ],
         "bin": 1,
         "addressed": false,
+        "graded_on": null,
         "criteria": {
           "countable": false,
           "mandatory": false,
@@ -153,6 +159,7 @@
         ],
         "bin": 1,
         "addressed": false,
+        "graded_on": null,
         "criteria": {
           "countable": false,
           "mandatory": false,
@@ -293,7 +300,7 @@
     "constraints": {
       "timezone_required": "boolean; timestamp values must carry a UTC offset or zone designator",
       "min_precision": "one of second, millisecond, microsecond; minimum timestamp resolution",
-      "allowed_values": "list of strings; the element's value must be one of these"
+      "allowed_values": "list of strings; the element's value must be one of these. Only for literal codes or values the standard itself defines. A prose list of kinds of outcome or event (success, failure, denial, or another documented state) is not a list of values: leave it out"
     }
   },
   "requirements": [

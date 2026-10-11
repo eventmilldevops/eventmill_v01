@@ -67,8 +67,10 @@ operator's question.
 The profiler grades how plainly the standard requires each category. Four
 criteria, each a property of the extracted requirements: a countable presence
 rule exists; it is mandatory; it asks for the category on its own and not
-inside a list of alternatives; it is not hedged. The grade is 1 plus the
-criteria met. It is stored in the profile with the clauses behind it, the
+inside a list of alternatives; it is not hedged. A category is graded on its
+strongest single clause: the grade is 1 plus the criteria that clause meets,
+and the clause is named. Criteria are not pooled across clauses (amended the
+same day, see "Amendment"). It is stored in the profile with the clauses behind it, the
 criteria it lacks, and a digest of the requirements it was computed from.
 
 The rubric is deterministic code. No model is asked whether a standard is
@@ -183,6 +185,23 @@ writes a graded copy when needed.
 - Not yet measured: Gemini and OpenAI on catalogue 1.1.0, a second standard,
   a second log type, and repeatability figures since `any_of`, kinds and the
   categories were added.
+
+## Amendment, 2026-10-11: grade on one clause
+
+The first version met each criterion from any clause. Reviewing four profiles
+of the same standard showed two faults. A category could reach a grade no
+single clause earned, for example "mandatory" from a clause that listed the
+actor among alternatives and "specific" from an advisory clause about shared
+accounts. And a grade of 5 showed no clause, so an over-read summary clause
+that lifted it could not be seen.
+
+The grade now rests on the strongest single clause, named in the profile, the
+summary and the audit report. Ties go to the clause naming the fewest
+elements. A list item quoted alone is read with its lead-in sentence, and "in
+proportion to" and similar wording joined the hedge list. Across the four
+profiles the grades went from differing in two categories to differing in
+one: `who` is 4 in three and 5 in one, where the model read clause 5.1 as
+requiring an actor outright. The report names 5.1 beside that 5.
 
 ## Revisit when
 

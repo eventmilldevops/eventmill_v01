@@ -165,15 +165,25 @@ reliability alike:
 | `link` | What links it to related events | `session_id` |
 | `target` | What was acted on | `target_object` |
 
-The categories live in `catalogue.json` as `investigation_categories`. For
-each one the grade starts in bin 1 and moves up one for each criterion met:
+The categories live in `catalogue.json` as `investigation_categories`. Each
+category is graded on **its strongest single clause**, and the grade names
+that clause (`graded_on`). The grade starts in bin 1 and moves up one for each
+criterion the clause meets:
 
-| Criterion | Met when | A standard that fails it says |
+| Criterion | The clause | A clause that fails it says |
 |---|---|---|
-| countable | A presence rule names an element of the category | Nothing, or only that values must be "consistent" |
-| mandatory | Such a rule is `must` | "should record a session identifier" |
-| specific | Such a rule needs the category on its own: a required element, or a group whose members are all in the category | "a user, process, host or other subject" |
-| unconditional | A rule meeting all three is not hedged | "where applicable", "when needed", "where feasible", "to the extent" |
+| countable | Plainly requires records to carry an element of the category | Nothing, or only that values must be "consistent" |
+| mandatory | Is a shall or must | "should record a session identifier" |
+| specific | Needs the category on its own: a required element, or a group whose members are all in the category | "a user, process, host or other subject" |
+| unconditional | Is not hedged | "where applicable", "when needed", "where feasible", "to the extent", "in proportion to" |
+
+Criteria are not pooled. A mandatory clause that hides the actor in a list of
+alternatives and an advisory clause that names the actor do not add up to a
+clause that is both. When two clauses score the same, the one naming the
+fewest elements is named: the clause written for the category, not a summary
+that lists everything. A list item quoted on its own ("when the event
+occurred;") is read with the sentence that introduces the list, so a
+condition there still counts.
 
 | Bin | Reads as |
 |---|---|
@@ -186,29 +196,37 @@ many of them are rules about value quality. The summary of both actions names
 the weakest categories and why:
 
 ```
-Clarity of the standard by category, bin 1 to 5: when 5, what 5, who 4,
-outcome 5, where 5, link 3, target 4. To shore up: who (every mandatory
-clause is hedged ...); link (required only as should or may ...); ...
+Clarity of the standard by category, bin 1 to 5: when 5 (on 5.3), what 5
+(on 5.2), who 4 (on 5.5), outcome 5 (on 5.6), where 5 (on 5.4), link 3 (on
+6.5), target 4 (on 5.5). To shore up: who (its strongest clause is hedged
+...); link (its strongest clause is a should or may ...); ...
 ```
 
-On the YMMV example standard, read by two models:
+**Check the named clause even when the grade is 5.** A model that over-reads
+a general clause earns a grade the standard has not: in one draft, clause
+5.1 ("the identity of relevant individuals, subjects, objects, processes, or
+other entities") was mapped as a plain requirement for an actor, and `who`
+came out 5 on 5.1 where three other drafts gave 4.
+
+On the YMMV example standard, four drafts from two models (2026-10-11):
 
 | Profile written by | when | what | who | outcome | where | link | target |
 |---|---|---|---|---|---|---|---|
-| Gemini | 5 | 5 | 4 | 5 | 5 | 3 | 4 |
-| Anthropic | 5 | 5 | 3 | 5 | 5 | 3 | 4 |
+| Gemini, first draft | 5 | 5 | 4 | 5 | 5 | 3 | 4 |
+| Gemini, second draft | 5 | 5 | 5 | 5 | 5 | 3 | 4 |
+| Anthropic, first draft | 5 | 5 | 4 | 5 | 5 | 3 | 4 |
+| Anthropic, second draft | 5 | 5 | 4 | 5 | 5 | 3 | 4 |
 
 `who` and `target` lose a bin because clause 5.5 opens with "Where
-applicable". `link` is 3 because clause 6.5 is a "should ... when needed".
-Those are fair criticisms of the standard, and they are the categories where
-the example database log is least complete.
+applicable" and clause 5.1 lists alternatives. `link` is 3 because clause 6.5
+is a "should ... when needed". Those are fair criticisms of the standard, and
+they are the categories where the example database log is least complete.
 
 **The grade is of the profile's reading, not of the document directly.** The
-one difference above is the model, not the standard: one profile put the actor
-in a group with process, component and host, so nothing in it requires an
-actor on its own. That is why the clauses are listed. Check them before
-proposing a change to the standard, and fix the profile if the reading is
-what is wrong.
+one 5 for `who` above is the model, not the standard: that draft read clause
+5.1 as requiring an actor outright. That is why the clause is named. Check it
+before proposing a change to the standard, and fix the profile if the reading
+is what is wrong.
 
 The grade is deterministic: the same requirements always give the same grade.
 It carries a digest of the requirements it was computed from, and the auditor

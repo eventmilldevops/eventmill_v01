@@ -64,7 +64,7 @@ az = _load_sibling("assessment.py", "log_compliance_auditor_assessment")
 rn = _load_sibling("renderers.py", "log_compliance_auditor_renderers")
 
 TOOL_NAME = "log_compliance_auditor"
-PLUGIN_VERSION = "0.5.0"
+PLUGIN_VERSION = "0.6.0"
 ACTIONS = ("survey", "audit", "resume", "assess")
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 # The plugin's limit is 600 s. Stop starting model calls well before it, so a
@@ -659,6 +659,9 @@ class LogComplianceAuditor:
             "standard": profile.get("standard") or {},
             "profile_file": profile_path.name,
             "profile_review_status": profile.get("review_status"),
+            "run_record": rn.run_record(
+                profile, state, stamp.isoformat(timespec="seconds")
+            ),
             "run": _run_record(
                 log_info, profile_path, profile, state, assessment, None
             ),
@@ -686,7 +689,13 @@ class LogComplianceAuditor:
                 "text",
                 art_dir / f"{TOOL_NAME}_report_{tag}.md",
                 rn.markdown_report(
-                    profile, assessment, spec, state, survey, az.standard_clarity(profile)
+                    profile,
+                    assessment,
+                    spec,
+                    state,
+                    survey,
+                    az.standard_clarity(profile),
+                    stamp.isoformat(timespec="seconds"),
                 ),
                 "alignment_report",
             ),

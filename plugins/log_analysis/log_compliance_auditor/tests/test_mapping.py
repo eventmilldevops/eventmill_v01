@@ -624,6 +624,7 @@ class TestAssessment:
                 {
                     "category": "where",
                     "bin": 2,
+                    "graded_on": "4.1",
                     "gaps": ["required only as should or may, never shall or must"],
                     "clauses": ["4.1", "4.2"],
                 }
@@ -643,10 +644,69 @@ class TestAssessment:
         report = rn.markdown_report(
             profile, assessment, spec, state, {}, az.standard_clarity(profile)
         )
+        assert "| Report produced | not recorded |" in report
+        assert "| Log mapped by | not recorded |" in report
+        assert "| Tokens for this audit | 0 |" in report
+        assert "written by hand?" in report
+        assert "Tokens to read the standard" not in report
+        assert rn.REVIEW_NOTE in report
+
+        profile["provenance"] = {
+            "provider_id": "gcp_gemini",
+            "model_used": "g-pro",
+            "model_version": "g-pro-001",
+            "generated_at": "2026-10-11T18:10:11+00:00",
+        }
+        state["calls"] = [
+            {
+                "provider_id": "anthropic",
+                "model_used": "c-opus",
+                "model_version": None,
+                "token_usage": {
+                    "prompt_tokens": 9000,
+                    "completion_tokens": 5000,
+                    "thinking_tokens": 0,
+                    "total_tokens": 14000,
+                },
+            },
+            {
+                "provider_id": "anthropic",
+                "model_used": "c-opus",
+                "token_usage": {"prompt_tokens": 1000, "completion_tokens": 250},
+            },
+        ]
+        record = rn.run_record(profile, state, "2026-10-11T19:23:48+00:00")
+        assert record["audit_models"] == ["anthropic/c-opus"]
+        assert record["audit_token_usage"]["prompt_tokens"] == 10000
+        dated = rn.markdown_report(
+            profile, assessment, spec, state, {}, None, "2026-10-11T19:23:48+00:00"
+        )
+        assert dated.index("## Run record") < dated.index("## What was checked")
+        assert "| Report produced | 2026-10-11T19:23:48+00:00 |" in dated
+        assert "| Log mapped by | anthropic/c-opus |" in dated
+        assert "| Model calls for this audit | 2 |" in dated
+        assert (
+            "| Tokens for this audit | 15,250 (10,000 in, 5,250 out, 0 thinking) |"
+            in dated
+        )
+        assert (
+            "| Standard read by | gcp_gemini/g-pro-001, 2026-10-11T18:10:11+00:00 |"
+            in dated
+        )
+        assert "| Tokens to read the standard | not recorded |" in dated
+        profile["provenance"]["token_usage"] = {"total_tokens": 61000}
+        assert "| Tokens to read the standard | 61,000 |" in rn.markdown_report(
+            profile, assessment, spec, state, {}
+        )
+        state["calls"] = []
+        state["status"] = "assessed_without_model"
+        assert "no model: saved patterns were re-tested" in rn.markdown_report(
+            profile, assessment, spec, state, {}
+        )
         assert "## What an investigation needs from each record" in report
         assert (
             "| Where it came from | host (10), source_component (30), "
-            "source_address (0) | 40 of 100 | 40.0% | 3 of 5 | 2 of 5 |" in report
+            "source_address (0) | 40 of 100 | 40.0% | 3 of 5 | 2 of 5 (4.1) |" in report
         )
         assert "| When it happened | timestamp | 0 of 100 | 0.0% | 1 of 5 | not graded |" in report
         assert "before the profile's requirements were last changed" in report

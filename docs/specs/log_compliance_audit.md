@@ -306,14 +306,18 @@ category elements whether or not the standard requires them. The share lands
 in one of five bins: under 20%, 20s, 40s, 60s, and 80% or better.
 
 **Clarity of the standard** (`standard_clarity` in the profile, profiler).
-Per category, bin 1 plus one for each criterion met:
+Each presence rule naming an element of the category is scored on four
+criteria, and the category takes the score of its strongest single rule:
+bin 1 plus the criteria that rule meets. Criteria are not pooled across
+rules. `graded_on` names the rule. On a tie the rule naming the fewest
+elements wins, then the first in the document.
 
-| Criterion | Met when |
+| Criterion | The rule |
 |---|---|
-| countable | A presence rule names an element of the category |
-| mandatory | Such a rule is `must` |
-| specific | Such a rule needs the category on its own: a required element, or a group whose members are all in the category |
-| unconditional | A rule meeting all three is not hedged ("where applicable", "when needed", "where feasible", "to the extent") |
+| countable | Is a presence rule naming an element of the category |
+| mandatory | Is `must` |
+| specific | Needs the category on its own: a required element, or a group whose members are all in the category |
+| unconditional | Is not hedged ("where applicable", "when needed", "where feasible", "to the extent", "in proportion to"). A list item quoted without an obligation word is read with the sentence that introduces the list. |
 
 Bin 1 with `addressed: false` means no requirement about records names the
 category. Each grade lists the clauses behind it and the criteria it lacks.
@@ -330,6 +334,14 @@ The mapping still decides which field is which element, so coverage can move
 between runs where a field is ambiguous. See section 9.
 
 ## 7. Outputs
+
+The report opens with a run record: when it was produced, the provider and
+model that mapped the log, the calls and tokens that took, and the model, date
+and tokens behind the profile (`provenance.token_usage`, stored by the
+profiler from 2026-10-11). The result JSON carries the same as `run_record`.
+A note on reliance follows it. It is worded for the owner of the business
+risk and asks for a human review of a sample of records where the log carries
+regulatory or organizational weight.
 
 Six artifacts per audit: result JSON, Markdown report, extraction spec,
 BigQuery SQL, Splunk `props.conf`, Elastic ingest pipeline. The spec's

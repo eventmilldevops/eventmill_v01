@@ -251,7 +251,7 @@ against.
 | Element entry | `{"element": name, "constraints": {...}}` (required) or `{"any_of": [entry, entry, ...], "label": text}` (one member is enough; at least two members). `any_of` and `label` are reserved keys of an entry. |
 | Element constraints | `timezone_required`, `min_precision` (`second`, `millisecond`, `microsecond`), `allowed_values`. The first two apply to a timestamp only. |
 | Investigation category ids | `when`, `what`, `who`, `outcome`, `where`, `link`, `target`. Defined in the catalogue's `investigation_categories`; the auditor holds a copy for profiles written before catalogue 1.1.0. |
-| Clarity criteria | `countable`, `mandatory`, `specific`, `unconditional`. A category's bin is 1 plus the criteria met, so 1 to 5. |
+| Clarity criteria | `countable`, `mandatory`, `specific`, `unconditional`. A category's bin is 1 plus the criteria its strongest single clause meets, so 1 to 5; `graded_on` is that clause's `requirement_id`, null when no presence rule names the category. |
 | `standard_clarity_status` | `current`, `out_of_date`, `absent` |
 | Requirement `kind` | `presence`, `prohibition`, `quality`, `event_selection`, `permission`; null when `assessable_from` is `not_assessable_from_sample`. Only `presence` is counted against records. A missing `kind` reads as `presence`. |
 | `assessable_from` | `record_content` (visible inside one record), `record_set` (needs many records), `not_assessable_from_sample` (retention, protection, review: **never reported as met or unmet**) |

@@ -123,16 +123,43 @@ An incomplete run is a normal outcome, not an error. The tool has ten minutes
 and a heavy-tier call can take two or three of them, so it stops starting new
 calls with time in hand and saves what it has.
 
+### Run record
+
+The report opens with who and what produced it:
+
+| | |
+|---|---|
+| Report produced | 2026-10-11T20:55:46+00:00 |
+| Log mapped by | anthropic/claude-opus-5-5 |
+| Model calls for this audit | 1 |
+| Tokens for this audit | 13,472 (9,143 in, 4,329 out, 0 thinking) |
+| Standard read by | openai/gpt-5.6-sol, 2026-10-11T20:35:08+00:00 |
+| Tokens to read the standard | not recorded |
+
+The two models can differ: the profile may have been written on one provider
+and the log mapped on another. Tokens for the audit are summed over every
+call, including those of earlier runs a `resume` continued. Tokens to read the
+standard come from the profile and show `not recorded` for a profile written
+before the profiler stored them, and the row is left out for a profile written
+by hand. An `assess` run shows no model and 0 tokens. The same figures are in
+the result JSON as `run_record`.
+
+Under the table is a note on reliance, addressed to whoever owns the risk the
+log exists to manage: for a log that supports a regulatory obligation, or
+where missing information would carry a material consequence, have a
+reasonable sample of records reviewed by a qualified person before relying on
+the report.
+
 ### What an investigation needs from each record
 
-The report's first table, and the one to read first:
+The first findings table, and the one to read first:
 
 | An investigator needs | Elements | Records | Share | Log | Standard |
 |---|---|---|---|---|---|
-| Who or what did it | actor_identity | 200 of 200 | 100.0% | 5 of 5 | 4 of 5 |
-| Where it came from | host (6), source_component (182), source_address (194) | 200 of 200 | 100.0% | 5 of 5 | 5 of 5 |
-| What links it to related events | session_id | 184 of 200 | 92.0% | 5 of 5 | 3 of 5 |
-| What was acted on | target_object | 152 of 200 | 76.0% | 4 of 5 | 4 of 5 |
+| Who or what did it | actor_identity | 200 of 200 | 100.0% | 5 of 5 | 4 of 5 (5.5) |
+| Where it came from | host (6), source_component (182), source_address (194) | 200 of 200 | 100.0% | 5 of 5 | 5 of 5 (5.4) |
+| What links it to related events | session_id | 184 of 200 | 92.0% | 5 of 5 | 3 of 5 (6.5) |
+| What was acted on | target_object | 152 of 200 | 76.0% | 4 of 5 | 4 of 5 (5.5) |
 
 The seven categories are fixed, in the catalogue:
 
@@ -151,7 +178,8 @@ The seven categories are fixed, in the catalogue:
   40s, 4 the 60s and 70s, 5 is 80% or better. It is counted from the records
   and does not read the requirements.
 - **`Standard`** is the profiler's grade of how plainly the standard requires
-  the category, also 1 to 5. See the profiler's README for the rubric. If the
+  the category, also 1 to 5, with the clause the grade rests on. See the
+  profiler's README for the rubric. If the
   profile carries no grade, or one older than its last edit, the report says
   so and how to refresh it.
 

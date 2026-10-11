@@ -28,6 +28,13 @@ _PROHIBITION = re.compile(
     r"\b(?:shall|must|should|may|will|can)\s+not\b|\bnever\b|\bprohibited\b",
     re.IGNORECASE,
 )
+# A sentence that lists kinds of thing and leaves the list open. Such a list
+# is not the set of literal values a record must hold.
+_OPEN_LIST = re.compile(
+    r"\bor (?:an)?other\b|\bsuch as\b|\bincluding\b|\bfor example\b|\be\.g\."
+    r"|\bor (?:equivalent|similar)\b|\betc\b",
+    re.IGNORECASE,
+)
 REVIEW_STATUSES = ("draft_unreviewed", "reviewed")
 QUOTE_STATUSES = ("found", "quote_not_found", "not_checked")
 PRECISIONS = ("second", "millisecond", "microsecond")
@@ -178,6 +185,20 @@ def normalise_requirement(
             continue
         seen.add(item["element"])
         elements.append(item)
+
+    if _OPEN_LIST.search(_text(raw.get("quote"))):
+        for entry in elements:
+            for member in entry.get("any_of") or [entry]:
+                constraints = member.get("constraints") or {}
+                if "allowed_values" in constraints:
+                    constraints.pop("allowed_values")
+                    if not constraints:
+                        member.pop("constraints", None)
+                    notes.append(
+                        f"{where}: allowed_values on '{member['element']}' dropped: "
+                        "the quoted sentence gives an open list of kinds, not the "
+                        "literal values a record must hold"
+                    )
 
     unmapped_reason = _text(raw.get("unmapped_reason"), 400) or None
     if dropped:

@@ -503,6 +503,7 @@ class LoggingStandardProfiler:
                 "thinking_level": thinking_level,
                 "transport": transport,
                 "calls": len(calls),
+                "token_usage": _token_totals(calls),
             },
             "review_status": "draft_unreviewed",
             "statement_coverage": coverage,
@@ -656,6 +657,15 @@ class LoggingStandardProfiler:
         if len(notes) > 6:
             lines.append(f"  ... and {len(notes) - 6} more notes in the result")
         return "\n".join(lines)
+
+
+def _token_totals(calls: list[dict[str, Any]]) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for call in calls:
+        for key, value in (call.get("token_usage") or {}).items():
+            if isinstance(value, int) and not isinstance(value, bool):
+                totals[key] = totals.get(key, 0) + value
+    return totals
 
 
 def _counts(requirements: list[dict[str, Any]]) -> dict[str, Any]:
