@@ -505,11 +505,9 @@ class TestAssessment:
                 },
             },
         ]
-        assert az.wanted_elements(profile) == [
-            n
-            for n in catalogue["elements"]
-            if n in ("host", "source_component", "actor_identity")
-        ]
+        assert {"host", "source_component", "actor_identity"} <= set(
+            az.wanted_elements(profile)
+        )
         test = ml.run_patterns(log, patterns, sv, vd)
         f = {x["requirement_id"]: x for x in az.assess(profile, patterns, test, vd)["findings"]}
         assert f["FLAT"]["records_with_all_elements"] == 0
@@ -540,6 +538,120 @@ class TestAssessment:
         short = "; ".join(rn._short_types(f["MIXED"]))
         assert "`u` (10 of its records: none of host / source_component)" in short
         assert "`h`" not in short and "`s`" not in short
+
+    def test_investigation_coverage_is_counted_from_the_records(
+        self, catalogue, tmp_path
+    ):
+        # One requirement, about nothing the log holds: coverage must not
+        # depend on what the profile asks for.
+        profile = {
+            "catalogue": {"elements": catalogue["elements"]},
+            "review_status": "reviewed",
+            "standard": {"title": "T", "version": "1"},
+            "requirements": [
+                {
+                    "requirement_id": "R",
+                    "obligation": "must",
+                    "assessable_from": "record_content",
+                    "elements": [{"element": "severity"}],
+                }
+            ],
+        }
+        assert az.categories(profile) == [
+            {
+                "category": c["id"],
+                "question": c["question"],
+                "elements": c["elements"],
+            }
+            for c in catalogue["investigation_categories"]
+        ]
+        assert az.DEFAULT_CATEGORIES == catalogue["investigation_categories"]
+        assert {"timestamp", "target_object", "severity"} <= set(
+            az.wanted_elements(profile)
+        )
+        log = tmp_path / "c.log"
+        log.write_text(
+            "\n".join(["svc=a user=x"] * 30 + ["host=h user=y"] * 10 + ["user=z"] * 60),
+            encoding="utf-8",
+        )
+        ident = {"value_type": "identity"}
+        patterns = [
+            {
+                "pattern_id": "s",
+                "kind": "regex",
+                "regex": r"^svc=(?P<svc>\S+) user=(?P<user>\S+)$",
+                "fields": {
+                    "svc": {"element": "source_component", **ident},
+                    "user": {"element": "actor_identity", **ident},
+                },
+            },
+            {
+                "pattern_id": "h",
+                "kind": "regex",
+                "regex": r"^host=(?P<host>\S+) user=(?P<user>\S+)$",
+                "fields": {
+                    "host": {"element": "host", **ident},
+                    "user": {"element": "actor_identity", **ident},
+                },
+            },
+            {
+                "pattern_id": "u",
+                "kind": "regex",
+                "regex": r"^user=(?P<user>\S+)$",
+                "fields": {"user": {"element": "actor_identity", **ident}},
+            },
+        ]
+        test = ml.run_patterns(log, patterns, sv, vd)
+        assessment = az.assess(profile, patterns, test, vd)
+        got = {c["category"]: c for c in assessment["investigation_coverage"]}
+        assert list(got) == ["when", "what", "who", "outcome", "where", "link", "target"]
+        assert (got["who"]["records"], got["who"]["bin"]) == (100, 5)
+        assert (got["where"]["records"], got["where"]["bin"]) == (40, 3)
+        assert got["where"]["by_element"] == [
+            {"element": "host", "records": 10},
+            {"element": "source_component", "records": 30},
+            {"element": "source_address", "records": 0},
+        ]
+        assert (got["when"]["records"], got["when"]["bin"]) == (0, 1)
+        assert [az.quintile(s) for s in (0, 0.199, 0.2, 0.79, 0.8, 1.0)] == [
+            1, 1, 2, 4, 5, 5,
+        ]
+
+        assert assessment["standard_clarity_status"] == "absent"
+        clarity = {
+            "requirements_sha256": "stale",
+            "categories": [
+                {
+                    "category": "where",
+                    "bin": 2,
+                    "gaps": ["required only as should or may, never shall or must"],
+                    "clauses": ["4.1", "4.2"],
+                }
+            ],
+        }
+        profile["standard_clarity"] = clarity
+        assert az.standard_clarity(profile)["status"] == "out_of_date"
+        spec = rn.extraction_spec(patterns, test, {"file": "c.log"}, "converged")
+        state = {
+            "status": "converged",
+            "stop_reason": "",
+            "rounds_run": 1,
+            "log": {"file": "c.log"},
+            "sent": {"lines": 0, "chars": 0, "calls": 0},
+            "calls": [],
+        }
+        report = rn.markdown_report(
+            profile, assessment, spec, state, {}, az.standard_clarity(profile)
+        )
+        assert "## What an investigation needs from each record" in report
+        assert (
+            "| Where it came from | host (10), source_component (30), "
+            "source_address (0) | 40 of 100 | 40.0% | 3 of 5 | 2 of 5 |" in report
+        )
+        assert "| When it happened | timestamp | 0 of 100 | 0.0% | 1 of 5 | not graded |" in report
+        assert "before the profile's requirements were last changed" in report
+        assert "- **Where it came from** (2 of 5): required only as should" in report
+        assert "Clauses: 4.1, 4.2." in report
 
     def test_only_presence_rules_are_counted(self, catalogue, tmp_path):
         def requirement(rid, kind, elements):

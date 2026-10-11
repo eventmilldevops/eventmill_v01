@@ -1,6 +1,14 @@
 {
-  "catalogue_version": "1.0.0",
-  "value_types": ["timestamp", "category", "identity", "address", "identifier", "integer", "text"],
+  "catalogue_version": "1.1.0",
+  "value_types": [
+    "timestamp",
+    "category",
+    "identity",
+    "address",
+    "identifier",
+    "integer",
+    "text"
+  ],
   "elements": {
     "timestamp": {
       "value_type": "timestamp",
@@ -24,7 +32,7 @@
     },
     "source_component": {
       "value_type": "identity",
-      "description": "The program, service, module or process name that generated the record."
+      "description": "The program, application, service or module the event came from: the one that wrote the record or, in a server's audit log, the client program that made the request."
     },
     "host": {
       "value_type": "identity",
@@ -44,11 +52,11 @@
     },
     "session_id": {
       "value_type": "identifier",
-      "description": "Session, request, trace or correlation identifier linking related records."
+      "description": "Session, transaction, request, trace or correlation identifier: it names the unit of work a record belongs to, and may appear on one record or many."
     },
     "event_id": {
       "value_type": "identifier",
-      "description": "Unique identifier or sequence number of this individual record."
+      "description": "Identifier or sequence number of this individual record itself, not of the session, transaction or request it belongs to."
     },
     "process_id": {
       "value_type": "integer",
@@ -59,6 +67,59 @@
       "description": "Free-text description of the event."
     }
   },
+  "investigation_categories": [
+    {
+      "id": "when",
+      "question": "When it happened",
+      "elements": [
+        "timestamp"
+      ]
+    },
+    {
+      "id": "what",
+      "question": "What happened",
+      "elements": [
+        "event_type"
+      ]
+    },
+    {
+      "id": "who",
+      "question": "Who or what did it",
+      "elements": [
+        "actor_identity"
+      ]
+    },
+    {
+      "id": "outcome",
+      "question": "How it ended",
+      "elements": [
+        "outcome"
+      ]
+    },
+    {
+      "id": "where",
+      "question": "Where it came from",
+      "elements": [
+        "host",
+        "source_component",
+        "source_address"
+      ]
+    },
+    {
+      "id": "link",
+      "question": "What links it to related events",
+      "elements": [
+        "session_id"
+      ]
+    },
+    {
+      "id": "target",
+      "question": "What was acted on",
+      "elements": [
+        "target_object"
+      ]
+    }
+  ],
   "constraints": {
     "timezone_required": "boolean; timestamp values must carry a UTC offset or zone designator",
     "min_precision": "one of second, millisecond, microsecond; minimum timestamp resolution",

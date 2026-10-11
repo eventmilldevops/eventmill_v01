@@ -129,6 +129,33 @@ requirement trivially met: "one of actor_identity / source_component" is
 satisfied by any record that names its program, whether or not it names a
 user.
 
+## How clearly the standard asks for the basics
+
+What an event record should say is broadly agreed whatever the standard:
+when, what, who, how it ended, where it came from, what links it to related
+events, and what was acted on. The profile's `standard_clarity` block grades
+the standard on each, in five bins:
+
+| Criterion | Met when |
+|---|---|
+| countable | A presence rule names an element of the category |
+| mandatory | Such a rule is `must` |
+| specific | Such a rule needs the category on its own: a required element, or a group whose members are all in the category |
+| unconditional | A rule meeting all three is not hedged ("where applicable", "when needed", "where feasible", "to the extent") |
+
+A category starts in bin 1 and moves up one for each criterion met. The
+summary names the weakest categories and why, and each grade lists the
+clauses it was read from. On the YMMV example standard the grade is 5 for
+when, what, outcome and where; 3 or 4 for who and target, because clause 5.5
+opens with "Where applicable"; and 3 for link, because clause 6.5 is a
+"should ... when needed".
+
+The grade is of the profile, so check the clauses before blaming the
+standard: a model that put an actor inside a wide group of alternatives
+lowers `who` just as vague wording would. After editing a profile, run
+`validate_profile`; it recomputes the grade and writes a copy of the profile
+carrying it when the stored one is missing or out of date.
+
 ## What to expect from a public standard
 
 A log management guide such as NIST SP 800-92 is mostly about programme and

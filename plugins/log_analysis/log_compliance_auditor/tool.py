@@ -64,7 +64,7 @@ az = _load_sibling("assessment.py", "log_compliance_auditor_assessment")
 rn = _load_sibling("renderers.py", "log_compliance_auditor_renderers")
 
 TOOL_NAME = "log_compliance_auditor"
-PLUGIN_VERSION = "0.4.0"
+PLUGIN_VERSION = "0.5.0"
 ACTIONS = ("survey", "audit", "resume", "assess")
 THINKING_LEVELS = ("minimal", "low", "medium", "high")
 # The plugin's limit is 600 s. Stop starting model calls well before it, so a
@@ -685,7 +685,9 @@ class LogComplianceAuditor:
             (
                 "text",
                 art_dir / f"{TOOL_NAME}_report_{tag}.md",
-                rn.markdown_report(profile, assessment, spec, state, survey),
+                rn.markdown_report(
+                    profile, assessment, spec, state, survey, az.standard_clarity(profile)
+                ),
                 "alignment_report",
             ),
             (
@@ -813,6 +815,15 @@ class LogComplianceAuditor:
             f"{counts.get('not_assessable_from_sample', 0)} cannot be shown by a log sample; "
             f"{counts.get('not_evaluated', 0)} not evaluated."
         )
+        coverage = assessment.get("investigation_coverage") or []
+        if coverage:
+            lines.append(
+                "What an investigation needs, share of records carrying it: "
+                + ", ".join(
+                    f"{c['category']} {c['share'] * 100:.0f}%" for c in coverage
+                )
+                + "."
+            )
         not_counted = assessment.get("not_counted_by_kind") or {}
         if not_counted:
             lines.append(

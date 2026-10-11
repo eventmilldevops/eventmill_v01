@@ -31,7 +31,7 @@ def _load_tool():
 
 
 tool = _load_tool()
-ps, ex = tool.ps, tool.ex
+ps, ex, cl = tool.ps, tool.ex, tool.cl
 
 STANDARD_TEXT = """Example Corp Application Logging Standard v2.1
 
@@ -241,6 +241,120 @@ class TestProfileContract:
         errors = ps.validate_profile(profile)["errors"]
         assert any("'mood'" in e for e in errors)
         assert any("at least two" in e for e in errors)
+
+    def test_clarity_grades_each_category(self):
+        catalogue = ps.load_catalogue()
+        def requirement(rid, obligation, kind, elements, quote="Records shall carry it."):
+            return {
+                "requirement_id": rid,
+                "obligation": obligation,
+                "assessable_from": "record_content",
+                "kind": kind,
+                "quote": quote,
+                "elements": elements,
+            }
+
+        one = lambda name: [{"element": name}]  # noqa: E731
+        profile = {
+            "catalogue": catalogue,
+            "requirements": [
+                requirement("A", "must", "presence", one("timestamp")),
+                requirement(
+                    "B",
+                    "must",
+                    "presence",
+                    one("actor_identity"),
+                    "Where applicable, records shall identify the user.",
+                ),
+                requirement("C", "should", "presence", one("session_id")),
+                requirement(
+                    "D",
+                    "must",
+                    "presence",
+                    [{"any_of": [{"element": "target_object"}, {"element": "message"}]}],
+                ),
+                requirement("E", "must", "quality", one("outcome")),
+                requirement(
+                    "F",
+                    "must",
+                    "presence",
+                    [{"any_of": [{"element": "host"}, {"element": "source_address"}]}],
+                ),
+                {
+                    "requirement_id": "G",
+                    "obligation": "must",
+                    "assessable_from": "not_assessable_from_sample",
+                    "kind": None,
+                    "elements": one("event_type"),
+                },
+            ],
+        }
+        clarity = cl.grade(profile)
+        got = {c["category"]: c for c in clarity["categories"]}
+        assert [c["category"] for c in clarity["categories"]] == [
+            "when", "what", "who", "outcome", "where", "link", "target",
+        ]
+        assert {k: v["bin"] for k, v in got.items()} == {
+            "when": 5,
+            "what": 1,
+            "who": 4,
+            "outcome": 1,
+            "where": 5,
+            "link": 3,
+            "target": 3,
+        }
+        assert got["when"]["gaps"] == []
+        assert got["what"]["gaps"] == [cl.NOT_ADDRESSED] and not got["what"]["addressed"]
+        assert got["who"]["gaps"] == [cl.MISSING["unconditional"]]
+        assert got["outcome"]["addressed"] and got["outcome"]["value_rules"] == 1
+        assert got["outcome"]["gaps"][0] == cl.MISSING["countable"]
+        assert got["link"]["gaps"] == [
+            cl.MISSING["mandatory"],
+            cl.MISSING["unconditional"],
+        ]
+        assert got["target"]["gaps"][0] == cl.MISSING["specific"]
+        assert got["who"]["clauses"] == ["B"]
+        assert clarity["requirements_sha256"] == cl.requirements_digest(
+            profile["requirements"]
+        )
+        assert "who 4" in cl.summary_line(clarity)
+        assert cl.grade({"catalogue": {"elements": {}}, "requirements": []}) is None
+
+    def test_example_profile_carries_a_current_grade(self):
+        profile = json.loads(EXAMPLE_PROFILE.read_text(encoding="utf-8"))
+        assert profile["standard_clarity"] == cl.grade(profile)
+        assert ps.validate_profile(profile)["errors"] == []
+        profile["standard_clarity"] = "good"
+        assert any(
+            "standard_clarity" in e for e in ps.validate_profile(profile)["errors"]
+        )
+
+    def test_validate_profile_refreshes_a_missing_or_stale_grade(
+        self, plugin, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("EVENTMILL_WORKSPACE", str(tmp_path / "ws"))
+        current = plugin.execute(
+            {"action": "validate_profile", "file_path": str(EXAMPLE_PROFILE)}, None
+        )
+        assert current.ok and current.result["refreshed_profile"] is None
+        assert current.result["standard_clarity"]["categories"]
+
+        profile = json.loads(EXAMPLE_PROFILE.read_text(encoding="utf-8"))
+        del profile["standard_clarity"]
+        del profile["catalogue"]["investigation_categories"]
+        old = tmp_path / "old.json"
+        old.write_text(json.dumps(profile), encoding="utf-8")
+        result = plugin.execute(
+            {"action": "validate_profile", "file_path": str(old)}, None
+        )
+        assert result.ok and result.result["valid"]
+        written = json.loads(
+            Path(result.result["refreshed_profile"]["file"]).read_text(encoding="utf-8")
+        )
+        assert written["standard_clarity"] == current.result["standard_clarity"]
+        assert written["catalogue"]["investigation_categories"]
+        assert "missing or out of date" in plugin.summarize_for_llm(result)
+        assert "Clarity of the standard" in plugin.summarize_for_llm(result)
 
     def test_kind_is_optional_and_checked(self):
         profile = json.loads(EXAMPLE_PROFILE.read_text(encoding="utf-8"))

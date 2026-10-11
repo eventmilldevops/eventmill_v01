@@ -485,12 +485,90 @@ def _depth_lines(survey: dict[str, Any], state: dict[str, Any]) -> list[str]:
     return lines
 
 
+CLARITY_NOTES = {
+    "absent": (
+        "This profile carries no clarity grade for the standard. Run "
+        "`logging_standard_profiler --action validate_profile` on it to get a copy "
+        "that does."
+    ),
+    "out_of_date": (
+        "The clarity grade was computed before the profile's requirements were "
+        "last changed. Run `logging_standard_profiler --action validate_profile` "
+        "to refresh it."
+    ),
+}
+
+
+def _coverage_lines(
+    assessment: dict[str, Any], clarity: dict[str, Any]
+) -> list[str]:
+    coverage = assessment.get("investigation_coverage") or []
+    if not coverage:
+        return []
+    total = assessment["records"]
+    graded = clarity["categories"]
+    lines = [
+        "## What an investigation needs from each record",
+        "",
+        "Counted from the records alone, whatever the standard asks for and however "
+        "its requirements were read. A category is covered by a record that carries "
+        "any one of its elements with a valid value. Both scores are bins of five. "
+        "For the log: 1 is under 20% of records, 5 is 80% or better. For the "
+        "standard: 1 is not asked for, 5 is a plain, mandatory, unhedged requirement.",
+        "",
+        "| An investigator needs | Elements | Records | Share | Log | Standard |",
+        "|---|---|---|---|---|---|",
+    ]
+    for item in coverage:
+        if len(item["by_element"]) > 1:
+            elements = ", ".join(
+                f"{e['element']} ({e['records']})" for e in item["by_element"]
+            )
+        else:
+            elements = item["by_element"][0]["element"]
+        grade = graded.get(item["category"])
+        lines.append(
+            f"| {item['question']} | {elements} | {item['records']} of {total}"
+            + ("" if item.get("count_is_exact", True) else " (at least)")
+            + f" | {_pct(item['share'])} | {item['bin']} of 5 | "
+            + (f"{grade['bin']} of 5" if grade else "not graded")
+            + " |"
+        )
+    lines.append("")
+    note = CLARITY_NOTES.get(clarity["status"])
+    if note:
+        lines += [note, ""]
+    weak = [
+        (item, graded[item["category"]])
+        for item in coverage
+        if item["category"] in graded and graded[item["category"]]["bin"] < 5
+    ]
+    if weak:
+        lines += [
+            "Where the standard could be firmer. This grades the profile's reading "
+            "of the standard, so check the clauses named before changing the "
+            "standard:",
+            "",
+        ]
+        for item, grade in weak:
+            clauses = ", ".join(grade.get("clauses") or [])
+            lines.append(
+                f"- **{item['question']}** ({grade['bin']} of 5): "
+                + "; ".join(grade.get("gaps") or [])
+                + (f". Clauses: {clauses}" if clauses else "")
+                + "."
+            )
+        lines.append("")
+    return lines
+
+
 def markdown_report(
     profile: dict[str, Any],
     assessment: dict[str, Any],
     spec: dict[str, Any],
     state: dict[str, Any],
     survey: dict[str, Any],
+    clarity: dict[str, Any] | None = None,
 ) -> str:
     standard = profile.get("standard") or {}
     counts = assessment["counts"]
@@ -537,7 +615,11 @@ def markdown_report(
     ]
     for key, word in STATE_WORDS.items():
         lines.append(f"| {word} | {counts.get(key, 0)} |")
-    lines += ["", "## Requirements assessed against the records", ""]
+    lines.append("")
+    lines += _coverage_lines(
+        assessment, clarity or {"status": "absent", "categories": {}}
+    )
+    lines += ["## Requirements assessed against the records", ""]
     assessed = [
         f
         for f in assessment["findings"]

@@ -99,7 +99,9 @@ against.
   "provenance": {"generated_by": "...", "provider_id": "...",
                  "model_version": "...", "transport": "..."},
   "review_status": "draft_unreviewed",
-  "catalogue": {"catalogue_version": "1.0.0", "elements": {"timestamp": {...}}},
+  "catalogue": {"catalogue_version": "1.1.0", "elements": {"timestamp": {...}},
+                "investigation_categories": [{"id": "when", "question": "...", "elements": ["timestamp"]}]},
+  "standard_clarity": {"bins": 5, "requirements_sha256": "...", "categories": [...]},
   "requirements": [
     {
       "requirement_id": "4.2.1",
@@ -277,6 +279,55 @@ seen it before. Pinning a reviewed mapping, comparing audits over time and
 carrying review decisions forward belong to a longer-running audit tool and
 are out of scope here. `scripts/audit_repeatability.py` measures agreement
 between repeat runs; the measured figures are in the auditor's README.
+
+### 6b. Investigation coverage and the clarity of the standard
+
+Findings per requirement depend on how a model cut the standard into
+requirements. Two profiles of one standard gave 70% and 82% "fully observed"
+for the same log while agreeing on every count underneath. Two measures are
+reported that do not have that weakness. Both use seven categories, held in
+the catalogue as `investigation_categories`:
+
+| Category | An investigator needs | Elements, any one of |
+|---|---|---|
+| `when` | When it happened | `timestamp` |
+| `what` | What happened | `event_type` |
+| `who` | Who or what did it | `actor_identity` |
+| `outcome` | How it ended | `outcome` |
+| `where` | Where it came from | `host`, `source_component`, `source_address` |
+| `link` | What links it to related events | `session_id` |
+| `target` | What was acted on | `target_object` |
+
+**Coverage of the log** (`assessment.investigation_coverage`, auditor). Per
+category, the records carrying at least one of its elements with a valid
+value, over all records. It is counted from the records and the field mapping
+and does not read the requirements. The auditor asks the model to map the
+category elements whether or not the standard requires them. The share lands
+in one of five bins: under 20%, 20s, 40s, 60s, and 80% or better.
+
+**Clarity of the standard** (`standard_clarity` in the profile, profiler).
+Per category, bin 1 plus one for each criterion met:
+
+| Criterion | Met when |
+|---|---|
+| countable | A presence rule names an element of the category |
+| mandatory | Such a rule is `must` |
+| specific | Such a rule needs the category on its own: a required element, or a group whose members are all in the category |
+| unconditional | A rule meeting all three is not hedged ("where applicable", "when needed", "where feasible", "to the extent") |
+
+Bin 1 with `addressed: false` means no requirement about records names the
+category. Each grade lists the clauses behind it and the criteria it lacks.
+It grades the profile's reading of the standard, so a poor extraction lowers
+it as poor wording does.
+
+The grade carries `requirements_sha256`. The auditor does not compute the
+rubric; it shows the stored grade and reports it `absent` or `out_of_date`
+when the digest no longer matches the requirements. `validate_profile`
+recomputes the grade and, when the stored one is missing or stale, writes a
+copy of the profile that carries it.
+
+The mapping still decides which field is which element, so coverage can move
+between runs where a field is ambiguous. See section 9.
 
 ## 7. Outputs
 

@@ -9,6 +9,8 @@ out of reach of a log sample, never as met or unmet.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 STATES = (
@@ -37,6 +39,88 @@ KIND_BASIS = {
     ),
     "permission": "a permission, with nothing to fall short of",
 }
+
+
+BINS = 5
+# What an investigation needs a record to say. A profile's catalogue carries
+# its own copy; this one serves a profile written before the catalogue had it.
+DEFAULT_CATEGORIES = [
+    {
+        "id": "when",
+        "question": "When it happened",
+        "elements": [
+            "timestamp"
+        ]
+    },
+    {
+        "id": "what",
+        "question": "What happened",
+        "elements": [
+            "event_type"
+        ]
+    },
+    {
+        "id": "who",
+        "question": "Who or what did it",
+        "elements": [
+            "actor_identity"
+        ]
+    },
+    {
+        "id": "outcome",
+        "question": "How it ended",
+        "elements": [
+            "outcome"
+        ]
+    },
+    {
+        "id": "where",
+        "question": "Where it came from",
+        "elements": [
+            "host",
+            "source_component",
+            "source_address"
+        ]
+    },
+    {
+        "id": "link",
+        "question": "What links it to related events",
+        "elements": [
+            "session_id"
+        ]
+    },
+    {
+        "id": "target",
+        "question": "What was acted on",
+        "elements": [
+            "target_object"
+        ]
+    },
+]
+
+
+def quintile(share: float) -> int:
+    """Bin 1 to 5: under 20%, 20s, 40s, 60s, and 80% or better."""
+    return min(BINS, int(max(share, 0.0) * BINS) + 1)
+
+
+def categories(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    known = profile["catalogue"]["elements"]
+    raw = profile["catalogue"].get("investigation_categories")
+    out = []
+    for item in raw if isinstance(raw, list) else DEFAULT_CATEGORIES:
+        if not isinstance(item, dict):
+            continue
+        names = [n for n in item.get("elements") or [] if n in known]
+        if names:
+            out.append(
+                {
+                    "category": str(item.get("id") or ""),
+                    "question": str(item.get("question") or ""),
+                    "elements": names,
+                }
+            )
+    return out
 
 
 def read_profile(profile: Any) -> tuple[dict[str, Any] | None, list[str]]:
@@ -103,8 +187,15 @@ def _slots(requirement: dict[str, Any], known: dict[str, Any]) -> list[dict[str,
 
 
 def wanted_elements(profile: dict[str, Any]) -> list[str]:
-    """Catalogue elements that some testable requirement needs, in catalogue order."""
-    needed: set[str] = set()
+    """Catalogue elements to look for in the log, in catalogue order.
+
+    Those some testable requirement needs, and those of the investigation
+    categories whatever the standard says: coverage of the categories is
+    reported for the log on its own account.
+    """
+    needed: set[str] = {
+        name for category in categories(profile) for name in category["elements"]
+    }
     for requirement in profile["requirements"]:
         if not isinstance(requirement, dict):
             continue
@@ -171,6 +262,68 @@ def _state(share: float) -> str:
     if share <= 0:
         return "not_observed"
     return "partially_observed"
+
+
+def investigation_coverage(
+    profile: dict[str, Any], test: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Per category, the records carrying at least one of its elements.
+
+    Counted from the records alone. It does not depend on which requirements
+    the profile holds or how they were worded.
+    """
+    total = test["records"]
+    out: list[dict[str, Any]] = []
+    for category in categories(profile):
+        names = category["elements"]
+        records = 0
+        each = {name: 0 for name in names}
+        exact = True
+        for result in test["patterns"]:
+            exact = exact and not result.get("combinations_capped")
+            for combination in result.get("combinations", []):
+                carried = [n for n in names if n in combination["elements"]]
+                for name in carried:
+                    each[name] += combination["records"]
+                if carried:
+                    records += combination["records"]
+        share = records / total if total else 0.0
+        out.append(
+            {
+                **category,
+                "records": records,
+                "share": round(share, 4),
+                "bin": quintile(share),
+                "count_is_exact": exact,
+                "by_element": [
+                    {"element": name, "records": each[name]} for name in names
+                ],
+            }
+        )
+    return out
+
+
+def standard_clarity(profile: dict[str, Any]) -> dict[str, Any]:
+    """The profiler's grade of the standard, and whether it is still current.
+
+    The grade is the profiler's to compute. This only reads it and compares
+    the digest it carries with the requirements now in the profile.
+    """
+    stored = profile.get("standard_clarity")
+    if not isinstance(stored, dict) or not isinstance(stored.get("categories"), list):
+        return {"status": "absent", "categories": {}}
+    text = json.dumps(profile["requirements"], sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return {
+        "status": (
+            "current" if stored.get("requirements_sha256") == digest else "out_of_date"
+        ),
+        "categories": {
+            str(item.get("category")): item
+            for item in stored["categories"]
+            if isinstance(item, dict)
+        },
+    }
 
 
 def assess(
@@ -353,6 +506,8 @@ def assess(
         "coverage": test["coverage"],
         "split_signature": test.get("split_signature"),
         "elements": test.get("elements", {}),
+        "investigation_coverage": investigation_coverage(profile, test),
+        "standard_clarity_status": standard_clarity(profile)["status"],
         "requirements": len(findings),
         "requirements_assessed": assessed,
         "counts": counts,

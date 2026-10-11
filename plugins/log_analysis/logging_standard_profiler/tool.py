@@ -52,6 +52,7 @@ def _load_sibling(module_file: str, alias: str):
 
 ps = _load_sibling("profile_schema.py", "logging_standard_profiler_profile_schema")
 ex = _load_sibling("extraction.py", "logging_standard_profiler_extraction")
+cl = _load_sibling("clarity.py", "logging_standard_profiler_clarity")
 
 TOOL_NAME = "logging_standard_profiler"
 ACTIONS = ("extract_profile", "validate_profile")
@@ -180,7 +181,7 @@ class LoggingStandardProfiler:
             )
         try:
             if action == "validate_profile":
-                return self._validate_profile(path)
+                return self._validate_profile(path, context)
             return self._extract_profile(path, artifact, payload, context)
         except (
             Exception
@@ -195,7 +196,7 @@ class LoggingStandardProfiler:
     # validate_profile
     # -------------------------------------------------------------------
 
-    def _validate_profile(self, path: Path) -> ToolResult:
+    def _validate_profile(self, path: Path, context: Any = None) -> ToolResult:
         try:
             profile = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -209,6 +210,44 @@ class LoggingStandardProfiler:
             profile.get("requirements") if isinstance(profile, dict) else None
         )
         requirements = requirements if isinstance(requirements, list) else []
+        clarity = None
+        refreshed: dict[str, Any] = {}
+        output_artifacts = None
+        if not report["errors"]:
+            if not isinstance(
+                profile["catalogue"].get("investigation_categories"), list
+            ):
+                profile["catalogue"]["investigation_categories"] = ps.load_catalogue()[
+                    "investigation_categories"
+                ]
+            clarity = cl.grade(profile)
+            if clarity != profile.get("standard_clarity"):
+                # The grade in the file is missing or predates an edit. The
+                # auditor shows the stored one, so write a copy that carries it.
+                profile["standard_clarity"] = clarity
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                workspace = Path(os.environ.get("EVENTMILL_WORKSPACE", "./workspace"))
+                art_dir = workspace / "artifacts"
+                art_dir.mkdir(parents=True, exist_ok=True)
+                out = art_dir / f"{path.stem}_graded_{stamp}.json"
+                out.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+                refreshed = {"file": str(out), "artifact_id": None}
+                register = getattr(context, "register_artifact", None)
+                if register is not None:
+                    registered = register(
+                        "json_events",
+                        str(out),
+                        TOOL_NAME,
+                        {
+                            "kind": "logging_requirement_profile",
+                            "standard": (profile.get("standard") or {}).get("title"),
+                        },
+                    )
+                    refreshed["artifact_id"] = getattr(registered, "artifact_id", None)
+                else:
+                    output_artifacts = [
+                        {"artifact_type": "json_events", "file_path": str(out)}
+                    ]
         return ToolResult(
             ok=True,
             result={
@@ -218,7 +257,10 @@ class LoggingStandardProfiler:
                 "errors": report["errors"],
                 "warnings": report["warnings"],
                 "counts": _counts([r for r in requirements if isinstance(r, dict)]),
+                "standard_clarity": clarity,
+                "refreshed_profile": refreshed or None,
             },
+            output_artifacts=output_artifacts,
         )
 
     # -------------------------------------------------------------------
@@ -467,6 +509,7 @@ class LoggingStandardProfiler:
             "catalogue": catalogue,
             "requirements": requirements,
         }
+        profile["standard_clarity"] = cl.grade(profile)
         report = ps.validate_profile(profile)
 
         workspace = Path(os.environ.get("EVENTMILL_WORKSPACE", "./workspace"))
@@ -501,6 +544,7 @@ class LoggingStandardProfiler:
                 "profile_file": str(profile_path),
                 "profile_artifact_id": profile_artifact_id,
                 "counts": _counts(requirements),
+                "standard_clarity": profile["standard_clarity"],
                 "quote_check": quote_counts,
                 "statement_coverage": (
                     {k: v for k, v in coverage.items() if not isinstance(v, list)}
@@ -560,6 +604,15 @@ class LoggingStandardProfiler:
                 + f", {len(warnings)} warning(s).",
                 _counts_line(counts),
             ]
+            if data.get("standard_clarity"):
+                lines.append(cl.summary_line(data["standard_clarity"]))
+            refreshed = data.get("refreshed_profile")
+            if refreshed:
+                lines.append(
+                    "The clarity grade stored in the file was missing or out of date. "
+                    "A copy carrying the current grade: "
+                    f"{refreshed.get('artifact_id') or refreshed.get('file')}."
+                )
             lines += [f"  error: {e}" for e in errors[:8]]
             lines += [f"  warning: {w}" for w in warnings[:6]]
             return "\n".join(lines)
@@ -585,6 +638,8 @@ class LoggingStandardProfiler:
                 f"not a requirement, {coverage.get('not_classified', 0)} not classified "
                 f"(sweep: {coverage.get('sweep')})."
             )
+        if data.get("standard_clarity"):
+            lines.append(cl.summary_line(data["standard_clarity"]))
         if data.get("profile_artifact_id"):
             lines.append(
                 f"Profile artifact: {data['profile_artifact_id']} "

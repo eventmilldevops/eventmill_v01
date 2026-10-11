@@ -12,8 +12,164 @@
     "generated_at": "2026-10-10T00:00:00+00:00"
   },
   "review_status": "reviewed",
+  "standard_clarity": {
+    "bins": 5,
+    "requirements_sha256": "5429ea18eb2794c2b676473fa438dc3a73f66c91b31b8840616ae496faca4402",
+    "categories": [
+      {
+        "category": "when",
+        "question": "When it happened",
+        "elements": [
+          "timestamp"
+        ],
+        "bin": 5,
+        "addressed": true,
+        "criteria": {
+          "countable": true,
+          "mandatory": true,
+          "specific": true,
+          "unconditional": true
+        },
+        "gaps": [],
+        "clauses": [
+          "4.2.1"
+        ],
+        "clause_count": 1,
+        "value_rules": 1
+      },
+      {
+        "category": "what",
+        "question": "What happened",
+        "elements": [
+          "event_type"
+        ],
+        "bin": 5,
+        "addressed": true,
+        "criteria": {
+          "countable": true,
+          "mandatory": true,
+          "specific": true,
+          "unconditional": true
+        },
+        "gaps": [],
+        "clauses": [
+          "4.2.2"
+        ],
+        "clause_count": 1,
+        "value_rules": 0
+      },
+      {
+        "category": "who",
+        "question": "Who or what did it",
+        "elements": [
+          "actor_identity"
+        ],
+        "bin": 5,
+        "addressed": true,
+        "criteria": {
+          "countable": true,
+          "mandatory": true,
+          "specific": true,
+          "unconditional": true
+        },
+        "gaps": [],
+        "clauses": [
+          "4.2.3"
+        ],
+        "clause_count": 1,
+        "value_rules": 0
+      },
+      {
+        "category": "outcome",
+        "question": "How it ended",
+        "elements": [
+          "outcome"
+        ],
+        "bin": 5,
+        "addressed": true,
+        "criteria": {
+          "countable": true,
+          "mandatory": true,
+          "specific": true,
+          "unconditional": true
+        },
+        "gaps": [],
+        "clauses": [
+          "4.2.3"
+        ],
+        "clause_count": 1,
+        "value_rules": 0
+      },
+      {
+        "category": "where",
+        "question": "Where it came from",
+        "elements": [
+          "host",
+          "source_address",
+          "source_component"
+        ],
+        "bin": 5,
+        "addressed": true,
+        "criteria": {
+          "countable": true,
+          "mandatory": true,
+          "specific": true,
+          "unconditional": true
+        },
+        "gaps": [],
+        "clauses": [
+          "4.2.2",
+          "4.2.4"
+        ],
+        "clause_count": 2,
+        "value_rules": 0
+      },
+      {
+        "category": "link",
+        "question": "What links it to related events",
+        "elements": [
+          "session_id"
+        ],
+        "bin": 1,
+        "addressed": false,
+        "criteria": {
+          "countable": false,
+          "mandatory": false,
+          "specific": false,
+          "unconditional": false
+        },
+        "gaps": [
+          "no clause about record content names it"
+        ],
+        "clauses": [],
+        "clause_count": 0,
+        "value_rules": 0
+      },
+      {
+        "category": "target",
+        "question": "What was acted on",
+        "elements": [
+          "target_object"
+        ],
+        "bin": 1,
+        "addressed": false,
+        "criteria": {
+          "countable": false,
+          "mandatory": false,
+          "specific": false,
+          "unconditional": false
+        },
+        "gaps": [
+          "no clause about record content names it"
+        ],
+        "clauses": [],
+        "clause_count": 0,
+        "value_rules": 0
+      }
+    ]
+  },
   "catalogue": {
-    "catalogue_version": "1.0.0",
+    "catalogue_version": "1.1.0",
     "value_types": [
       "timestamp",
       "category",
@@ -46,7 +202,7 @@
       },
       "source_component": {
         "value_type": "identity",
-        "description": "The program, service, module or process name that generated the record."
+        "description": "The program, application, service or module the event came from: the one that wrote the record or, in a server's audit log, the client program that made the request."
       },
       "host": {
         "value_type": "identity",
@@ -66,11 +222,11 @@
       },
       "session_id": {
         "value_type": "identifier",
-        "description": "Session, request, trace or correlation identifier linking related records."
+        "description": "Session, transaction, request, trace or correlation identifier: it names the unit of work a record belongs to, and may appear on one record or many."
       },
       "event_id": {
         "value_type": "identifier",
-        "description": "Unique identifier or sequence number of this individual record."
+        "description": "Identifier or sequence number of this individual record itself, not of the session, transaction or request it belongs to."
       },
       "process_id": {
         "value_type": "integer",
@@ -81,6 +237,59 @@
         "description": "Free-text description of the event."
       }
     },
+    "investigation_categories": [
+      {
+        "id": "when",
+        "question": "When it happened",
+        "elements": [
+          "timestamp"
+        ]
+      },
+      {
+        "id": "what",
+        "question": "What happened",
+        "elements": [
+          "event_type"
+        ]
+      },
+      {
+        "id": "who",
+        "question": "Who or what did it",
+        "elements": [
+          "actor_identity"
+        ]
+      },
+      {
+        "id": "outcome",
+        "question": "How it ended",
+        "elements": [
+          "outcome"
+        ]
+      },
+      {
+        "id": "where",
+        "question": "Where it came from",
+        "elements": [
+          "host",
+          "source_component",
+          "source_address"
+        ]
+      },
+      {
+        "id": "link",
+        "question": "What links it to related events",
+        "elements": [
+          "session_id"
+        ]
+      },
+      {
+        "id": "target",
+        "question": "What was acted on",
+        "elements": [
+          "target_object"
+        ]
+      }
+    ],
     "constraints": {
       "timezone_required": "boolean; timestamp values must carry a UTC offset or zone designator",
       "min_precision": "one of second, millisecond, microsecond; minimum timestamp resolution",

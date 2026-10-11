@@ -136,6 +136,27 @@ nothing is known about them. Their shapes are listed under `unmatched_groups`.
 Value flags such as `year_absent`, `no_timezone`, `constant_value` and
 `out_of_order` are observations for a reader. None of them fails a check.
 
+### What an investigation needs from each record
+
+The report opens with a table that does not depend on how the standard was
+cut into requirements:
+
+| An investigator needs | Elements | Records | Share | Log | Standard |
+|---|---|---|---|---|---|
+| Where it came from | host (6), source_component (182), source_address (194) | 200 of 200 | 100.0% | 5 of 5 | 5 of 5 |
+| What was acted on | target_object | 152 of 200 | 76.0% | 4 of 5 | 4 of 5 |
+
+`Log` is the share of records carrying any one of the category's elements, in
+five bins (1 is under 20%, 5 is 80% or better). `Standard` is the profiler's
+grade of how plainly the standard requires it. Read them together: a low
+`Log` with a high `Standard` is a gap in the application's logging; a low
+`Standard` is a clause to tighten, and the lines under the table say which
+and why. If the profile carries no grade, or one older than its last edit,
+the report says so and how to refresh it.
+
+Use this table when the question is "is there enough here to investigate".
+The per-requirement findings answer "which clauses does this sample meet".
+
 ## Outputs
 
 Six artifacts per audit, stamped with the UTC run time:

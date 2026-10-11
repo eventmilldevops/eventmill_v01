@@ -358,4 +358,9 @@ def validate_profile(profile: Any) -> dict[str, list[str]]:
             "no requirement is testable against log records; an audit would "
             "report every requirement as out of reach"
         )
+    clarity = profile.get("standard_clarity")
+    if clarity is not None and not (
+        isinstance(clarity, dict) and isinstance(clarity.get("categories"), list)
+    ):
+        errors.append("standard_clarity must be an object with a categories list")
     return {"errors": errors, "warnings": warnings}
