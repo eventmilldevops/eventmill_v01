@@ -8,15 +8,25 @@ timestamp at the end of the line, the program name first, event codes nobody
 else uses. Such logs still repeat a handful of record shapes over and over, and
 that repetition is what the tool works on.
 
-Spec: `docs/specs/log_compliance_audit.md`.
+It answers two questions, and keeps them apart:
+
+- **Is there enough in these records to support an investigation?** A table of
+  seven things an investigator needs (when, what, who, and so on), counted
+  from the records, beside a grade of how plainly the standard asks for each.
+- **Which clauses of the standard does this sample meet?** One finding per
+  requirement, with the record counts behind it.
+
+Spec: `docs/specs/log_compliance_audit.md`. Why the report is built this way:
+`docs/adr/0001-grade-the-standard-and-the-log-against-fixed-categories.md`.
 
 ## How it works
 
 1. **Survey.** The whole file is read locally and its lines grouped into rough
    shapes. JSON lines are recognised as such.
 2. **Propose.** A model is shown a few dozen lines of each shape, at most 200
-   lines in total, with the list of record elements the standard asks for. It
-   returns one pattern per record shape: a regex with named groups, and which
+   lines in total, with the list of record elements to look for: those
+   the standard asks for, and those of the seven investigation categories
+   whatever the standard says. It returns one pattern per record shape: a regex with named groups, and which
    element each group holds.
 3. **Test.** Every pattern is run over **every record in the file**, here in
    the container. Each captured value is checked against what it was claimed
@@ -26,8 +36,9 @@ Spec: `docs/specs/log_compliance_audit.md`.
    failed their check and a sample of the lines nothing matched. Steps 2 to 4
    repeat until the patterns cover the file and the values hold, or a round
    improves nothing, or the round or time limit is reached.
-5. **Assess.** The confirmed elements are joined to the requirement profile and
-   each requirement gets a finding with the record counts behind it.
+5. **Assess.** Coverage of the seven categories is counted from the records.
+   Then the confirmed elements are joined to the requirement profile and each
+   requirement gets a finding with the record counts behind it.
 
 The file is never uploaded. The result states exactly how many lines and
 characters were sent.
@@ -112,50 +123,93 @@ An incomplete run is a normal outcome, not an error. The tool has ten minutes
 and a heavy-tier call can take two or three of them, so it stops starting new
 calls with time in hand and saves what it has.
 
+### What an investigation needs from each record
+
+The report's first table, and the one to read first:
+
+| An investigator needs | Elements | Records | Share | Log | Standard |
+|---|---|---|---|---|---|
+| Who or what did it | actor_identity | 200 of 200 | 100.0% | 5 of 5 | 4 of 5 |
+| Where it came from | host (6), source_component (182), source_address (194) | 200 of 200 | 100.0% | 5 of 5 | 5 of 5 |
+| What links it to related events | session_id | 184 of 200 | 92.0% | 5 of 5 | 3 of 5 |
+| What was acted on | target_object | 152 of 200 | 76.0% | 4 of 5 | 4 of 5 |
+
+The seven categories are fixed, in the catalogue:
+
+| Category | An investigator needs | Elements, any one of |
+|---|---|---|
+| `when` | When it happened | `timestamp` |
+| `what` | What happened | `event_type` |
+| `who` | Who or what did it | `actor_identity` |
+| `outcome` | How it ended | `outcome` |
+| `where` | Where it came from | `host`, `source_component`, `source_address` |
+| `link` | What links it to related events | `session_id` |
+| `target` | What was acted on | `target_object` |
+
+- **`Log`** is the share of records carrying any one of the category's
+  elements with a valid value, in five bins: 1 is under 20%, 2 the 20s, 3 the
+  40s, 4 the 60s and 70s, 5 is 80% or better. It is counted from the records
+  and does not read the requirements.
+- **`Standard`** is the profiler's grade of how plainly the standard requires
+  the category, also 1 to 5. See the profiler's README for the rubric. If the
+  profile carries no grade, or one older than its last edit, the report says
+  so and how to refresh it.
+
+Read the two together:
+
+| Log | Standard | What it points at |
+|---|---|---|
+| low | high | A gap in the application's logging. The standard is clear and the records fall short. |
+| high | low | The log is ahead of the standard. Tighten the clause, or the next application may not be. |
+| low | low | Both. Fix the clause first, or the gap cannot be called a finding. |
+
+Under the table the report lists every category graded below 5, with the
+reason and the clauses it was read from.
+
+### Findings per requirement
+
 Each requirement gets one of five findings:
 
 | Finding | Meaning |
 |---|---|
 | `observed` | Every required element was captured, with valid values, in at least 99% of **all** records |
 | `partially_observed` | In some records and not others. The report shows which record types fall short and why. |
-
-A requirement can need several elements together, and can accept any one of a group of alternatives (the profile's `any_of`). The report says which: "All required elements present in ...", "At least one of the elements below is present in ...", or a `Needs:` line when both apply. A `may` requirement is marked `Optional`.
 | `not_observed` | No record carried all the required elements |
 | `not_assessable_from_sample` | The requirement is about retention, protection, review or the like. A log file cannot show it either way. |
 | `not_evaluated` | The requirement is about records, but it is not a rule that an element must be present (a prohibition, a rule about value quality, a rule that some event is logged, a permission), or it names no catalogue element. Nothing was counted. |
 
-**Only presence rules are counted.** The report lists the others under "Requirements about records that were not counted", grouped by kind, with how many records carry the elements each one names. Those lines are reference for a reviewer and are not findings: `message in 0 of 200` beside a rule that free text must not be the only representation is good news, not a gap.
+A requirement can need several elements together, and can accept any one of a
+group of alternatives (the profile's `any_of`). The report says which: "All
+required elements present in ...", "At least one of the elements below is
+present in ...", or a `Needs:` line when both apply. A `may` requirement is
+marked `Optional`.
+
+**Only presence rules are counted.** The report lists the others under
+"Requirements about records that were not counted", grouped by kind, with how
+many records carry the elements each one names. Those lines are reference for
+a reviewer and are not findings: `message in 0 of 200` beside a rule that free
+text must not be the only representation is good news, not a gap.
 
 **None of these means compliant.** The report describes what this sample
 contains. It cannot see events the application never logged, and it does not
 judge whether the right events are being recorded.
 
-Records that no pattern matched count against every requirement, because
-nothing is known about them. Their shapes are listed under `unmatched_groups`.
+Records that no pattern matched count against every requirement and every
+category, because nothing is known about them. Their shapes are listed under
+`unmatched_groups`.
 
 Value flags such as `year_absent`, `no_timezone`, `constant_value` and
 `out_of_order` are observations for a reader. None of them fails a check.
 
-### What an investigation needs from each record
+### Do not score the audit by counting findings
 
-The report opens with a table that does not depend on how the standard was
-cut into requirements:
-
-| An investigator needs | Elements | Records | Share | Log | Standard |
-|---|---|---|---|---|---|
-| Where it came from | host (6), source_component (182), source_address (194) | 200 of 200 | 100.0% | 5 of 5 | 5 of 5 |
-| What was acted on | target_object | 152 of 200 | 76.0% | 4 of 5 | 4 of 5 |
-
-`Log` is the share of records carrying any one of the category's elements, in
-five bins (1 is under 20%, 5 is 80% or better). `Standard` is the profiler's
-grade of how plainly the standard requires it. Read them together: a low
-`Log` with a high `Standard` is a gap in the application's logging; a low
-`Standard` is a clause to tighten, and the lines under the table say which
-and why. If the profile carries no grade, or one older than its last edit,
-the report says so and how to refresh it.
-
-Use this table when the question is "is there enough here to investigate".
-The per-requirement findings answer "which clauses does this sample meet".
+"Share of requirements observed" is not a stable number. It depends on how
+the model that wrote the profile cut the standard into requirements. Two
+profiles of the same standard, audited against the same log with the same
+element counts, gave 7 of 10 and 9 of 11 observed: one model had left an
+alternative out of a group, the other had counted three overlapping clauses.
+The category table was identical for both. Use the table for an overall
+judgement and the findings to locate the clause.
 
 ## Outputs
 
@@ -180,10 +234,44 @@ On Cloud Run all six are exported to the common bucket automatically. The
 result and the report contain sample lines and example values from the log, so
 treat them with the same care as the log.
 
-## Repeatability
+## Different models, different runs
 
-A model proposes the mapping, so two runs on the same file can differ. Each
-result carries what is needed to tell whether they did:
+A model reads the standard and a model maps the log, so two runs can differ,
+and two vendors can differ more. The tool treats that the way an audit team
+treats two auditors: it fixes what should not be a matter of opinion, labels
+what is, and gives you the means to compare.
+
+| What | Decided by | Moves between runs or models? |
+|---|---|---|
+| Record counts, value checks, coverage arithmetic, bins | Code | No |
+| The seven categories and the clarity rubric | Catalogue and code | No |
+| The syslog header | Code | No |
+| Which field is which element | Model, then tested on every record | Sometimes, where a field is ambiguous |
+| How the standard is cut into requirements, and each one's kind and groups | Model, then reviewed by a person | Yes |
+
+What was measured on the example standard and its database sample log
+(2026-10-11, Gemini and Anthropic heavy tier, each writing its own profile and
+its own mapping):
+
+- Both mapped every element to the same fields with the same record counts,
+  from different record-type splits (11 types and 6).
+- The profiles held 135 and 152 requirements. Of 126 sentences both quoted,
+  118 were classified the same way.
+- The category table was the same for both. The count of findings was not.
+- Before the catalogue descriptions were reworded, one model mapped a
+  transaction id as `session_id` in one run and `event_id` in another, moving
+  `link` between 92% and 10%. After, three runs agreed. `target_object` still
+  moved between 76% and 100% across those runs.
+
+So when a category bin is low, look at the field table at the end of the
+report before believing it: an element sitting unmapped beside a likely field
+is a mapping question, not a logging gap. Running the audit on a second
+provider (`use <provider> for log_compliance_auditor`) is the cheapest second
+opinion, and the tool never switches provider on its own.
+
+### Telling whether two runs agree
+
+Each result carries what is needed:
 
 - `run.inputs_fingerprint`: the log, profile, catalogue, prompt and plugin
   versions, settings and model. The same value means the same question.
@@ -194,10 +282,13 @@ result carries what is needed to tell whether they did:
   captured the same values from the same records.
 - `assessment.split_signature`: the same idea for how the file was divided
   into record types.
+- `assessment.investigation_coverage`: the category table as data.
 
 `scripts/audit_repeatability.py` runs the audit N times and reports agreement
-per element and per finding. On the example corpus (four logs, five runs each,
-Gemini and Anthropic heavy tier, 2026-10-10):
+per element and per finding. The figures below are from the example corpus
+(four logs, five runs each, Gemini and Anthropic heavy tier) on 2026-10-10.
+**They predate `any_of` groups, requirement kinds and catalogue 1.1.0** and
+have not been re-measured; read them as the order of magnitude.
 
 | | Result |
 |---|---|
@@ -210,11 +301,6 @@ On the two syslog samples `timestamp`, `host`, `source_component` and
 `message` had the same signature in all 20 runs, and 97% to 100% of records
 had their message broken down. `process_id` matched in 18 of 20: in two runs a
 model also mapped a process id it found inside a message.
-
-The record count behind a finding moves more than its state does, because
-which field is mapped to `event_type`, `target_object` or `message` varies.
-When a finding matters, run the audit twice and compare the element
-signatures.
 
 ## Why RE2
 
@@ -230,17 +316,21 @@ reason sent back.
 - **A multi-line record is read by its first line.** Indented lines and stack
   traces (including the unindented `java.x.SomeException: ...` line that
   opens one) are joined to the record above and counted, not parsed.
-- **Which field is the event type is a judgment, and it varies.** Two audits
-  of the same file can map different fields to an element, and the record
-  count behind a finding moves with the mapping, more often than the finding
-  itself does.
+- **Which field is which element is a judgment, and it varies.** Two audits
+  of the same file can map different fields to an element. The record count
+  behind a finding, and a category's coverage, move with the mapping.
+- **The seven categories are fixed.** `severity`, `destination_address`,
+  `event_id`, `process_id` and `message` belong to none, and a standard with a
+  different idea of what a record needs is still graded against these seven.
+- **Coverage counts presence.** A record that names a shared service account
+  covers `who`. Whether that is enough to identify a person is not judged.
 - **A conditional requirement is counted against every record.** "Where
   applicable" is not interpreted; the report lists the record types that
   fall short and leaves applicability to the reader.
 - **This is a first look at a log, not a controlled audit.** Each run maps the
   log afresh. Measured over 40 runs on two providers, the finding for a
   requirement was the same in at least 4 of 5 runs 96% of the time; see
-  *Repeatability* below. Nothing carries a mapping from one run to the next.
+  *Different models, different runs* above. Nothing carries a mapping from one run to the next.
 - **Timestamps without a year** (classic syslog) parse and are flagged
   `year_absent`; their plausibility is not checked.
 - **`allowed_values`** is checked exactly for fields with up to 200 distinct

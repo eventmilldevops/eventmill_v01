@@ -167,3 +167,4 @@ and is silently wrong, which is why the deploy scripts guard it.
 | How to write a plugin | `docs/guides/plugin_development.md` |
 | Why the LLM layer looks like this | `docs/specs/llm-dispatcher-native-document-handling.md` |
 | What changed and why | `docs/change_log/` |
+| Why a design was chosen over its alternatives | `docs/adr/` |
