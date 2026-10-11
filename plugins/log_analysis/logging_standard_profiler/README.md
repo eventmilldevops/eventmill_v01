@@ -33,6 +33,8 @@ Four things make the review quicker:
   find is marked `quote_not_found`. That is where to look first: the model
   either paraphrased or invented.
 - **`page` is corrected** to wherever the quote was actually found.
+- **`provenance` says which model wrote the draft**, when, and how many tokens
+  it took. The audit report repeats it.
 - **Elements come from a closed catalogue** (`catalogue.json`). A requirement
   the catalogue cannot express is kept with no elements and an
   `unmapped_reason`. It shows in the audit as `not_evaluated`.
@@ -100,6 +102,15 @@ needs:
 
 Constraints: `timezone_required` and `min_precision` (`second`, `millisecond`,
 `microsecond`) on a timestamp; `allowed_values` on any element.
+
+Use `allowed_values` only for literal codes the standard defines ("the result
+field shall be one of OK, FAIL or DENY"). A sentence such as "the record shall
+distinguish success, failure, denial, or another documented state" lists kinds
+of outcome, not the text a record must hold, and a log that writes `DENIED`
+would fail it. On extraction the tool drops `allowed_values` when the quoted
+sentence gives an open list ("or another", "such as", "including", "for
+example", "or equivalent", "etc") and says so in a note. A hand-written
+profile is taken as written.
 
 ### Alternatives
 

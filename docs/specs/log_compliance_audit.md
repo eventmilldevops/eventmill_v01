@@ -8,9 +8,11 @@ an application's log output contain what a logging standard requires?
 | `logging_standard_profiler` | A standard (PDF or text) | A requirement profile (JSON) |
 | `log_compliance_auditor` | A log sample and a profile | An alignment report and an extraction pack |
 
-Status: built 2026-10-10 and run live the same day on one provider against
-the example corpus in `plugins/log_analysis/examples/`. Section 9 lists what
-that covered and what it did not.
+Status: built 2026-10-10. Run live on Gemini, Anthropic and OpenAI against
+the example corpus in `plugins/log_analysis/examples/` by 2026-10-11. Section
+9 lists what that covered and what it did not. The reasoning behind the
+report's two headline measures is in
+`docs/adr/0001-grade-the-standard-and-the-log-against-fixed-categories.md`.
 
 ## 1. Why two steps
 
@@ -120,6 +122,13 @@ against.
   ]
 }
 ```
+
+`allowed_values` is for literal codes the standard defines. When the quoted
+sentence gives an open list ("success, failure, denial, or another documented
+state"; "such as", "including", "for example", "or equivalent", "etc") the
+profiler drops the constraint at extraction and notes it: a list of kinds is
+not the set of values a record must hold, and checking it reports valid
+records as short.
 
 A requirement about records also carries `kind`, which says what sort of
 rule it is:
@@ -374,40 +383,70 @@ was saved.
 
 ## 9. Verified live, and not yet
 
-Run live on 2026-10-10 (Gemini heavy tier, through the shell); details in
-`docs/change_log/2026-10-10-log-compliance-live-runs.md`:
+Each change log entry lists what was run for that change. In sum:
 
-- The profiler on a 14-page standard: 122 requirements in two calls, 145 s.
-- The auditor on a key-value database audit log (200 records, 11 record types,
-  2 rounds, 58 s) and a Tomcat log with stack traces (240 records, 12 record
-  types, 1 round, 64 s). Record counts match the corpus ground truth; actor
-  counts for the database log match exactly.
+**2026-10-10, Gemini and Anthropic heavy tier.** First live runs
+(`2026-10-10-log-compliance-live-runs.md`) and the repeatability measurement
+(`2026-10-10-log-compliance-repeatability.md`): four example logs, five runs
+each on two providers. Every run mapped at least 85% of records. A finding's
+state held in at least 4 of 5 runs for 137 of 144 cases. These figures
+predate `any_of` groups, requirement kinds and the investigation categories
+and have not been re-measured.
+
+**2026-10-11, operator field test on Cloud Run and local runs.** One 14-page
+standard and the 200-record database audit log:
+
+- Profiles from Gemini (two drafts), Anthropic (two drafts) and OpenAI (one):
+  130 to 164 requirements, every quote but one located in the document.
+- Audits on Gemini and Anthropic mapped every element to the same fields with
+  the same record counts, from different record-type splits.
+- Clarity grades from the five profiles agree in every category but one: `who`
+  is 4 in four drafts and 5 in one, where the model read a summary clause as
+  requiring an actor outright.
+- After the catalogue descriptions were reworded, four Anthropic audits gave
+  the same coverage for six of seven categories. `target_object` moved between
+  76% and 100%.
 
 Not yet:
 
-- Any provider but Gemini.
-- `resume` against a real model; neither audit stopped short.
-- A file larger than 249 lines against a real model, so the 480 s budget is
-  untested where it matters.
-- Classic syslog input (no year in the timestamp).
+- Gemini and OpenAI audits on catalogue 1.1.0 by this repository's own runs;
+  the operator ran them on Cloud Run.
+- A second standard, or a log family beyond the four examples. The seven
+  categories and the hedge wording list were written against one standard.
+- `resume` against a real model; no audit has stopped short.
+- A file larger than a few hundred lines against a real model, so the 480 s
+  budget is untested where it matters.
+- The open-list rule for `allowed_values` and `provenance.token_usage` on a
+  live extraction.
 - The Drain similarity threshold (0.5) and the sampling sizes were chosen, not
   tuned.
 - Splunk and Elastic renderings have not been loaded into either product.
 
-Known from those runs and not addressed:
+Known and not addressed:
 
-- Which field a model maps to `event_type` varies between runs on the same
-  file. Measured: the finding's state held in at least 4 of 5 runs for 138 of
-  144 cases; the record count behind it moved more often.
-- On free-text syslog, Gemini returned a two-pattern split (header plus
-  message) in 3 of 5 runs, which mapped every record and almost no elements.
-  Section 5a was added for this. Re-measured: Gemini's syslog findings held
-  in at least 4 of 5 runs for 18 of 18 (was 14), and the two providers'
-  majority findings agreed for 17 of 18 (was 12).
+- Which field a model maps to an element varies between runs where a field is
+  ambiguous. Catalogue wording settled `session_id` and `source_component` on
+  the database log; `target_object` still moves.
+- A profile's requirements differ from draft to draft and model to model: how
+  a paragraph is cut, whether a sentence is a presence or a quality rule,
+  which elements go in a group. The category measures do not depend on the
+  first and are affected by the other two only through the clause a grade
+  rests on, which is named.
+- "Shared identities should be supplemented with the individual identity" is
+  read as a presence rule by all three vendors and counts as observed for any
+  actor field.
 - A conditional requirement ("where applicable") is counted against every
-  record.
+  record. The clarity grade marks the clause down for the hedge.
+- On free-text syslog, Gemini once returned a two-pattern split (header plus
+  message) in 3 of 5 runs. Section 5a was added for this and the findings
+  then held in at least 4 of 5 runs for 18 of 18.
 
 ## 10. Later
+
+- A deterministic check on ambiguous mappings, for example refusing
+  `event_id` for a field whose values repeat.
+- Prompt examples for the presence-or-quality cases the vendors disagree on.
+- Re-measuring repeatability on the current code.
 
 - URL input for the standard.
 - Multi-line record bodies.

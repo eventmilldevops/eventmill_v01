@@ -7,7 +7,9 @@
 - **Related:** `docs/specs/log_compliance_audit.md` (sections 3, 6, 6b),
   change logs `2026-10-10-profile-alternative-elements.md`,
   `2026-10-10-requirement-kinds.md`,
-  `2026-10-11-investigation-coverage-and-standard-clarity.md`
+  `2026-10-11-investigation-coverage-and-standard-clarity.md`,
+  `2026-10-11-clarity-graded-on-one-clause.md`,
+  `2026-10-11-audit-report-run-record.md`
 
 ## Context
 
@@ -98,6 +100,20 @@ A second run, or a run on a second vendor, is a second opinion and is used
 that way. The operator selects the provider per tool. The tool never selects
 or switches one.
 
+An opinion has to be attributable. Every audit report opens with a run
+record: when it was produced, which provider and model mapped the log, which
+read the standard and when, and the calls and tokens each took. The two can
+be different vendors and the report shows both.
+
+### 5a. Say who should not rely on the report alone
+
+The run record is followed by a note on reliance addressed to the owner of
+the business risk, not to an engineer: where a log supports a regulatory
+obligation, or the organization would bear a material consequence if critical
+information proved to be missing, a qualified person should review a
+reasonable sample of records, in proportion to that impact. The tool is a
+first look and its report says what weight it can carry.
+
 ### 6. Keep the grade with the artefact it describes
 
 The profiler owns the rubric. The auditor shows the stored grade and compares
@@ -182,9 +198,12 @@ writes a graded copy when needed.
 - Three live audits on Anthropic after the catalogue descriptions were
   reworded: when, what, who, outcome, where at 100% and link at 92% in all
   three; target at 100%, 76%, 78%.
-- Not yet measured: Gemini and OpenAI on catalogue 1.1.0, a second standard,
-  a second log type, and repeatability figures since `any_of`, kinds and the
-  categories were added.
+- Added later the same day: a second draft from each of Gemini and Anthropic
+  and one from OpenAI, all on catalogue 1.1.0. Under the amended rubric the
+  five profiles grade when, what, outcome and where 5, link 3 and target 4
+  without exception, and who 4 in four and 5 in one.
+- Not yet measured: a second standard, a second log type, and repeatability
+  figures since `any_of`, kinds and the categories were added.
 
 ## Amendment, 2026-10-11: grade on one clause
 

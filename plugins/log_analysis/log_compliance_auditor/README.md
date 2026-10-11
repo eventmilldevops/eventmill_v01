@@ -355,6 +355,9 @@ reason sent back.
 - **A conditional requirement is counted against every record.** "Where
   applicable" is not interpreted; the report lists the record types that
   fall short and leaves applicability to the reader.
+- **The report is not the last word on a log that matters.** For a log
+  behind a regulatory obligation, or one whose gaps would be costly, a person
+  should review a sample of records. The report says so under its run record.
 - **This is a first look at a log, not a controlled audit.** Each run maps the
   log afresh. Measured over 40 runs on two providers, the finding for a
   requirement was the same in at least 4 of 5 runs 96% of the time; see
