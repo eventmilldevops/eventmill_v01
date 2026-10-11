@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "system": "YMMV Legacy Invoicing application server",
+  "host": "invapp01",
+  "fqdn": "invapp01.ymmv.example",
+  "timezone": "UTC-07:00",
+  "interactive_accounts": ["ops_lee", "app_admin", "dba_singh"],
+  "service_accounts": ["root", "tomcat", "postgres"],
+  "reserved_remote_addresses": [
+    "192.0.2.18",
+    "192.0.2.44",
+    "192.0.2.73",
+    "198.51.100.22",
+    "198.51.100.57"
+  ],
+  "sudo_commands": [
+    "/bin/systemctl status tomcat9",
+    "/bin/journalctl -u tomcat9 --since today",
+    "/usr/bin/tail -n 200 /var/log/tomcat9/catalina.out",
+    "/bin/systemctl status postgresql",
+    "/usr/bin/less /var/log/syslog"
+  ],
+  "event_weights": {
+    "CRON_SESSION": 61,
+    "SYSTEM_ACCOUNT_SESSION": 19,
+    "POLKIT_CHECK": 7,
+    "SSHD_MONITOR": 6,
+    "SUDO_COMMAND": 2,
+    "SU_SESSION": 1,
+    "AUTH_CACHE": 4
+  },
+  "fixed_scenarios": [
+    {
+      "id": "INTERACTIVE_LOGIN_SUCCESS",
+      "description": "Five successful SSH public-key sessions by three authorized support users."
+    },
+    {
+      "id": "INTERACTIVE_LOGIN_FAILURE",
+      "description": "Two failed SSH attempts using reserved documentation addresses."
+    }
+  ]
+}

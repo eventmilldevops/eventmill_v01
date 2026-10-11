@@ -758,7 +758,7 @@ class TestPdfContextGuard:
 
     def test_daybreak_inherits_openai_pdf_limits(self, dispatcher):
         """A provider id is not a vendor, but each reads its OWN manifest."""
-        r = self._check_on(dispatcher, "openai_daybreak_red", 150)
+        r = self._check_on(dispatcher, "openai_daybreak_blue", 150)
         assert r is not None and not r.ok
         assert r.fallback_reason == "pdf_exceeds_provider_page_limit"
 

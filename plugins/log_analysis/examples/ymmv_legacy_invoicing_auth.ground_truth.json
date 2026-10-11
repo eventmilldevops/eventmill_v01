@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "system": "YMMV Legacy Invoicing application server",
+  "host": "invapp01",
+  "seed": 260922,
+  "date_range": {
+    "start": "2026-09-15",
+    "end": "2026-09-17"
+  },
+  "logical_record_count": 420,
+  "physical_line_count": 780,
+  "event_counts": {
+    "AUTH_CACHE": 13,
+    "CRON_SESSION": 249,
+    "INTERACTIVE_FAILURE": 2,
+    "INTERACTIVE_SUCCESS": 5,
+    "POLKIT_CHECK": 34,
+    "SSHD_MONITOR": 21,
+    "SUDO_COMMAND": 9,
+    "SU_SESSION": 5,
+    "SYSTEM_ACCOUNT_SESSION": 82
+  },
+  "interactive_activity": {
+    "successful_sessions": 5,
+    "failed_attempts": 2,
+    "total_attempts": 7
+  },
+  "fixed_scenarios": {
+    "INTERACTIVE_LOGIN_SUCCESS": 5,
+    "INTERACTIVE_LOGIN_FAILURE": 2
+  },
+  "investigative_scope_note": "Authentication and privilege-use context only. Application actions and database transactions require the companion logs.",
+  "line_sha256": "afa52a0a00e57cb6a4433e47ffbf6ada7dfbe171c42c9ca383766c6dce4e4f68"
+}

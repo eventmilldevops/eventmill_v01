@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "application": "YMMV Legacy Invoicing",
+  "database": "YMMV_INVOICE",
+  "seed": 260915,
+  "date_range": {
+    "start": "2026-09-15",
+    "end": "2026-09-17"
+  },
+  "record_count": 200,
+  "business_hours": {
+    "definition": "07:00:00 through 17:59:59 inclusive",
+    "count": 166,
+    "ratio": 0.83
+  },
+  "tables": [
+    "YMMV.CUSTOMER",
+    "YMMV.CUSTOMER_CONTACT",
+    "YMMV.INVOICE_HEADER",
+    "YMMV.INVOICE_LINE",
+    "YMMV.PAYMENT",
+    "YMMV.TAX_RATE",
+    "YMMV.APP_CONFIG",
+    "YMMV.AUDIT_QUEUE"
+  ],
+  "accounts": {
+    "application_read_only": [
+      "ymmv_inv_ro"
+    ],
+    "application_read_write": [
+      "ymmv_inv_rw"
+    ],
+    "application_config_change": [
+      "ymmv_inv_cfg"
+    ],
+    "database_administrator": [
+      "dba_chen",
+      "dba_morgan",
+      "dba_ortiz",
+      "dba_singh"
+    ],
+    "backup_agent": [
+      "svc_db_backup"
+    ]
+  },
+  "event_counts": {
+    "ACCESS_DENIED": 7,
+    "BACKUP": 4,
+    "BACKUP_COMPLETE": 1,
+    "BACKUP_START": 1,
+    "COMMIT": 23,
+    "CONFIG_CHANGE": 3,
+    "CONNECT": 6,
+    "DDL": 3,
+    "DELETE": 5,
+    "DISCONNECT": 11,
+    "INSERT": 28,
+    "MAINTENANCE": 4,
+    "ROLLBACK": 4,
+    "SELECT": 67,
+    "SPOOL_CLOSE": 1,
+    "SPOOL_OPEN": 1,
+    "UPDATE": 31
+  },
+  "actor_counts": {
+    "dba_chen": 1,
+    "dba_morgan": 9,
+    "dba_ortiz": 5,
+    "dba_singh": 1,
+    "svc_db_backup": 6,
+    "ymmv_inv_cfg": 3,
+    "ymmv_inv_ro": 48,
+    "ymmv_inv_rw": 127
+  },
+  "fixed_scenarios": {
+    "MANUAL_CUSTOMER_EXPORT": 5,
+    "NIGHTLY_BACKUP": 2
+  },
+  "line_sha256": "0b992bd89fda78451e482fbe9bf3a02edb33ff132eb9a57cbbc8061b3de2053f"
+}

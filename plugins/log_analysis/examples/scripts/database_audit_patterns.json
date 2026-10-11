@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "application": "YMMV Legacy Invoicing",
+  "database": "YMMV_INVOICE",
+  "timezone": "UTC-07:00",
+  "tables": {
+    "YMMV.CUSTOMER": ["customer_id", "legal_name", "billing_email", "credit_status"],
+    "YMMV.CUSTOMER_CONTACT": ["contact_id", "customer_id", "contact_type", "status"],
+    "YMMV.INVOICE_HEADER": ["invoice_id", "customer_id", "invoice_date", "status", "total_amount"],
+    "YMMV.INVOICE_LINE": ["invoice_id", "line_number", "item_code", "quantity", "line_amount"],
+    "YMMV.PAYMENT": ["payment_id", "invoice_id", "payment_date", "amount", "payment_status"],
+    "YMMV.TAX_RATE": ["tax_code", "jurisdiction", "effective_date", "rate"],
+    "YMMV.APP_CONFIG": ["config_key", "config_scope", "value_hash", "updated_by"],
+    "YMMV.AUDIT_QUEUE": ["queue_id", "event_type", "created_at", "delivery_status"]
+  },
+  "accounts": {
+    "application_read_only": ["ymmv_inv_ro"],
+    "application_read_write": ["ymmv_inv_rw"],
+    "application_config_change": ["ymmv_inv_cfg"],
+    "database_administrator": ["dba_chen", "dba_morgan", "dba_ortiz", "dba_singh"],
+    "backup_agent": ["svc_db_backup"]
+  },
+  "clients": {
+    "application": ["invapp01.ymmv.example", "invapp02.ymmv.example"],
+    "reporting": ["invreport01.ymmv.example"],
+    "administration": ["dba-jump01.ymmv.example", "dba-jump02.ymmv.example"],
+    "backup": ["backup01.ymmv.example"]
+  },
+  "event_weights": {
+    "SELECT": 34,
+    "INSERT": 13,
+    "UPDATE": 16,
+    "DELETE": 3,
+    "COMMIT": 10,
+    "ROLLBACK": 3,
+    "CONNECT": 6,
+    "DISCONNECT": 4,
+    "ACCESS_DENIED": 2,
+    "CONFIG_CHANGE": 2,
+    "DDL": 2,
+    "MAINTENANCE": 3,
+    "BACKUP": 2
+  },
+  "fixed_scenarios": [
+    {
+      "id": "MANUAL_CUSTOMER_EXPORT",
+      "description": "A DBA opens a spool file, selects customer records, closes the spool, and disconnects after hours.",
+      "account": "dba_morgan",
+      "client": "dba-jump02.ymmv.example"
+    },
+    {
+      "id": "NIGHTLY_BACKUP",
+      "description": "The backup agent starts and completes a scheduled full database backup after hours.",
+      "account": "svc_db_backup",
+      "client": "backup01.ymmv.example"
+    }
+  ]
+}

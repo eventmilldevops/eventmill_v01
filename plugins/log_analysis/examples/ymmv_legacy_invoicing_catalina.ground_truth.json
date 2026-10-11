@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "application": "YMMV Legacy Invoicing",
+  "service": "invoice-web",
+  "container": "Apache Tomcat/9.0.89",
+  "seed": 260918,
+  "date_range": {
+    "start": "2026-09-15",
+    "end": "2026-09-17"
+  },
+  "logical_record_count": 240,
+  "physical_line_count": 249,
+  "continuation_line_count": 9,
+  "business_hours": {
+    "definition": "07:00:00 through 17:59:59 inclusive",
+    "count": 197,
+    "ratio": 0.8208333333333333
+  },
+  "database": "YMMV_INVOICE",
+  "database_accounts": {
+    "read_only": "ymmv_inv_ro",
+    "read_write": "ymmv_inv_rw",
+    "config_change": "ymmv_inv_cfg"
+  },
+  "tables": [
+    "YMMV.CUSTOMER",
+    "YMMV.CUSTOMER_CONTACT",
+    "YMMV.INVOICE_HEADER",
+    "YMMV.INVOICE_LINE",
+    "YMMV.PAYMENT",
+    "YMMV.TAX_RATE",
+    "YMMV.APP_CONFIG",
+    "YMMV.AUDIT_QUEUE"
+  ],
+  "event_counts": {
+    "AUTHENTICATION": 27,
+    "BACKGROUND_JOB": 8,
+    "CONFIG_REFRESH": 2,
+    "DAO_SELECT": 41,
+    "DAO_WRITE": 28,
+    "DATABASE_ERROR": 3,
+    "DB_CONNECTION": 8,
+    "HTTP_REQUEST": 69,
+    "SERVICE_CALL": 27,
+    "SESSION_EVENT": 7,
+    "STARTUP": 12,
+    "VALIDATION_WARNING": 8
+  },
+  "fixed_scenarios": {
+    "TOMCAT_STARTUP": 12,
+    "DATABASE_POOL_EXHAUSTION": 3
+  },
+  "line_sha256": "0c151f9bafa3a07f8cd35fa5bc0300af4773187dca537ab887c44d2adb1550df"
+}

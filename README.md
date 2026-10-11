@@ -68,7 +68,7 @@ offering both tiers:
 | Provider | `light` | `heavy` |
 |---|---|---|
 | `gcp_gemini` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` |
-| `anthropic` | `claude-sonnet-5` | `claude-opus-5` |
+| `anthropic` | `claude-sonnet-5-5` | `claude-opus-5-5` |
 | `openai` | `gpt-5.6-terra` | `gpt-5.6-sol` |
 
 `light` is bulk work — pattern summarization, IOC extraction, chunked reads.

@@ -1,0 +1,780 @@
+Sep 15 00:15:08 invapp01 systemd[12841]: pam_unix(systemd-user:session): session opened for user root(uid=89) by (uid=0)
+Sep 15 00:15:08 invapp01 systemd[12841]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 00:36:04 invapp01 CRON[11036]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 00:36:04 invapp01 CRON[11036]: pam_unix(cron:session): session closed for user root
+Sep 15 00:56:57 invapp01 CRON[15725]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 00:56:57 invapp01 CRON[15725]: pam_unix(cron:session): session closed for user root
+Sep 15 01:01:59 invapp01 systemd[1736]: pam_unix(systemd-user:session): session opened for user root(uid=344) by (uid=0)
+Sep 15 01:01:59 invapp01 systemd[1736]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 01:11:48 invapp01 CRON[2090]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 01:11:48 invapp01 CRON[2090]: pam_unix(cron:session): session closed for user root
+Sep 15 01:24:33 invapp01 CRON[27740]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 01:24:33 invapp01 CRON[27740]: pam_unix(cron:session): session closed for user root
+Sep 15 01:30:16 invapp01 CRON[29325]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 01:30:16 invapp01 CRON[29325]: pam_unix(cron:session): session closed for user postgres
+Sep 15 01:37:44 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:3646:5500
+Sep 15 01:47:53 invapp01 sshd[31056]: Server listening on 0.0.0.0 port 22.
+Sep 15 01:53:14 invapp01 systemd[26700]: pam_unix(systemd-user:session): session opened for user root(uid=297) by (uid=0)
+Sep 15 01:53:14 invapp01 systemd[26700]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 02:14:32 invapp01 systemd[27243]: pam_unix(systemd-user:session): session opened for user postgres(uid=964) by (uid=0)
+Sep 15 02:14:32 invapp01 systemd[27243]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 15 02:16:06 invapp01 CRON[27869]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 02:16:06 invapp01 CRON[27869]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 02:45:26 invapp01 CRON[4747]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 02:45:26 invapp01 CRON[4747]: pam_unix(cron:session): session closed for user root
+Sep 15 02:57:39 invapp01 CRON[28485]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 02:57:39 invapp01 CRON[28485]: pam_unix(cron:session): session closed for user root
+Sep 15 02:58:08 invapp01 systemd[21622]: pam_unix(systemd-user:session): session opened for user postgres(uid=777) by (uid=0)
+Sep 15 02:58:08 invapp01 systemd[21622]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 15 03:05:09 invapp01 CRON[17133]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 03:05:09 invapp01 CRON[17133]: pam_unix(cron:session): session closed for user postgres
+Sep 15 03:19:34 invapp01 sshd[8353]: Server listening on 0.0.0.0 port 22.
+Sep 15 03:26:42 invapp01 CRON[13383]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 03:26:42 invapp01 CRON[13383]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 03:31:39 invapp01 systemd[24568]: pam_unix(systemd-user:session): session opened for user root(uid=963) by (uid=0)
+Sep 15 03:31:39 invapp01 systemd[24568]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 03:33:16 invapp01 sssd_nss[21638]: Enumeration requested for cached local service accounts
+Sep 15 03:38:43 invapp01 CRON[11282]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 03:38:43 invapp01 CRON[11282]: pam_unix(cron:session): session closed for user root
+Sep 15 03:44:01 invapp01 CRON[30894]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 03:44:01 invapp01 CRON[30894]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 03:54:24 invapp01 CRON[3897]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 03:54:24 invapp01 CRON[3897]: pam_unix(cron:session): session closed for user root
+Sep 15 03:58:12 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:5583:7573
+Sep 15 04:06:48 invapp01 CRON[28701]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 04:06:48 invapp01 CRON[28701]: pam_unix(cron:session): session closed for user root
+Sep 15 04:18:58 invapp01 systemd[12543]: pam_unix(systemd-user:session): session opened for user root(uid=352) by (uid=0)
+Sep 15 04:18:58 invapp01 systemd[12543]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 04:25:04 invapp01 CRON[24343]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 04:25:04 invapp01 CRON[24343]: pam_unix(cron:session): session closed for user postgres
+Sep 15 04:40:14 invapp01 CRON[18420]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 04:40:14 invapp01 CRON[18420]: pam_unix(cron:session): session closed for user root
+Sep 15 04:41:14 invapp01 CRON[9747]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 04:41:14 invapp01 CRON[9747]: pam_unix(cron:session): session closed for user root
+Sep 15 04:46:55 invapp01 CRON[13916]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 04:46:55 invapp01 CRON[13916]: pam_unix(cron:session): session closed for user postgres
+Sep 15 04:51:52 invapp01 CRON[24484]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 04:51:52 invapp01 CRON[24484]: pam_unix(cron:session): session closed for user root
+Sep 15 04:54:58 invapp01 systemd[29246]: pam_unix(systemd-user:session): session opened for user root(uid=141) by (uid=0)
+Sep 15 04:54:58 invapp01 systemd[29246]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 05:14:43 invapp01 systemd[25001]: pam_unix(systemd-user:session): session opened for user tomcat(uid=778) by (uid=0)
+Sep 15 05:14:43 invapp01 systemd[25001]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 15 05:29:40 invapp01 sshd[1309]: Server listening on 0.0.0.0 port 22.
+Sep 15 05:43:13 invapp01 systemd[18711]: pam_unix(systemd-user:session): session opened for user root(uid=853) by (uid=0)
+Sep 15 05:43:13 invapp01 systemd[18711]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 05:47:23 invapp01 CRON[31039]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 05:47:23 invapp01 CRON[31039]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 05:57:19 invapp01 CRON[19722]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 05:57:19 invapp01 CRON[19722]: pam_unix(cron:session): session closed for user root
+Sep 15 06:14:12 invapp01 CRON[9107]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 06:14:12 invapp01 CRON[9107]: pam_unix(cron:session): session closed for user root
+Sep 15 06:34:58 invapp01 CRON[18834]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 06:34:58 invapp01 CRON[18834]: pam_unix(cron:session): session closed for user postgres
+Sep 15 06:41:04 invapp01 CRON[18038]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 06:41:04 invapp01 CRON[18038]: pam_unix(cron:session): session closed for user root
+Sep 15 06:45:31 invapp01 sshd[24466]: Server listening on 0.0.0.0 port 22.
+Sep 15 06:46:16 invapp01 systemd[8563]: pam_unix(systemd-user:session): session opened for user tomcat(uid=135) by (uid=0)
+Sep 15 06:46:16 invapp01 systemd[8563]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 15 06:54:59 invapp01 CRON[16437]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 06:54:59 invapp01 CRON[16437]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 06:58:52 invapp01 CRON[13092]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 06:58:52 invapp01 CRON[13092]: pam_unix(cron:session): session closed for user postgres
+Sep 15 07:12:33 invapp01 CRON[24877]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 07:12:33 invapp01 CRON[24877]: pam_unix(cron:session): session closed for user root
+Sep 15 07:28:04 invapp01 CRON[3164]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 07:28:04 invapp01 CRON[3164]: pam_unix(cron:session): session closed for user root
+Sep 15 07:34:33 invapp01 CRON[20661]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 07:34:33 invapp01 CRON[20661]: pam_unix(cron:session): session closed for user postgres
+Sep 15 07:34:45 invapp01 systemd[31629]: pam_unix(systemd-user:session): session opened for user tomcat(uid=962) by (uid=0)
+Sep 15 07:34:45 invapp01 systemd[31629]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 15 07:41:38 invapp01 CRON[21214]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 07:41:38 invapp01 CRON[21214]: pam_unix(cron:session): session closed for user root
+Sep 15 07:42:08 invapp01 CRON[22067]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 07:42:08 invapp01 CRON[22067]: pam_unix(cron:session): session closed for user root
+Sep 15 07:45:35 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:29470:9772
+Sep 15 08:06:46 invapp01 sssd_nss[30662]: Enumeration requested for cached local service accounts
+Sep 15 08:07:23 invapp01 CRON[20826]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 08:07:23 invapp01 CRON[20826]: pam_unix(cron:session): session closed for user root
+Sep 15 08:10:14 invapp01 sshd[30099]: Accepted publickey for ops_lee from 192.0.2.18 port 60973 ssh2 scenario=INTERACTIVE_LOGIN_SUCCESS step=1
+Sep 15 08:10:14 invapp01 sshd[30099]: pam_unix(sshd:session): session opened for user ops_lee(uid=1001) by (uid=0)
+Sep 15 08:10:14 invapp01 systemd-logind[521]: New session 6382 of user ops_lee.
+Sep 15 08:10:14 invapp01 sshd[30099]: Disconnected from user ops_lee 192.0.2.18 port 60973
+Sep 15 08:23:43 invapp01 systemd[30794]: pam_unix(systemd-user:session): session opened for user root(uid=784) by (uid=0)
+Sep 15 08:23:43 invapp01 systemd[30794]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 08:26:11 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:6340:9920
+Sep 15 08:29:15 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:25388:4901
+Sep 15 08:34:07 invapp01 CRON[23330]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 08:34:07 invapp01 CRON[23330]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 08:45:31 invapp01 CRON[20101]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 08:45:31 invapp01 CRON[20101]: pam_unix(cron:session): session closed for user root
+Sep 15 08:56:05 invapp01 CRON[29238]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 08:56:05 invapp01 CRON[29238]: pam_unix(cron:session): session closed for user root
+Sep 15 09:10:46 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:18363:5166
+Sep 15 09:23:21 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:28606:7989
+Sep 15 09:38:38 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:28608:4181
+Sep 15 09:41:46 invapp01 CRON[17501]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 09:41:46 invapp01 CRON[17501]: pam_unix(cron:session): session closed for user root
+Sep 15 09:48:30 invapp01 CRON[2911]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 09:48:30 invapp01 CRON[2911]: pam_unix(cron:session): session closed for user root
+Sep 15 10:12:59 invapp01 sshd[1518]: Server listening on 0.0.0.0 port 22.
+Sep 15 10:13:50 invapp01 sshd[11778]: Server listening on 0.0.0.0 port 22.
+Sep 15 10:15:38 invapp01 sshd[5239]: Server listening on 0.0.0.0 port 22.
+Sep 15 10:17:15 invapp01 CRON[17744]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 10:17:15 invapp01 CRON[17744]: pam_unix(cron:session): session closed for user root
+Sep 15 10:25:42 invapp01 CRON[30010]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 10:25:42 invapp01 CRON[30010]: pam_unix(cron:session): session closed for user postgres
+Sep 15 10:28:26 invapp01 CRON[13983]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 10:28:26 invapp01 CRON[13983]: pam_unix(cron:session): session closed for user root
+Sep 15 10:46:06 invapp01 systemd[22661]: pam_unix(systemd-user:session): session opened for user root(uid=298) by (uid=0)
+Sep 15 10:46:06 invapp01 systemd[22661]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 11:05:44 invapp01 CRON[23213]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 11:05:44 invapp01 CRON[23213]: pam_unix(cron:session): session closed for user root
+Sep 15 11:17:07 invapp01 CRON[18415]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 11:17:07 invapp01 CRON[18415]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 11:19:24 invapp01 CRON[30778]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 11:19:24 invapp01 CRON[30778]: pam_unix(cron:session): session closed for user root
+Sep 15 11:24:27 invapp01 CRON[5993]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 11:24:27 invapp01 CRON[5993]: pam_unix(cron:session): session closed for user root
+Sep 15 11:30:56 invapp01 CRON[28477]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 11:30:56 invapp01 CRON[28477]: pam_unix(cron:session): session closed for user root
+Sep 15 11:42:15 invapp01 sshd[6540]: Server listening on 0.0.0.0 port 22.
+Sep 15 11:42:30 invapp01 CRON[8733]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 11:42:30 invapp01 CRON[8733]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 11:46:13 invapp01 CRON[21872]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 11:46:13 invapp01 CRON[21872]: pam_unix(cron:session): session closed for user postgres
+Sep 15 11:47:24 invapp01 CRON[2364]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 11:47:24 invapp01 CRON[2364]: pam_unix(cron:session): session closed for user postgres
+Sep 15 12:07:04 invapp01 sudo: app_admin : TTY=pts/0 ; PWD=/home/app_admin ; USER=root ; COMMAND=/bin/journalctl -u tomcat9 --since today
+Sep 15 12:07:04 invapp01 sudo: pam_unix(sudo:session): session closed for user root
+Sep 15 12:07:34 invapp01 CRON[8468]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 12:07:34 invapp01 CRON[8468]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 12:11:02 invapp01 sssd_nss[6072]: Enumeration requested for cached local service accounts
+Sep 15 12:44:14 invapp01 CRON[24016]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 12:44:14 invapp01 CRON[24016]: pam_unix(cron:session): session closed for user root
+Sep 15 12:47:21 invapp01 CRON[27201]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 12:47:21 invapp01 CRON[27201]: pam_unix(cron:session): session closed for user root
+Sep 15 12:48:03 invapp01 CRON[17123]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 12:48:03 invapp01 CRON[17123]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 12:49:50 invapp01 CRON[14457]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 12:49:50 invapp01 CRON[14457]: pam_unix(cron:session): session closed for user root
+Sep 15 12:57:11 invapp01 sshd[6818]: Server listening on 0.0.0.0 port 22.
+Sep 15 12:58:45 invapp01 systemd[21291]: pam_unix(systemd-user:session): session opened for user root(uid=734) by (uid=0)
+Sep 15 12:58:45 invapp01 systemd[21291]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 13:03:06 invapp01 CRON[18545]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 13:03:06 invapp01 CRON[18545]: pam_unix(cron:session): session closed for user root
+Sep 15 13:13:30 invapp01 CRON[2844]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 13:13:30 invapp01 CRON[2844]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 13:17:08 invapp01 systemd[21721]: pam_unix(systemd-user:session): session opened for user tomcat(uid=70) by (uid=0)
+Sep 15 13:17:08 invapp01 systemd[21721]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 15 13:23:53 invapp01 systemd[19933]: pam_unix(systemd-user:session): session opened for user tomcat(uid=33) by (uid=0)
+Sep 15 13:23:53 invapp01 systemd[19933]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 15 13:36:11 invapp01 CRON[12884]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 13:36:11 invapp01 CRON[12884]: pam_unix(cron:session): session closed for user root
+Sep 15 13:45:03 invapp01 CRON[29129]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 13:45:03 invapp01 CRON[29129]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 13:46:40 invapp01 CRON[1366]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 13:46:40 invapp01 CRON[1366]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 13:55:51 invapp01 CRON[10272]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 13:55:51 invapp01 CRON[10272]: pam_unix(cron:session): session closed for user root
+Sep 15 14:19:56 invapp01 CRON[13432]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 14:19:56 invapp01 CRON[13432]: pam_unix(cron:session): session closed for user root
+Sep 15 14:22:22 invapp01 CRON[27445]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 14:22:22 invapp01 CRON[27445]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 14:28:42 invapp01 CRON[22852]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 14:28:42 invapp01 CRON[22852]: pam_unix(cron:session): session closed for user root
+Sep 15 14:57:34 invapp01 systemd[9974]: pam_unix(systemd-user:session): session opened for user root(uid=623) by (uid=0)
+Sep 15 14:57:34 invapp01 systemd[9974]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 15:24:50 invapp01 CRON[11087]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 15:24:50 invapp01 CRON[11087]: pam_unix(cron:session): session closed for user root
+Sep 15 15:31:56 invapp01 systemd[21217]: pam_unix(systemd-user:session): session opened for user root(uid=137) by (uid=0)
+Sep 15 15:31:56 invapp01 systemd[21217]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 15:42:09 invapp01 CRON[20293]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 15:42:09 invapp01 CRON[20293]: pam_unix(cron:session): session closed for user root
+Sep 15 15:53:57 invapp01 CRON[31417]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 15:53:57 invapp01 CRON[31417]: pam_unix(cron:session): session closed for user root
+Sep 15 16:09:01 invapp01 CRON[27329]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 16:09:01 invapp01 CRON[27329]: pam_unix(cron:session): session closed for user root
+Sep 15 16:21:03 invapp01 CRON[11431]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 16:21:03 invapp01 CRON[11431]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 16:42:03 invapp01 sshd[4394]: Accepted publickey for app_admin from 192.0.2.44 port 61411 ssh2 scenario=INTERACTIVE_LOGIN_SUCCESS step=2
+Sep 15 16:42:03 invapp01 sshd[4394]: pam_unix(sshd:session): session opened for user app_admin(uid=1001) by (uid=0)
+Sep 15 16:42:03 invapp01 systemd-logind[865]: New session 5351 of user app_admin.
+Sep 15 16:42:03 invapp01 sshd[4394]: Disconnected from user app_admin 192.0.2.44 port 61411
+Sep 15 16:45:31 invapp01 CRON[6425]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 16:45:31 invapp01 CRON[6425]: pam_unix(cron:session): session closed for user root
+Sep 15 17:19:40 invapp01 CRON[24642]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 17:19:40 invapp01 CRON[24642]: pam_unix(cron:session): session closed for user root
+Sep 15 17:30:22 invapp01 systemd[3898]: pam_unix(systemd-user:session): session opened for user tomcat(uid=893) by (uid=0)
+Sep 15 17:30:22 invapp01 systemd[3898]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 15 17:36:15 invapp01 CRON[10760]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 17:36:15 invapp01 CRON[10760]: pam_unix(cron:session): session closed for user root
+Sep 15 17:40:42 invapp01 CRON[26938]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 17:40:42 invapp01 CRON[26938]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 17:45:02 invapp01 CRON[24640]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 17:45:02 invapp01 CRON[24640]: pam_unix(cron:session): session closed for user root
+Sep 15 18:05:21 invapp01 CRON[25638]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 18:05:21 invapp01 CRON[25638]: pam_unix(cron:session): session closed for user root
+Sep 15 18:10:52 invapp01 CRON[15542]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 18:10:52 invapp01 CRON[15542]: pam_unix(cron:session): session closed for user root
+Sep 15 18:33:52 invapp01 CRON[6815]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 18:33:52 invapp01 CRON[6815]: pam_unix(cron:session): session closed for user root
+Sep 15 18:41:58 invapp01 systemd[16601]: pam_unix(systemd-user:session): session opened for user root(uid=305) by (uid=0)
+Sep 15 18:41:58 invapp01 systemd[16601]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 19:10:44 invapp01 CRON[14602]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 19:10:44 invapp01 CRON[14602]: pam_unix(cron:session): session closed for user root
+Sep 15 19:26:17 invapp01 CRON[20648]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 19:26:17 invapp01 CRON[20648]: pam_unix(cron:session): session closed for user postgres
+Sep 15 19:41:57 invapp01 CRON[3961]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 19:41:57 invapp01 CRON[3961]: pam_unix(cron:session): session closed for user root
+Sep 15 19:50:36 invapp01 systemd[19221]: pam_unix(systemd-user:session): session opened for user postgres(uid=278) by (uid=0)
+Sep 15 19:50:36 invapp01 systemd[19221]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 15 19:54:43 invapp01 systemd[11450]: pam_unix(systemd-user:session): session opened for user postgres(uid=239) by (uid=0)
+Sep 15 19:54:43 invapp01 systemd[11450]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 15 20:05:37 invapp01 CRON[17201]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 20:05:37 invapp01 CRON[17201]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 20:11:15 invapp01 CRON[28030]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 20:11:15 invapp01 CRON[28030]: pam_unix(cron:session): session closed for user root
+Sep 15 20:14:17 invapp01 CRON[24337]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 20:14:17 invapp01 CRON[24337]: pam_unix(cron:session): session closed for user root
+Sep 15 20:21:49 invapp01 systemd[6691]: pam_unix(systemd-user:session): session opened for user postgres(uid=827) by (uid=0)
+Sep 15 20:21:49 invapp01 systemd[6691]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 15 20:30:22 invapp01 CRON[11912]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 20:30:22 invapp01 CRON[11912]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 20:46:47 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:20401:9382
+Sep 15 21:03:50 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:13040:1357
+Sep 15 21:51:31 invapp01 CRON[12248]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 21:51:31 invapp01 CRON[12248]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 21:52:47 invapp01 CRON[7361]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 21:52:47 invapp01 CRON[7361]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 22:14:38 invapp01 CRON[10959]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 22:14:38 invapp01 CRON[10959]: pam_unix(cron:session): session closed for user tomcat
+Sep 15 22:16:44 invapp01 sshd[29284]: Failed publickey for invalid user deploy from 198.51.100.22 port 53224 ssh2 scenario=INTERACTIVE_LOGIN_FAILURE step=1
+Sep 15 22:26:55 invapp01 sshd[26795]: Server listening on 0.0.0.0 port 22.
+Sep 15 22:34:20 invapp01 systemd[20439]: pam_unix(systemd-user:session): session opened for user root(uid=575) by (uid=0)
+Sep 15 22:34:20 invapp01 systemd[20439]: pam_unix(systemd-user:session): session closed for user root
+Sep 15 22:35:35 invapp01 sshd[12363]: Server listening on 0.0.0.0 port 22.
+Sep 15 22:38:15 invapp01 CRON[28854]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 22:38:15 invapp01 CRON[28854]: pam_unix(cron:session): session closed for user root
+Sep 15 22:39:45 invapp01 CRON[26574]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 22:39:45 invapp01 CRON[26574]: pam_unix(cron:session): session closed for user root
+Sep 15 22:45:31 invapp01 CRON[15444]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 22:45:31 invapp01 CRON[15444]: pam_unix(cron:session): session closed for user postgres
+Sep 15 22:51:07 invapp01 CRON[31751]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 15 22:51:07 invapp01 CRON[31751]: pam_unix(cron:session): session closed for user postgres
+Sep 15 23:02:53 invapp01 sshd[17373]: Server listening on 0.0.0.0 port 22.
+Sep 15 23:05:51 invapp01 CRON[4996]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 15 23:05:51 invapp01 CRON[4996]: pam_unix(cron:session): session closed for user root
+Sep 15 23:07:55 invapp01 sshd[11036]: Server listening on 0.0.0.0 port 22.
+Sep 15 23:22:48 invapp01 sshd[24476]: Server listening on 0.0.0.0 port 22.
+Sep 15 23:35:24 invapp01 CRON[21548]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 15 23:35:24 invapp01 CRON[21548]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 00:06:13 invapp01 CRON[21312]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 00:06:13 invapp01 CRON[21312]: pam_unix(cron:session): session closed for user root
+Sep 16 00:15:28 invapp01 systemd[26393]: pam_unix(systemd-user:session): session opened for user root(uid=287) by (uid=0)
+Sep 16 00:15:28 invapp01 systemd[26393]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 00:22:20 invapp01 sudo: dba_singh : TTY=pts/2 ; PWD=/home/dba_singh ; USER=root ; COMMAND=/usr/bin/tail -n 200 /var/log/tomcat9/catalina.out
+Sep 16 00:22:20 invapp01 sudo: pam_unix(sudo:session): session closed for user root
+Sep 16 00:23:18 invapp01 systemd[31262]: pam_unix(systemd-user:session): session opened for user tomcat(uid=662) by (uid=0)
+Sep 16 00:23:18 invapp01 systemd[31262]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 00:52:30 invapp01 su: pam_unix(su:session): session opened for user root by app_admin(uid=1001)
+Sep 16 00:52:30 invapp01 su: pam_unix(su:session): session closed for user root
+Sep 16 01:40:56 invapp01 CRON[10965]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 01:40:56 invapp01 CRON[10965]: pam_unix(cron:session): session closed for user postgres
+Sep 16 01:43:33 invapp01 CRON[11634]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 01:43:33 invapp01 CRON[11634]: pam_unix(cron:session): session closed for user root
+Sep 16 01:56:00 invapp01 systemd[27513]: pam_unix(systemd-user:session): session opened for user postgres(uid=242) by (uid=0)
+Sep 16 01:56:00 invapp01 systemd[27513]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 16 01:56:40 invapp01 CRON[11918]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 01:56:40 invapp01 CRON[11918]: pam_unix(cron:session): session closed for user root
+Sep 16 02:14:11 invapp01 CRON[13612]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 02:14:11 invapp01 CRON[13612]: pam_unix(cron:session): session closed for user root
+Sep 16 02:21:56 invapp01 CRON[20467]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 02:21:56 invapp01 CRON[20467]: pam_unix(cron:session): session closed for user root
+Sep 16 02:44:31 invapp01 systemd[7969]: pam_unix(systemd-user:session): session opened for user postgres(uid=738) by (uid=0)
+Sep 16 02:44:31 invapp01 systemd[7969]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 16 02:52:48 invapp01 CRON[27528]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 16 02:52:48 invapp01 CRON[27528]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 03:20:36 invapp01 systemd[27533]: pam_unix(systemd-user:session): session opened for user tomcat(uid=544) by (uid=0)
+Sep 16 03:20:36 invapp01 systemd[27533]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 03:32:15 invapp01 systemd[27475]: pam_unix(systemd-user:session): session opened for user postgres(uid=868) by (uid=0)
+Sep 16 03:32:15 invapp01 systemd[27475]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 16 03:40:42 invapp01 CRON[1975]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 03:40:42 invapp01 CRON[1975]: pam_unix(cron:session): session closed for user postgres
+Sep 16 03:48:13 invapp01 systemd[20842]: pam_unix(systemd-user:session): session opened for user root(uid=767) by (uid=0)
+Sep 16 03:48:13 invapp01 systemd[20842]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 03:58:05 invapp01 systemd[21804]: pam_unix(systemd-user:session): session opened for user tomcat(uid=5) by (uid=0)
+Sep 16 03:58:05 invapp01 systemd[21804]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 04:27:13 invapp01 CRON[28956]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 04:27:13 invapp01 CRON[28956]: pam_unix(cron:session): session closed for user root
+Sep 16 04:32:46 invapp01 sssd_nss[31563]: Enumeration requested for cached local service accounts
+Sep 16 05:00:56 invapp01 CRON[26561]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 05:00:56 invapp01 CRON[26561]: pam_unix(cron:session): session closed for user root
+Sep 16 05:15:56 invapp01 CRON[7762]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 05:15:56 invapp01 CRON[7762]: pam_unix(cron:session): session closed for user root
+Sep 16 05:16:15 invapp01 CRON[765]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 16 05:16:15 invapp01 CRON[765]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 05:21:35 invapp01 CRON[19333]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 05:21:35 invapp01 CRON[19333]: pam_unix(cron:session): session closed for user root
+Sep 16 05:27:25 invapp01 systemd[7219]: pam_unix(systemd-user:session): session opened for user tomcat(uid=561) by (uid=0)
+Sep 16 05:27:25 invapp01 systemd[7219]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 05:30:41 invapp01 CRON[12058]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 05:30:41 invapp01 CRON[12058]: pam_unix(cron:session): session closed for user root
+Sep 16 05:45:03 invapp01 CRON[21203]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 05:45:03 invapp01 CRON[21203]: pam_unix(cron:session): session closed for user root
+Sep 16 05:49:54 invapp01 CRON[22894]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 05:49:54 invapp01 CRON[22894]: pam_unix(cron:session): session closed for user root
+Sep 16 06:07:09 invapp01 CRON[27643]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 06:07:09 invapp01 CRON[27643]: pam_unix(cron:session): session closed for user postgres
+Sep 16 06:10:45 invapp01 CRON[10551]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 16 06:10:45 invapp01 CRON[10551]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 06:13:09 invapp01 systemd[17038]: pam_unix(systemd-user:session): session opened for user root(uid=5) by (uid=0)
+Sep 16 06:13:09 invapp01 systemd[17038]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 06:32:30 invapp01 CRON[21722]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 16 06:32:30 invapp01 CRON[21722]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 06:44:19 invapp01 CRON[29467]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 06:44:19 invapp01 CRON[29467]: pam_unix(cron:session): session closed for user root
+Sep 16 06:52:59 invapp01 CRON[5066]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 06:52:59 invapp01 CRON[5066]: pam_unix(cron:session): session closed for user root
+Sep 16 06:58:11 invapp01 CRON[23194]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 06:58:11 invapp01 CRON[23194]: pam_unix(cron:session): session closed for user root
+Sep 16 07:13:27 invapp01 CRON[16457]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 16 07:13:27 invapp01 CRON[16457]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 07:16:07 invapp01 CRON[29505]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 07:16:07 invapp01 CRON[29505]: pam_unix(cron:session): session closed for user root
+Sep 16 07:19:54 invapp01 systemd[16090]: pam_unix(systemd-user:session): session opened for user tomcat(uid=802) by (uid=0)
+Sep 16 07:19:54 invapp01 systemd[16090]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 07:25:09 invapp01 systemd[5179]: pam_unix(systemd-user:session): session opened for user postgres(uid=150) by (uid=0)
+Sep 16 07:25:09 invapp01 systemd[5179]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 16 07:42:15 invapp01 su: pam_unix(su:session): session opened for user root by ops_lee(uid=1001)
+Sep 16 07:42:15 invapp01 su: pam_unix(su:session): session closed for user root
+Sep 16 07:59:23 invapp01 CRON[11512]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 07:59:23 invapp01 CRON[11512]: pam_unix(cron:session): session closed for user root
+Sep 16 08:07:21 invapp01 CRON[30503]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 08:07:21 invapp01 CRON[30503]: pam_unix(cron:session): session closed for user postgres
+Sep 16 08:09:23 invapp01 CRON[10064]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 08:09:23 invapp01 CRON[10064]: pam_unix(cron:session): session closed for user postgres
+Sep 16 08:37:29 invapp01 systemd[27501]: pam_unix(systemd-user:session): session opened for user root(uid=3) by (uid=0)
+Sep 16 08:37:29 invapp01 systemd[27501]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 08:40:33 invapp01 CRON[12470]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 08:40:33 invapp01 CRON[12470]: pam_unix(cron:session): session closed for user root
+Sep 16 09:05:39 invapp01 sshd[824]: Accepted publickey for dba_singh from 192.0.2.73 port 54261 ssh2 scenario=INTERACTIVE_LOGIN_SUCCESS step=3
+Sep 16 09:05:39 invapp01 sshd[824]: pam_unix(sshd:session): session opened for user dba_singh(uid=1001) by (uid=0)
+Sep 16 09:05:39 invapp01 systemd-logind[807]: New session 6924 of user dba_singh.
+Sep 16 09:05:39 invapp01 sshd[824]: Disconnected from user dba_singh 192.0.2.73 port 54261
+Sep 16 09:21:50 invapp01 CRON[1402]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 09:21:50 invapp01 CRON[1402]: pam_unix(cron:session): session closed for user root
+Sep 16 09:37:01 invapp01 sssd_nss[21554]: Enumeration requested for cached local service accounts
+Sep 16 09:51:40 invapp01 CRON[24992]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 09:51:40 invapp01 CRON[24992]: pam_unix(cron:session): session closed for user root
+Sep 16 09:56:37 invapp01 systemd[26108]: pam_unix(systemd-user:session): session opened for user tomcat(uid=392) by (uid=0)
+Sep 16 09:56:37 invapp01 systemd[26108]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 10:08:17 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:20076:6171
+Sep 16 10:12:15 invapp01 CRON[12033]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 10:12:15 invapp01 CRON[12033]: pam_unix(cron:session): session closed for user root
+Sep 16 10:12:20 invapp01 CRON[19698]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 10:12:20 invapp01 CRON[19698]: pam_unix(cron:session): session closed for user postgres
+Sep 16 10:28:53 invapp01 CRON[8728]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 10:28:53 invapp01 CRON[8728]: pam_unix(cron:session): session closed for user postgres
+Sep 16 10:38:15 invapp01 CRON[10885]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 10:38:15 invapp01 CRON[10885]: pam_unix(cron:session): session closed for user root
+Sep 16 10:52:46 invapp01 CRON[22129]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 10:52:46 invapp01 CRON[22129]: pam_unix(cron:session): session closed for user root
+Sep 16 11:14:25 invapp01 CRON[15256]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 11:14:25 invapp01 CRON[15256]: pam_unix(cron:session): session closed for user root
+Sep 16 11:16:20 invapp01 CRON[20060]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 11:16:20 invapp01 CRON[20060]: pam_unix(cron:session): session closed for user root
+Sep 16 11:19:38 invapp01 CRON[26580]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 11:19:38 invapp01 CRON[26580]: pam_unix(cron:session): session closed for user root
+Sep 16 11:39:59 invapp01 systemd[4689]: pam_unix(systemd-user:session): session opened for user root(uid=300) by (uid=0)
+Sep 16 11:39:59 invapp01 systemd[4689]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 11:44:30 invapp01 systemd[8522]: pam_unix(systemd-user:session): session opened for user postgres(uid=424) by (uid=0)
+Sep 16 11:44:30 invapp01 systemd[8522]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 16 11:49:56 invapp01 systemd[3934]: pam_unix(systemd-user:session): session opened for user tomcat(uid=194) by (uid=0)
+Sep 16 11:49:56 invapp01 systemd[3934]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 12:13:31 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:17802:8034
+Sep 16 12:14:11 invapp01 CRON[26460]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 12:14:11 invapp01 CRON[26460]: pam_unix(cron:session): session closed for user root
+Sep 16 12:20:20 invapp01 CRON[30217]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 12:20:20 invapp01 CRON[30217]: pam_unix(cron:session): session closed for user root
+Sep 16 12:23:57 invapp01 CRON[24983]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 12:23:57 invapp01 CRON[24983]: pam_unix(cron:session): session closed for user postgres
+Sep 16 12:39:43 invapp01 systemd[18940]: pam_unix(systemd-user:session): session opened for user root(uid=979) by (uid=0)
+Sep 16 12:39:43 invapp01 systemd[18940]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 13:17:35 invapp01 systemd[18257]: pam_unix(systemd-user:session): session opened for user tomcat(uid=331) by (uid=0)
+Sep 16 13:17:35 invapp01 systemd[18257]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 13:22:46 invapp01 CRON[25820]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 13:22:46 invapp01 CRON[25820]: pam_unix(cron:session): session closed for user root
+Sep 16 13:30:45 invapp01 CRON[24812]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 13:30:45 invapp01 CRON[24812]: pam_unix(cron:session): session closed for user root
+Sep 16 13:39:02 invapp01 systemd[20752]: pam_unix(systemd-user:session): session opened for user root(uid=718) by (uid=0)
+Sep 16 13:39:02 invapp01 systemd[20752]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 14:09:44 invapp01 CRON[3219]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 14:09:44 invapp01 CRON[3219]: pam_unix(cron:session): session closed for user root
+Sep 16 14:19:17 invapp01 systemd[945]: pam_unix(systemd-user:session): session opened for user postgres(uid=982) by (uid=0)
+Sep 16 14:19:17 invapp01 systemd[945]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 16 14:20:41 invapp01 CRON[744]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 14:20:41 invapp01 CRON[744]: pam_unix(cron:session): session closed for user root
+Sep 16 14:21:53 invapp01 systemd[14900]: pam_unix(systemd-user:session): session opened for user tomcat(uid=121) by (uid=0)
+Sep 16 14:21:53 invapp01 systemd[14900]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 14:41:41 invapp01 CRON[27029]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 14:41:41 invapp01 CRON[27029]: pam_unix(cron:session): session closed for user postgres
+Sep 16 14:46:55 invapp01 CRON[31227]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 16 14:46:55 invapp01 CRON[31227]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 14:47:42 invapp01 CRON[27383]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 14:47:42 invapp01 CRON[27383]: pam_unix(cron:session): session closed for user root
+Sep 16 14:47:59 invapp01 sshd[3503]: Server listening on 0.0.0.0 port 22.
+Sep 16 14:52:28 invapp01 CRON[26478]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 14:52:28 invapp01 CRON[26478]: pam_unix(cron:session): session closed for user postgres
+Sep 16 14:54:43 invapp01 sudo: app_admin : TTY=pts/2 ; PWD=/home/app_admin ; USER=root ; COMMAND=/bin/journalctl -u tomcat9 --since today
+Sep 16 14:54:43 invapp01 sudo: pam_unix(sudo:session): session closed for user root
+Sep 16 15:09:27 invapp01 systemd[2506]: pam_unix(systemd-user:session): session opened for user root(uid=163) by (uid=0)
+Sep 16 15:09:27 invapp01 systemd[2506]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 15:19:57 invapp01 CRON[16441]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 15:19:57 invapp01 CRON[16441]: pam_unix(cron:session): session closed for user root
+Sep 16 15:24:25 invapp01 CRON[5631]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 15:24:25 invapp01 CRON[5631]: pam_unix(cron:session): session closed for user root
+Sep 16 15:32:51 invapp01 sshd[30534]: Accepted publickey for ops_lee from 192.0.2.18 port 61401 ssh2 scenario=INTERACTIVE_LOGIN_SUCCESS step=4
+Sep 16 15:32:51 invapp01 sshd[30534]: pam_unix(sshd:session): session opened for user ops_lee(uid=1001) by (uid=0)
+Sep 16 15:32:51 invapp01 systemd-logind[867]: New session 5958 of user ops_lee.
+Sep 16 15:32:51 invapp01 sshd[30534]: Disconnected from user ops_lee 192.0.2.18 port 61401
+Sep 16 15:37:09 invapp01 CRON[7928]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 16 15:37:09 invapp01 CRON[7928]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 15:38:30 invapp01 sudo: ops_lee : TTY=pts/0 ; PWD=/home/ops_lee ; USER=root ; COMMAND=/bin/systemctl status postgresql
+Sep 16 15:38:30 invapp01 sudo: pam_unix(sudo:session): session closed for user root
+Sep 16 15:45:41 invapp01 systemd[12551]: pam_unix(systemd-user:session): session opened for user tomcat(uid=478) by (uid=0)
+Sep 16 15:45:41 invapp01 systemd[12551]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 16:23:19 invapp01 systemd[27668]: pam_unix(systemd-user:session): session opened for user postgres(uid=867) by (uid=0)
+Sep 16 16:23:19 invapp01 systemd[27668]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 16 16:41:01 invapp01 CRON[23562]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 16:41:01 invapp01 CRON[23562]: pam_unix(cron:session): session closed for user postgres
+Sep 16 17:01:31 invapp01 CRON[11989]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 17:01:31 invapp01 CRON[11989]: pam_unix(cron:session): session closed for user postgres
+Sep 16 17:05:50 invapp01 CRON[17687]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 17:05:50 invapp01 CRON[17687]: pam_unix(cron:session): session closed for user root
+Sep 16 17:25:57 invapp01 CRON[19245]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 17:25:57 invapp01 CRON[19245]: pam_unix(cron:session): session closed for user root
+Sep 16 17:43:04 invapp01 CRON[11785]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 17:43:04 invapp01 CRON[11785]: pam_unix(cron:session): session closed for user root
+Sep 16 17:59:37 invapp01 CRON[21853]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 17:59:37 invapp01 CRON[21853]: pam_unix(cron:session): session closed for user root
+Sep 16 18:08:22 invapp01 systemd[10047]: pam_unix(systemd-user:session): session opened for user root(uid=639) by (uid=0)
+Sep 16 18:08:22 invapp01 systemd[10047]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 18:29:17 invapp01 su: pam_unix(su:session): session opened for user root by ops_lee(uid=1001)
+Sep 16 18:29:17 invapp01 su: pam_unix(su:session): session closed for user root
+Sep 16 18:31:28 invapp01 systemd[30000]: pam_unix(systemd-user:session): session opened for user root(uid=556) by (uid=0)
+Sep 16 18:31:28 invapp01 systemd[30000]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 18:38:13 invapp01 CRON[30962]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 16 18:38:13 invapp01 CRON[30962]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 19:01:28 invapp01 sudo: ops_lee : TTY=pts/0 ; PWD=/home/ops_lee ; USER=root ; COMMAND=/usr/bin/tail -n 200 /var/log/tomcat9/catalina.out
+Sep 16 19:01:28 invapp01 sudo: pam_unix(sudo:session): session closed for user root
+Sep 16 19:22:13 invapp01 CRON[12471]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 16 19:22:13 invapp01 CRON[12471]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 19:23:53 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:8765:1483
+Sep 16 19:31:18 invapp01 sshd[27487]: Server listening on 0.0.0.0 port 22.
+Sep 16 19:38:51 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:23490:6005
+Sep 16 19:53:15 invapp01 CRON[8006]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 19:53:15 invapp01 CRON[8006]: pam_unix(cron:session): session closed for user root
+Sep 16 20:01:09 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:19501:4489
+Sep 16 20:31:12 invapp01 CRON[26955]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 20:31:12 invapp01 CRON[26955]: pam_unix(cron:session): session closed for user root
+Sep 16 20:41:46 invapp01 CRON[17769]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 20:41:46 invapp01 CRON[17769]: pam_unix(cron:session): session closed for user postgres
+Sep 16 20:44:56 invapp01 CRON[12095]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 20:44:56 invapp01 CRON[12095]: pam_unix(cron:session): session closed for user root
+Sep 16 20:49:09 invapp01 systemd[31137]: pam_unix(systemd-user:session): session opened for user root(uid=281) by (uid=0)
+Sep 16 20:49:09 invapp01 systemd[31137]: pam_unix(systemd-user:session): session closed for user root
+Sep 16 20:53:51 invapp01 systemd[6705]: pam_unix(systemd-user:session): session opened for user tomcat(uid=359) by (uid=0)
+Sep 16 20:53:51 invapp01 systemd[6705]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 21:19:28 invapp01 CRON[28890]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 21:19:28 invapp01 CRON[28890]: pam_unix(cron:session): session closed for user root
+Sep 16 21:22:09 invapp01 CRON[24592]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 21:22:09 invapp01 CRON[24592]: pam_unix(cron:session): session closed for user postgres
+Sep 16 21:27:41 invapp01 CRON[15236]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 16 21:27:41 invapp01 CRON[15236]: pam_unix(cron:session): session closed for user tomcat
+Sep 16 21:39:10 invapp01 CRON[19916]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 21:39:10 invapp01 CRON[19916]: pam_unix(cron:session): session closed for user root
+Sep 16 21:41:55 invapp01 CRON[31678]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 21:41:55 invapp01 CRON[31678]: pam_unix(cron:session): session closed for user root
+Sep 16 21:51:32 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:26725:9677
+Sep 16 22:04:17 invapp01 CRON[9078]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 22:04:17 invapp01 CRON[9078]: pam_unix(cron:session): session closed for user postgres
+Sep 16 22:04:43 invapp01 CRON[18182]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 22:04:43 invapp01 CRON[18182]: pam_unix(cron:session): session closed for user root
+Sep 16 22:14:50 invapp01 sssd_nss[23831]: Enumeration requested for cached local service accounts
+Sep 16 22:37:15 invapp01 CRON[5340]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 16 22:37:15 invapp01 CRON[5340]: pam_unix(cron:session): session closed for user postgres
+Sep 16 22:43:45 invapp01 CRON[28631]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 22:43:45 invapp01 CRON[28631]: pam_unix(cron:session): session closed for user root
+Sep 16 22:57:02 invapp01 sudo: app_admin : TTY=pts/2 ; PWD=/home/app_admin ; USER=root ; COMMAND=/usr/bin/tail -n 200 /var/log/tomcat9/catalina.out
+Sep 16 22:57:02 invapp01 sudo: pam_unix(sudo:session): session closed for user root
+Sep 16 23:00:11 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:13561:8684
+Sep 16 23:00:47 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:3325:4561
+Sep 16 23:01:21 invapp01 systemd[30526]: pam_unix(systemd-user:session): session opened for user tomcat(uid=439) by (uid=0)
+Sep 16 23:01:21 invapp01 systemd[30526]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 16 23:08:44 invapp01 CRON[7104]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 16 23:08:44 invapp01 CRON[7104]: pam_unix(cron:session): session closed for user root
+Sep 16 23:13:54 invapp01 sssd_nss[31408]: Enumeration requested for cached local service accounts
+Sep 17 00:06:00 invapp01 CRON[21807]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 00:06:00 invapp01 CRON[21807]: pam_unix(cron:session): session closed for user root
+Sep 17 00:28:45 invapp01 su: pam_unix(su:session): session opened for user root by app_admin(uid=1001)
+Sep 17 00:28:45 invapp01 su: pam_unix(su:session): session closed for user root
+Sep 17 00:35:14 invapp01 sssd_nss[7297]: Enumeration requested for cached local service accounts
+Sep 17 00:36:59 invapp01 sshd[30043]: Server listening on 0.0.0.0 port 22.
+Sep 17 00:38:53 invapp01 CRON[19198]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 00:38:53 invapp01 CRON[19198]: pam_unix(cron:session): session closed for user root
+Sep 17 00:48:33 invapp01 CRON[9058]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 00:48:33 invapp01 CRON[9058]: pam_unix(cron:session): session closed for user postgres
+Sep 17 01:12:05 invapp01 CRON[25066]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 01:12:05 invapp01 CRON[25066]: pam_unix(cron:session): session closed for user root
+Sep 17 01:27:27 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:28449:2898
+Sep 17 02:16:23 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:6480:6947
+Sep 17 02:18:30 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:28683:7712
+Sep 17 02:19:29 invapp01 systemd[10486]: pam_unix(systemd-user:session): session opened for user postgres(uid=102) by (uid=0)
+Sep 17 02:19:29 invapp01 systemd[10486]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 02:20:54 invapp01 sshd[12645]: Server listening on 0.0.0.0 port 22.
+Sep 17 02:52:55 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:14160:8039
+Sep 17 03:33:33 invapp01 CRON[29413]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 03:33:33 invapp01 CRON[29413]: pam_unix(cron:session): session closed for user root
+Sep 17 03:36:36 invapp01 CRON[1086]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 03:36:36 invapp01 CRON[1086]: pam_unix(cron:session): session closed for user root
+Sep 17 04:06:55 invapp01 CRON[19483]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 04:06:55 invapp01 CRON[19483]: pam_unix(cron:session): session closed for user root
+Sep 17 04:16:21 invapp01 sudo: ops_lee : TTY=pts/0 ; PWD=/home/ops_lee ; USER=root ; COMMAND=/bin/systemctl status postgresql
+Sep 17 04:16:21 invapp01 sudo: pam_unix(sudo:session): session closed for user root
+Sep 17 04:17:11 invapp01 CRON[18287]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 04:17:11 invapp01 CRON[18287]: pam_unix(cron:session): session closed for user root
+Sep 17 04:21:32 invapp01 CRON[6167]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 17 04:21:32 invapp01 CRON[6167]: pam_unix(cron:session): session closed for user tomcat
+Sep 17 04:57:49 invapp01 CRON[750]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 04:57:49 invapp01 CRON[750]: pam_unix(cron:session): session closed for user root
+Sep 17 05:15:05 invapp01 CRON[30122]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 05:15:05 invapp01 CRON[30122]: pam_unix(cron:session): session closed for user root
+Sep 17 05:30:47 invapp01 sshd[17851]: Server listening on 0.0.0.0 port 22.
+Sep 17 05:32:15 invapp01 CRON[11588]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 05:32:15 invapp01 CRON[11588]: pam_unix(cron:session): session closed for user root
+Sep 17 05:51:18 invapp01 sshd[18613]: Failed publickey for app_admin from 198.51.100.57 port 59036 ssh2 scenario=INTERACTIVE_LOGIN_FAILURE step=2
+Sep 17 06:04:29 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:11611:3496
+Sep 17 06:45:56 invapp01 CRON[11873]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 06:45:56 invapp01 CRON[11873]: pam_unix(cron:session): session closed for user root
+Sep 17 06:59:27 invapp01 systemd[10649]: pam_unix(systemd-user:session): session opened for user root(uid=651) by (uid=0)
+Sep 17 06:59:27 invapp01 systemd[10649]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 07:23:22 invapp01 systemd[19730]: pam_unix(systemd-user:session): session opened for user tomcat(uid=679) by (uid=0)
+Sep 17 07:23:22 invapp01 systemd[19730]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 17 07:36:30 invapp01 sshd[4330]: Server listening on 0.0.0.0 port 22.
+Sep 17 07:51:21 invapp01 CRON[1717]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 07:51:21 invapp01 CRON[1717]: pam_unix(cron:session): session closed for user root
+Sep 17 07:52:34 invapp01 CRON[2979]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 17 07:52:34 invapp01 CRON[2979]: pam_unix(cron:session): session closed for user tomcat
+Sep 17 08:03:58 invapp01 CRON[14137]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 08:03:58 invapp01 CRON[14137]: pam_unix(cron:session): session closed for user postgres
+Sep 17 08:07:24 invapp01 systemd[25962]: pam_unix(systemd-user:session): session opened for user postgres(uid=359) by (uid=0)
+Sep 17 08:07:24 invapp01 systemd[25962]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 08:12:35 invapp01 CRON[3348]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 08:12:35 invapp01 CRON[3348]: pam_unix(cron:session): session closed for user root
+Sep 17 08:13:01 invapp01 CRON[29903]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 08:13:01 invapp01 CRON[29903]: pam_unix(cron:session): session closed for user root
+Sep 17 08:16:12 invapp01 CRON[15655]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 08:16:12 invapp01 CRON[15655]: pam_unix(cron:session): session closed for user root
+Sep 17 08:26:52 invapp01 CRON[13796]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 08:26:52 invapp01 CRON[13796]: pam_unix(cron:session): session closed for user postgres
+Sep 17 08:32:26 invapp01 CRON[7072]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 08:32:26 invapp01 CRON[7072]: pam_unix(cron:session): session closed for user root
+Sep 17 08:37:07 invapp01 CRON[30909]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 08:37:07 invapp01 CRON[30909]: pam_unix(cron:session): session closed for user root
+Sep 17 08:54:13 invapp01 CRON[3195]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 08:54:13 invapp01 CRON[3195]: pam_unix(cron:session): session closed for user root
+Sep 17 08:57:41 invapp01 sudo: app_admin : TTY=pts/2 ; PWD=/home/app_admin ; USER=root ; COMMAND=/usr/bin/less /var/log/syslog
+Sep 17 08:57:41 invapp01 sudo: pam_unix(sudo:session): session closed for user root
+Sep 17 09:25:03 invapp01 systemd[26078]: pam_unix(systemd-user:session): session opened for user tomcat(uid=525) by (uid=0)
+Sep 17 09:25:03 invapp01 systemd[26078]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 17 09:32:24 invapp01 CRON[10871]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 09:32:24 invapp01 CRON[10871]: pam_unix(cron:session): session closed for user root
+Sep 17 09:33:11 invapp01 CRON[7768]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 09:33:11 invapp01 CRON[7768]: pam_unix(cron:session): session closed for user root
+Sep 17 09:37:17 invapp01 CRON[4397]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 09:37:17 invapp01 CRON[4397]: pam_unix(cron:session): session closed for user root
+Sep 17 09:38:49 invapp01 systemd[5211]: pam_unix(systemd-user:session): session opened for user root(uid=421) by (uid=0)
+Sep 17 09:38:49 invapp01 systemd[5211]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 09:48:37 invapp01 systemd[21715]: pam_unix(systemd-user:session): session opened for user root(uid=827) by (uid=0)
+Sep 17 09:48:37 invapp01 systemd[21715]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 09:55:07 invapp01 CRON[7233]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 09:55:07 invapp01 CRON[7233]: pam_unix(cron:session): session closed for user postgres
+Sep 17 09:57:52 invapp01 CRON[22492]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 09:57:52 invapp01 CRON[22492]: pam_unix(cron:session): session closed for user root
+Sep 17 09:58:04 invapp01 systemd[19822]: pam_unix(systemd-user:session): session opened for user postgres(uid=195) by (uid=0)
+Sep 17 09:58:04 invapp01 systemd[19822]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 10:03:30 invapp01 systemd[10393]: pam_unix(systemd-user:session): session opened for user root(uid=54) by (uid=0)
+Sep 17 10:03:30 invapp01 systemd[10393]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 10:31:47 invapp01 sssd_nss[6564]: Enumeration requested for cached local service accounts
+Sep 17 10:39:30 invapp01 CRON[28793]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 17 10:39:30 invapp01 CRON[28793]: pam_unix(cron:session): session closed for user tomcat
+Sep 17 10:49:24 invapp01 CRON[13578]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 10:49:24 invapp01 CRON[13578]: pam_unix(cron:session): session closed for user root
+Sep 17 10:51:01 invapp01 CRON[8798]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 10:51:01 invapp01 CRON[8798]: pam_unix(cron:session): session closed for user root
+Sep 17 10:51:40 invapp01 CRON[12496]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 10:51:40 invapp01 CRON[12496]: pam_unix(cron:session): session closed for user postgres
+Sep 17 11:12:22 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:26753:7544
+Sep 17 11:14:48 invapp01 CRON[23124]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 11:14:48 invapp01 CRON[23124]: pam_unix(cron:session): session closed for user root
+Sep 17 11:18:07 invapp01 sshd[28555]: Accepted publickey for app_admin from 192.0.2.44 port 53352 ssh2 scenario=INTERACTIVE_LOGIN_SUCCESS step=5
+Sep 17 11:18:07 invapp01 sshd[28555]: pam_unix(sshd:session): session opened for user app_admin(uid=1001) by (uid=0)
+Sep 17 11:18:07 invapp01 systemd-logind[530]: New session 7610 of user app_admin.
+Sep 17 11:18:07 invapp01 sshd[28555]: Disconnected from user app_admin 192.0.2.44 port 53352
+Sep 17 11:20:33 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:24567:2526
+Sep 17 11:30:44 invapp01 systemd[28447]: pam_unix(systemd-user:session): session opened for user postgres(uid=633) by (uid=0)
+Sep 17 11:30:44 invapp01 systemd[28447]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 11:48:33 invapp01 CRON[10266]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 11:48:33 invapp01 CRON[10266]: pam_unix(cron:session): session closed for user postgres
+Sep 17 12:03:15 invapp01 CRON[28228]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 12:03:15 invapp01 CRON[28228]: pam_unix(cron:session): session closed for user postgres
+Sep 17 12:11:12 invapp01 systemd[30232]: pam_unix(systemd-user:session): session opened for user tomcat(uid=796) by (uid=0)
+Sep 17 12:11:12 invapp01 systemd[30232]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 17 12:21:08 invapp01 CRON[17524]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 12:21:08 invapp01 CRON[17524]: pam_unix(cron:session): session closed for user postgres
+Sep 17 12:27:31 invapp01 CRON[19898]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 12:27:31 invapp01 CRON[19898]: pam_unix(cron:session): session closed for user root
+Sep 17 12:41:04 invapp01 CRON[5245]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 12:41:04 invapp01 CRON[5245]: pam_unix(cron:session): session closed for user root
+Sep 17 12:53:37 invapp01 su: pam_unix(su:session): session opened for user root by dba_singh(uid=1001)
+Sep 17 12:53:37 invapp01 su: pam_unix(su:session): session closed for user root
+Sep 17 12:54:36 invapp01 CRON[7286]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 17 12:54:36 invapp01 CRON[7286]: pam_unix(cron:session): session closed for user tomcat
+Sep 17 12:56:14 invapp01 systemd[30886]: pam_unix(systemd-user:session): session opened for user root(uid=232) by (uid=0)
+Sep 17 12:56:14 invapp01 systemd[30886]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 13:08:23 invapp01 CRON[16840]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 13:08:23 invapp01 CRON[16840]: pam_unix(cron:session): session closed for user postgres
+Sep 17 13:11:01 invapp01 CRON[5538]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 13:11:01 invapp01 CRON[5538]: pam_unix(cron:session): session closed for user root
+Sep 17 13:34:16 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:1734:8575
+Sep 17 13:36:53 invapp01 CRON[3657]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 13:36:53 invapp01 CRON[3657]: pam_unix(cron:session): session closed for user postgres
+Sep 17 13:45:50 invapp01 CRON[23908]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 13:45:50 invapp01 CRON[23908]: pam_unix(cron:session): session closed for user root
+Sep 17 13:53:35 invapp01 CRON[31686]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 17 13:53:35 invapp01 CRON[31686]: pam_unix(cron:session): session closed for user tomcat
+Sep 17 14:16:28 invapp01 sssd_nss[1564]: Enumeration requested for cached local service accounts
+Sep 17 14:20:22 invapp01 CRON[28179]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 14:20:22 invapp01 CRON[28179]: pam_unix(cron:session): session closed for user root
+Sep 17 14:20:42 invapp01 CRON[1180]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 14:20:42 invapp01 CRON[1180]: pam_unix(cron:session): session closed for user root
+Sep 17 14:24:54 invapp01 systemd[19281]: pam_unix(systemd-user:session): session opened for user root(uid=868) by (uid=0)
+Sep 17 14:24:54 invapp01 systemd[19281]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 14:48:33 invapp01 systemd[22875]: pam_unix(systemd-user:session): session opened for user postgres(uid=653) by (uid=0)
+Sep 17 14:48:33 invapp01 systemd[22875]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 14:52:08 invapp01 CRON[27067]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 17 14:52:08 invapp01 CRON[27067]: pam_unix(cron:session): session closed for user tomcat
+Sep 17 15:10:57 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:15586:7197
+Sep 17 15:19:22 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:26686:7920
+Sep 17 15:23:15 invapp01 CRON[9907]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 15:23:15 invapp01 CRON[9907]: pam_unix(cron:session): session closed for user root
+Sep 17 15:34:52 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:5064:4033
+Sep 17 15:48:12 invapp01 CRON[11694]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 15:48:12 invapp01 CRON[11694]: pam_unix(cron:session): session closed for user root
+Sep 17 15:50:25 invapp01 systemd[25360]: pam_unix(systemd-user:session): session opened for user root(uid=191) by (uid=0)
+Sep 17 15:50:25 invapp01 systemd[25360]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 16:01:53 invapp01 systemd[7499]: pam_unix(systemd-user:session): session opened for user postgres(uid=212) by (uid=0)
+Sep 17 16:01:53 invapp01 systemd[7499]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 16:06:28 invapp01 CRON[20785]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 17 16:06:28 invapp01 CRON[20785]: pam_unix(cron:session): session closed for user tomcat
+Sep 17 16:09:41 invapp01 systemd[21134]: pam_unix(systemd-user:session): session opened for user root(uid=71) by (uid=0)
+Sep 17 16:09:41 invapp01 systemd[21134]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 16:10:46 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:14402:9912
+Sep 17 16:31:15 invapp01 systemd[29970]: pam_unix(systemd-user:session): session opened for user postgres(uid=304) by (uid=0)
+Sep 17 16:31:15 invapp01 systemd[29970]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 16:33:55 invapp01 CRON[20076]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 16:33:55 invapp01 CRON[20076]: pam_unix(cron:session): session closed for user root
+Sep 17 16:35:36 invapp01 CRON[31849]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 16:35:36 invapp01 CRON[31849]: pam_unix(cron:session): session closed for user root
+Sep 17 16:42:47 invapp01 CRON[25331]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 16:42:47 invapp01 CRON[25331]: pam_unix(cron:session): session closed for user root
+Sep 17 16:47:20 invapp01 systemd[5046]: pam_unix(systemd-user:session): session opened for user root(uid=133) by (uid=0)
+Sep 17 16:47:20 invapp01 systemd[5046]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 16:52:23 invapp01 systemd[27485]: pam_unix(systemd-user:session): session opened for user postgres(uid=83) by (uid=0)
+Sep 17 16:52:23 invapp01 systemd[27485]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 17:12:15 invapp01 CRON[10335]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 17:12:15 invapp01 CRON[10335]: pam_unix(cron:session): session closed for user root
+Sep 17 17:22:41 invapp01 CRON[18823]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 17:22:41 invapp01 CRON[18823]: pam_unix(cron:session): session closed for user root
+Sep 17 17:25:51 invapp01 CRON[25776]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 17:25:51 invapp01 CRON[25776]: pam_unix(cron:session): session closed for user root
+Sep 17 17:43:00 invapp01 CRON[15828]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 17:43:00 invapp01 CRON[15828]: pam_unix(cron:session): session closed for user root
+Sep 17 17:51:06 invapp01 CRON[29987]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 17:51:06 invapp01 CRON[29987]: pam_unix(cron:session): session closed for user root
+Sep 17 18:06:00 invapp01 systemd[30894]: pam_unix(systemd-user:session): session opened for user root(uid=392) by (uid=0)
+Sep 17 18:06:00 invapp01 systemd[30894]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 18:08:55 invapp01 CRON[15327]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 18:08:55 invapp01 CRON[15327]: pam_unix(cron:session): session closed for user root
+Sep 17 18:22:34 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:19892:6959
+Sep 17 18:28:44 invapp01 CRON[1513]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 17 18:28:44 invapp01 CRON[1513]: pam_unix(cron:session): session closed for user tomcat
+Sep 17 18:36:34 invapp01 CRON[27071]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 18:36:34 invapp01 CRON[27071]: pam_unix(cron:session): session closed for user root
+Sep 17 18:38:38 invapp01 CRON[14176]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 18:38:38 invapp01 CRON[14176]: pam_unix(cron:session): session closed for user root
+Sep 17 18:47:09 invapp01 systemd[29400]: pam_unix(systemd-user:session): session opened for user root(uid=88) by (uid=0)
+Sep 17 18:47:09 invapp01 systemd[29400]: pam_unix(systemd-user:session): session closed for user root
+Sep 17 18:47:31 invapp01 CRON[14495]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 18:47:31 invapp01 CRON[14495]: pam_unix(cron:session): session closed for user postgres
+Sep 17 18:57:06 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:8109:9911
+Sep 17 19:19:01 invapp01 CRON[23177]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 19:19:01 invapp01 CRON[23177]: pam_unix(cron:session): session closed for user root
+Sep 17 19:21:49 invapp01 CRON[29832]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 19:21:49 invapp01 CRON[29832]: pam_unix(cron:session): session closed for user root
+Sep 17 19:24:24 invapp01 CRON[11078]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 19:24:24 invapp01 CRON[11078]: pam_unix(cron:session): session closed for user root
+Sep 17 19:24:33 invapp01 CRON[27238]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 19:24:33 invapp01 CRON[27238]: pam_unix(cron:session): session closed for user postgres
+Sep 17 19:32:44 invapp01 systemd[20360]: pam_unix(systemd-user:session): session opened for user tomcat(uid=504) by (uid=0)
+Sep 17 19:32:44 invapp01 systemd[20360]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 17 19:48:25 invapp01 CRON[6636]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 19:48:25 invapp01 CRON[6636]: pam_unix(cron:session): session closed for user root
+Sep 17 19:49:29 invapp01 CRON[8627]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 19:49:29 invapp01 CRON[8627]: pam_unix(cron:session): session closed for user root
+Sep 17 19:50:15 invapp01 systemd[10686]: pam_unix(systemd-user:session): session opened for user postgres(uid=28) by (uid=0)
+Sep 17 19:50:15 invapp01 systemd[10686]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 20:36:13 invapp01 sshd[13668]: Server listening on 0.0.0.0 port 22.
+Sep 17 20:46:47 invapp01 CRON[929]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 20:46:47 invapp01 CRON[929]: pam_unix(cron:session): session closed for user root
+Sep 17 21:03:04 invapp01 sssd_nss[1501]: Enumeration requested for cached local service accounts
+Sep 17 21:05:22 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:20232:2907
+Sep 17 21:14:29 invapp01 CRON[11136]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 21:14:29 invapp01 CRON[11136]: pam_unix(cron:session): session closed for user root
+Sep 17 21:25:44 invapp01 systemd[23233]: pam_unix(systemd-user:session): session opened for user postgres(uid=863) by (uid=0)
+Sep 17 21:25:44 invapp01 systemd[23233]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 21:34:32 invapp01 CRON[31401]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 21:34:32 invapp01 CRON[31401]: pam_unix(cron:session): session closed for user root
+Sep 17 21:50:47 invapp01 sssd_nss[5719]: Enumeration requested for cached local service accounts
+Sep 17 21:52:14 invapp01 CRON[28381]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 21:52:14 invapp01 CRON[28381]: pam_unix(cron:session): session closed for user root
+Sep 17 22:12:21 invapp01 systemd[934]: pam_unix(systemd-user:session): session opened for user postgres(uid=684) by (uid=0)
+Sep 17 22:12:21 invapp01 systemd[934]: pam_unix(systemd-user:session): session closed for user postgres
+Sep 17 22:18:15 invapp01 CRON[5513]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 22:18:15 invapp01 CRON[5513]: pam_unix(cron:session): session closed for user root
+Sep 17 22:22:37 invapp01 CRON[2541]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 22:22:37 invapp01 CRON[2541]: pam_unix(cron:session): session closed for user postgres
+Sep 17 22:35:07 invapp01 CRON[11992]: pam_unix(cron:session): session opened for user tomcat(uid=0) by (uid=0)
+Sep 17 22:35:07 invapp01 CRON[11992]: pam_unix(cron:session): session closed for user tomcat
+Sep 17 22:59:48 invapp01 sssd_nss[896]: Enumeration requested for cached local service accounts
+Sep 17 22:59:56 invapp01 CRON[26925]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 22:59:56 invapp01 CRON[26925]: pam_unix(cron:session): session closed for user postgres
+Sep 17 23:04:13 invapp01 CRON[13321]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 23:04:13 invapp01 CRON[13321]: pam_unix(cron:session): session closed for user root
+Sep 17 23:07:27 invapp01 CRON[27172]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 23:07:27 invapp01 CRON[27172]: pam_unix(cron:session): session closed for user root
+Sep 17 23:21:54 invapp01 systemd[19553]: pam_unix(systemd-user:session): session opened for user tomcat(uid=35) by (uid=0)
+Sep 17 23:21:54 invapp01 systemd[19553]: pam_unix(systemd-user:session): session closed for user tomcat
+Sep 17 23:23:55 invapp01 CRON[4986]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 23:23:55 invapp01 CRON[4986]: pam_unix(cron:session): session closed for user root
+Sep 17 23:28:25 invapp01 CRON[31955]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 23:28:25 invapp01 CRON[31955]: pam_unix(cron:session): session closed for user postgres
+Sep 17 23:28:40 invapp01 sudo: ops_lee : TTY=pts/1 ; PWD=/home/ops_lee ; USER=root ; COMMAND=/usr/bin/tail -n 200 /var/log/tomcat9/catalina.out
+Sep 17 23:28:40 invapp01 sudo: pam_unix(sudo:session): session closed for user root
+Sep 17 23:34:40 invapp01 CRON[27812]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 23:34:40 invapp01 CRON[27812]: pam_unix(cron:session): session closed for user root
+Sep 17 23:40:00 invapp01 CRON[11868]: pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)
+Sep 17 23:40:00 invapp01 CRON[11868]: pam_unix(cron:session): session closed for user root
+Sep 17 23:47:36 invapp01 CRON[17959]: pam_unix(cron:session): session opened for user postgres(uid=0) by (uid=0)
+Sep 17 23:47:36 invapp01 CRON[17959]: pam_unix(cron:session): session closed for user postgres
+Sep 17 23:55:00 invapp01 polkitd(authority=local): Registered Authentication Agent for unix-process:4766:6764

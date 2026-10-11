@@ -1,0 +1,6 @@
+{
+  "action": "audit",
+  "artifact_id": "art_0003",
+  "profile_artifact_id": "art_0002",
+  "max_rounds": 4
+}

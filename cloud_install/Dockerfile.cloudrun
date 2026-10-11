@@ -85,7 +85,7 @@ ENV EVENTMILL_LOG_LEVEL=INFO
 # LLM API keys are injected via Cloud Run secrets (--set-secrets in deploy script):
 #   GEMINI_FLASH_API_KEY - Gemini Flash (light tier, fast/cheap)
 #   GEMINI_PRO_API_KEY   - Gemini Pro (heavy tier, powerful)
-#   ANTHROPIC_API_KEY    - Claude Sonnet 5 (light) / Opus 5 (heavy)
+#   ANTHROPIC_API_KEY    - Claude Sonnet 5.5 (light) / Opus 5.5 (heavy)
 #   OPENAI_API_KEY       - GPT-5.6 Terra (light) / Sol (heavy)
 # One key per provider for the latter two: neither vendor splits keys by tier,
 # unlike the two Gemini keys, which exist so bulk Flash work cannot consume Pro

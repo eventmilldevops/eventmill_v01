@@ -1,0 +1,49 @@
+{
+  "action": "extract_profile",
+  "standard": {
+    "title": "Example Corp Application Logging Standard",
+    "version": "v2.1",
+    "source_file": "logging_standard.pdf",
+    "document_sha256": "<sha256>",
+    "pages": 14
+  },
+  "review_status": "draft_unreviewed",
+  "profile_file": "/app/workspace/artifacts/logging_profile_20261010_180000.json",
+  "profile_artifact_id": "art_0002",
+  "counts": {
+    "requirements": 7,
+    "testable_against_records": 4,
+    "by_assessable_from": {
+      "record_content": 5,
+      "record_set": 0,
+      "not_assessable_from_sample": 2
+    },
+    "by_obligation": {
+      "must": 6,
+      "should": 1,
+      "may": 0
+    }
+  },
+  "quote_check": {
+    "found": 6,
+    "quote_not_found": 1,
+    "not_checked": 0
+  },
+  "validation": {
+    "errors": [],
+    "warnings": [
+      "review_status is draft_unreviewed: nobody has confirmed these requirements against the standard"
+    ]
+  },
+  "notes": [],
+  "calls": [
+    {
+      "call": "native document",
+      "ok": true,
+      "error": null,
+      "provider_id": "gcp_gemini",
+      "truncated": false
+    }
+  ],
+  "elapsed_seconds": 74.2
+}

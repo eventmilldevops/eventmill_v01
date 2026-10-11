@@ -10,7 +10,8 @@
     "log_analysis": [
       "log", "event", "syslog", "session", "alert", "parse", "field", "grok",
       "threat intel", "ioc", "indicator", "stix", "cve", "advisory", "report",
-      "image", "photo", "camera", "physical", "badge", "serial number"
+      "image", "photo", "camera", "physical", "badge", "serial number",
+      "logging standard", "log compliance", "audit record", "800-92"
     ],
     "risk_assessment": [
       "risk", "impact", "likelihood", "control", "residual", "compliance"

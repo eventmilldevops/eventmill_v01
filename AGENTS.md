@@ -24,15 +24,15 @@ Stage E).
 | `(provider_id, tier)` routing, no cross-vendor fallback | done |
 | `connect` binds every configured provider; `use <provider> [for <tool>]` | done |
 | `EVENTMILL_LLM_PROVIDERS` defaults to every known provider everywhere | done |
-| Daybreak Red + Blue as their own providers; `vendor` split from `provider_id` | done 2026-09-14 (`f84adfc`) |
-| Daybreak **Red** probed + full projector run on Cloud Run | done 2026-09-14 — manifest PARTIAL: limits and `thinking_levels` still documented, not measured |
+| Daybreak Red + Blue as their own providers; `vendor` split from `provider_id` | done 2026-09-14 (`f84adfc`); **Red removed 2026-10-10**, Blue remains |
+| Daybreak **Red** probed + full projector run on Cloud Run | done 2026-09-14; provider removed 2026-10-10 |
 | Daybreak **Blue** | **registered, never called, and will not be** — manifest stays UNVERIFIED |
 | Adding a provider needs no code | **proven** — Red was the first provider added after the seam settled: one manifest, one secret, worked first time out. Swapping Red for e.g. Kimi 3 should need no code either (a vendor with its own SDK surface still needs a client) |
-| Daybreak Red access | **short-term** — treat it as a temporary tenant of the seam, not a fixture |
+| Daybreak Red access | ended — manifest, registry entries and default-list entries removed 2026-10-10. An `EVENTMILL_LLM_PROVIDERS` that still names `openai_daybreak_red` is now refused as unknown |
 | Projector run record names provider **and** vendor, hashes the prompt (schema v5) | done |
 | Group summary: recurrence per provider, agreement across them | done |
 | **The live cross-vendor run (Stage E)** | done 2026-09-14 — Gemini 3.1 Pro vs Daybreak Red completed with very similar output; `openai` and `anthropic` worked; `summarize_run_group` worked. Qualitative sign-off: runs-per-vendor and the `stepstate-medium-2` score were not captured |
-| Group summary counts **provider ids**, not vendors | **live overclaim**: `openai` and `openai_daybreak_red` are both `vendor: openai` and both bound by default, so a route the two of them find grades as two-provider agreement. Recommendation: grade on `model.vendor` (can only lower a grade). Recurrence stays per provider id |
+| Group summary counts **provider ids**, not vendors | **latent overclaim**: `openai` and `openai_daybreak_blue` are both `vendor: openai`, so a route the two of them find would grade as two-provider agreement. Live while Red was bound; Blue has no key, so it does not occur today. Recommendation: grade on `model.vendor` (can only lower a grade). Recurrence stays per provider id |
 | ~~Probe Blue, then the Red/Blue A/B~~ | **retired, not deferred** — no Blue access, so the experiment that was to settle the grading row above will never run. Decide it on judgment: recommendation is to grade on `model.vendor` |
 | Does the agreement grade discriminate? | **open** — two independent vendors converging is also consistent with the prompt admitting few readings. Needs a flow map with ambiguous routes |
 
@@ -177,7 +177,7 @@ under `clients/` and a new manifest under `providers/`, and nothing else.
 | Provider | light | heavy | Key env var(s) | Input | Output |
 |---|---|---|---|---|---|
 | `gcp_gemini` | `gemini-3.8-flash` | `gemini-3.1-pro-preview` | `GEMINI_FLASH_API_KEY`, `GEMINI_PRO_API_KEY` | 1,048,576 | 65,536 |
-| `anthropic` | `claude-sonnet-5` | `claude-opus-5` | `ANTHROPIC_API_KEY` | 1,000,000 | 128,000 |
+| `anthropic` | `claude-sonnet-5-5` | `claude-opus-5-5` | `ANTHROPIC_API_KEY` | 1,000,000 | 128,000 |
 | `openai` | `gpt-5.6-terra` | `gpt-5.6-sol` | `OPENAI_API_KEY` | 400,000 | 128,000 |
 
 Each provider's manifest under `framework/llm/providers/` is the single source
@@ -194,12 +194,12 @@ bind; every deploy path and `.env.example` default it to **every known
 provider**, because one whose key is unset or still `placeholder` is skipped at
 startup anyway.
 
-**A provider is not a vendor.** `openai`, `openai_daybreak_red` and
-`openai_daybreak_blue` are three providers reaching one lab on two credentials,
+**A provider is not a vendor.** `openai` and
+`openai_daybreak_blue` are two providers reaching one lab on two credentials,
 so `vendor_of()` and `LLMResponse.vendor` answer the question `provider_id`
 used to. Anything counting how far a finding's support extends must count
-vendors; anything comparing two models counts providers. Both Daybreak colours
-declare their single model under **both** tiers — see
+vendors; anything comparing two models counts providers. The Daybreak provider
+declares its single model under **both** tiers — see
 `docs/change_log/2026-09-14-daybreak-providers.md` for why one tier would have
 let `_fallback_client` answer a Red run with something else. **A mounted key is not a bound provider** — but with all three named,
 a *real* key is, which is the point: adopting a vendor is a secret version and

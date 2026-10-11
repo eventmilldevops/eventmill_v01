@@ -58,6 +58,10 @@ def main():
         for plugin_dir in pillar_dir.iterdir():
             if not plugin_dir.is_dir() or plugin_dir.name.startswith("_"):
                 continue
+            if not (plugin_dir / "manifest.json").exists() and not (
+                plugin_dir / "tool.py"
+            ).exists():
+                continue
 
             schemas_dir = plugin_dir / "schemas"
             if not schemas_dir.exists():

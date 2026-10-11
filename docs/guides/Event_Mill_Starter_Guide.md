@@ -268,6 +268,9 @@ A flow map is a JSON description of one application — its components, zones, f
 
 The paths are projections, not findings. Every output says "Projected from threat intelligence, not a confirmed attack path." The projector is triage: it shows whether a control exists where the actor's plausible path lands, and whether there is a credible path nobody has considered. It does not grade how good a control is, score likelihood, or say you are protected.
 
+While a path may only be a projection or a hypothesis it is how modern cyber attacks are done. https://www.forescout.com/webinars/webinar-cybersecurity-in-crisis-musttake-actions-during-international-conflict/  
+
+
 ### Standard Projection Workflow
 
 | Step | Command | Purpose |

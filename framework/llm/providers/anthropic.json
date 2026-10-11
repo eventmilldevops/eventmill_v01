@@ -2,11 +2,11 @@
   "provider_id": "anthropic",
   "vendor": "anthropic",
   "display_name": "Anthropic Claude",
-  "_verified": "2026-09-13: tier ids, output caps and context windows read from the Models API (models.retrieve) and the output cap confirmed by an over-limit 400. Both tiers pinged clean. Context window is reported by the provider, not assumed.",
+  "_verified": "2026-10-10, for claude-sonnet-5-5 and claude-opus-5-5: tier ids, output caps (128,000) and context windows (1,000,000) read from the Models API (models.retrieve); both tiers listed and pinged clean via 'providers probe anthropic'. NOT repeated on the 5.5 ids: the over-limit 400 that confirmed the output cap, the request_constraints below, and the PDF measurements in file_handling. Those were established 2026-09-13 and 2026-09-24 on claude-sonnet-5 and claude-opus-5.",
   "tiers": {
     "light": {
-      "model_id": "claude-sonnet-5",
-      "display_name": "Claude Sonnet 5",
+      "model_id": "claude-sonnet-5-5",
+      "display_name": "Claude Sonnet 5.5",
       "fallback_model_id": "",
       "api_key_env": "ANTHROPIC_API_KEY",
       "max_output_tokens": 128000,
@@ -27,10 +27,10 @@
       "_note": "One API key serves both tiers — Anthropic does not split keys by tier, unlike the two Gemini keys that isolate Flash volume from Pro quota. thinking_levels maps onto output_config.effort; the provider also accepts xhigh and max, which QueryHints has no vocabulary for. 'minimal' is absent because there is no such effort level."
     },
     "heavy": {
-      "model_id": "claude-opus-5",
-      "display_name": "Claude Opus 5",
-      "fallback_model_id": "claude-sonnet-5",
-      "_fallback_note": "Both are GA aliases rather than dated snapshots, so a retirement is unlikely; Sonnet 5 is named as the substitute because it shares the same request surface and caps.",
+      "model_id": "claude-opus-5-5",
+      "display_name": "Claude Opus 5.5",
+      "fallback_model_id": "claude-sonnet-5-5",
+      "_fallback_note": "Both are GA aliases rather than dated snapshots, so a retirement is unlikely; Sonnet 5.5 is named as the substitute because it shares the same request surface and caps.",
       "api_key_env": "ANTHROPIC_API_KEY",
       "max_output_tokens": 128000,
       "max_context_tokens": 1000000,
@@ -73,7 +73,7 @@
         "inline_bytes"
       ],
       "preferred_ingestion": "inline_bytes",
-      "_verified": "2026-09-24, both tiers (claude-sonnet-5, claude-opus-5), inline base64 document block. tokens_per_page MEASURED: (document-call input_tokens - same prompt as text) / pages on the 3-page probe PDF; identical on both tiers, and 60% above the 1500 placeholder it replaces. Page cost does not vary with media_resolution here, so the per-resolution block is filled uniformly. max_pages is the LARGEST COUNT VERIFIED, not a refusal: 101 and 250 pages were accepted and counted correctly; the 1,000,000-token context window binds at ~415 pages. max_size_mb is MEASURED against the decoded file: the documented 32 MB limit covers the request including base64, so a 20 MB PDF (27 MB encoded) was accepted and a 25 MB PDF (33 MB encoded) was refused twice. The refusal arrives as a dropped connection, which the client classifies as transient, so this guard must stop an oversized document before it is sent.",
+      "_verified": "MEASURED ON THE PREVIOUS MODELS, not on the 5.5 ids this manifest now names. 2026-09-24, both tiers (claude-sonnet-5, claude-opus-5), inline base64 document block. tokens_per_page MEASURED: (document-call input_tokens - same prompt as text) / pages on the 3-page probe PDF; identical on both tiers, and 60% above the 1500 placeholder it replaces. Page cost does not vary with media_resolution here, so the per-resolution block is filled uniformly. max_pages is the LARGEST COUNT VERIFIED, not a refusal: 101 and 250 pages were accepted and counted correctly; the 1,000,000-token context window binds at ~415 pages. max_size_mb is MEASURED against the decoded file: the documented 32 MB limit covers the request including base64, so a 20 MB PDF (27 MB encoded) was accepted and a 25 MB PDF (33 MB encoded) was refused twice. The refusal arrives as a dropped connection, which the client classifies as transient, so this guard must stop an oversized document before it is sent.",
       "_note": "Inline only, never the Files API: an upload is retained provider-side until deleted. No gs_uri path: this provider cannot read a GCS URI, so the dispatcher reads the bytes first (no remote_uri_gs capability)."
     }
   },

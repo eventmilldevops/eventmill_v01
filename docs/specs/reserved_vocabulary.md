@@ -237,6 +237,42 @@ declares `native_pdf` while its client refuses documents.
 
 ---
 
+## 7a. Logging compliance — profile and audit vocabulary
+
+Spec: `docs/specs/log_compliance_audit.md`. The element catalogue is
+`plugins/log_analysis/logging_standard_profiler/catalogue.json` and is copied
+into every profile, so the auditor reads the catalogue the profile was written
+against.
+
+| Field | Values |
+|---|---|
+| Record elements (closed) | `timestamp`, `event_type`, `outcome`, `severity`, `actor_identity`, `source_component`, `host`, `source_address`, `destination_address`, `target_object`, `session_id`, `event_id`, `process_id`, `message`. A requirement no element expresses keeps `elements: []` and an `unmapped_reason`; it is never forced onto a near fit. |
+| Element `value_type` | `timestamp`, `category`, `identity`, `address`, `identifier`, `integer`, `text` |
+| Element entry | `{"element": name, "constraints": {...}}` (required) or `{"any_of": [entry, entry, ...], "label": text}` (one member is enough; at least two members). `any_of` and `label` are reserved keys of an entry. |
+| Element constraints | `timezone_required`, `min_precision` (`second`, `millisecond`, `microsecond`), `allowed_values`. The first two apply to a timestamp only. |
+| Investigation category ids | `when`, `what`, `who`, `outcome`, `where`, `link`, `target`. Defined in the catalogue's `investigation_categories`; the auditor holds a copy for profiles written before catalogue 1.1.0. |
+| Clarity criteria | `countable`, `mandatory`, `specific`, `unconditional`. A category's bin is 1 plus the criteria its strongest single clause meets, so 1 to 5; `graded_on` is that clause's `requirement_id`, null when no presence rule names the category. |
+| `standard_clarity_status` | `current`, `out_of_date`, `absent` |
+| Requirement `kind` | `presence`, `prohibition`, `quality`, `event_selection`, `permission`; null when `assessable_from` is `not_assessable_from_sample`. Only `presence` is counted against records. A missing `kind` reads as `presence`. |
+| `assessable_from` | `record_content` (visible inside one record), `record_set` (needs many records), `not_assessable_from_sample` (retention, protection, review: **never reported as met or unmet**) |
+| `obligation` | `must`, `should`, `may`, as the standard words it |
+| `review_status` | `draft_unreviewed` (a model's reading nobody has confirmed), `reviewed`. Set to `reviewed` by a person editing the profile, never by a tool. |
+| `quote_status` | `found`, `quote_not_found`, `not_checked` (no local text to search, or no quote). A flag, never a reason to drop the requirement. |
+| `extracted_by` | `document_read` (the model's read of the whole standard), `sentence_sweep` (a locally extracted obligation sentence the model then classified; its quote is the tool's text). Absent on a hand-written profile. |
+| `statement_coverage.sweep` | `not_needed`, `run`, `failed`, `skipped_time_budget`, `skipped_on_request`, `not_run` |
+| Finding `state` | `observed` (all elements valid in at least 99% of records), `partially_observed`, `not_observed`, `not_assessable_from_sample`, `not_evaluated` (about records, but its `kind` is not `presence`, or it names no element). **None of these means compliant.** |
+| Run identity | `run.inputs_fingerprint` (same question), `run.outcome_fingerprint` (same conclusion), element `signature` and record-type `line_signature` (same captured values, whatever the field was called). 16 hex characters of a SHA-256. |
+| Envelope `kind` | `syslog_bsd`, `syslog_bsd_iso_time`, `syslog_rfc5424`. The header is parsed by a fixed pattern of the tool's; `envelope` is also the reserved `pattern_id` of the header-only record type. |
+| `depth` | Records split beyond a free-text field: `records_broken_down`, `records_held_as_free_text`, `share`, `shallow_patterns`. |
+| Mapping `status` | `converged`, `stopped_round_limit`, `stopped_time_budget`, `stopped_no_progress`, `stopped_llm_failure`, `assessed_without_model`. Anything but the first and last means findings cover part of the file. |
+| Timestamp `format` | A strptime format, or `iso8601`, `epoch_s`, `epoch_ms`, `epoch_us` |
+| Pattern `kind` | `regex` (RE2, whole-line match, every group named), `json` (fields keyed by dotted path) |
+| Value flags | `year_absent`, `no_timezone`, `out_of_order`, `constant_value`, `high_cardinality_for_a_category`, `mostly_empty`. Observations for a reader; none of them fails a value check. |
+| Rendering `execution` | `tested_against_sample` (the spec), `regex_dialect_tested_sql_not_executed` (BigQuery), `rendered_not_executed` (Splunk, Elastic) |
+| Survey `container` | `json_lines`, `mixed_json_and_text`, `key_value`, `free_text`. Informational. |
+
+---
+
 ## 8. Identifier prefixes
 
 | Prefix | Issued by | Meaning |

@@ -237,7 +237,7 @@ _BANNERS = [
     | ____| | | | ____| \ | |_   _| |  \/  |_ _| |   | |
     |  _| | | | |  _| |  \| | | |   | |\/| || || |   | |
     | |___| |_| | |___| |\  | | |   | |  | || || |___| |___
-    |_____|\___/|_____|_| \_| |_|v0 |_|11|_|___|_____|_____|
+    |_____|\___/|_____|_| \_| |_|v0 |_|_1|_|_2_|_____|
 """,
     r"""
     ╔══════════════════════════════════════════════════════╗
@@ -247,7 +247,7 @@ _BANNERS = [
     ║  ██╔══╝  ╚██╗ ██╔╝██╔══╝  ██║╚██╗██║   ██║          ║
     ║  ███████╗ ╚████╔╝ ███████╗██║ ╚████║   ██║          ║
     ║  ╚══════╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝   ╚═╝          ║
-    ║              M  I  L  L    v011                     ║
+    ║              M  I  L  L    v0.1.2                  ║
     ╚══════════════════════════════════════════════════════╝
 """,
     r"""
@@ -256,12 +256,12 @@ _BANNERS = [
     / _ \ \ / / __|   | '_ \| | | |
    |  __/\ V /| |_    | | | | | | |
     \___| \_/  \__|   |_| |_|_|_|_|
-      event           mill v011
+      event           mill v0.1.2
 """,
     r"""
     ┌─────────────────────────────────────────┐
     │  ╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸  │
-    │     E V E N T   M I L L   v0.1.1       │
+    │     E V E N T   M I L L   v0.1.2       │
     │   event record analysis platform       │
     │  ╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸  │
     └─────────────────────────────────────────┘
@@ -270,15 +270,30 @@ _BANNERS = [
         ____                 __     __  ___ _  __  __
        / __/ _  __ ___  ___ / /_   /  |/  /(_)/ / / /
       / _/  | |/ // -_)/ _ / __/  / /|_/ // // / / /
-     /___/  |___/ \__//_//_\__/v0/_/ 1/_//_//_/1/_/
+     /___/  |___/ \__//_//_\__/v0/_/  /1//_//2/ /_/
 """,
     r"""
       .--.      .--.      .--.      .--.
      /    \    /    \    /    \    /    \
-    | EVNT |--| MILL |--| v0.1 |--| .1   |
+    | EVNT |--| MILL |--| ver. |--|0.1.2 |
      \    /    \    /    \    /    \    /
       `--'      `--'      `--'      `--'
       upstream of the SIEM — analysis before commitment
+""",
+    r"""
+        .------------------------------------------------.
+        |  EVENT  >--->  RECORDS  >--->  MILL            |
+        |       \          |          /                  |
+        |        '---- analysis ----'            v0.1.2  |
+        '------------------------------------------------'
+""",
+    r"""
+                 .---------.       .---------.
+            .---(  EVENT  )-------(   MILL   )---.
+           /     '---------'       '---------'     \
+          |       evidence in  ::  insight out     |
+           \_______________________________________/
+                                v0.1.2
 """,
 ]
 
@@ -1044,7 +1059,9 @@ class EventMillShell(cmd.Cmd):
     # Tools whose outputs are exported to the common bucket automatically
     # after each run when the shell is on Cloud Run (or EVENTMILL_AUTO_EXPORT=1).
     # Override with EVENTMILL_AUTO_EXPORT_TOOLS ("*" = every tool, "" = none).
-    DEFAULT_AUTO_EXPORT_TOOLS = "attack_path_visualizer"
+    DEFAULT_AUTO_EXPORT_TOOLS = (
+        "attack_path_visualizer,logging_standard_profiler,log_compliance_auditor"
+    )
 
     def do_export(self, arg: str) -> None:
         """Export session artifacts to the common storage bucket.

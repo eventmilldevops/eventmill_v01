@@ -33,6 +33,24 @@ class TestPluginLoader:
         assert plugin is not None
         assert plugin.tool_name == "test_plugin"
     
+    def test_non_plugin_directory_in_a_pillar_is_skipped_quietly(
+        self, temp_plugins_dir: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """postures/ and examples/ sit beside plugins and are not plugins."""
+        pillar = temp_plugins_dir / "log_analysis"
+        (pillar / "postures").mkdir()
+        (pillar / "postures" / "paranoid.md").write_text("x")
+        (pillar / "half_built").mkdir()
+        (pillar / "half_built" / "tool.py").write_text("")
+
+        with caplog.at_level("WARNING", logger="eventmill.framework.plugins"):
+            discovered = PluginLoader(temp_plugins_dir).discover_all()
+
+        warned = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert discovered == ["test_plugin"]
+        assert not any("postures" in m for m in warned)
+        assert any("half_built" in m and "manifest.json" in m for m in warned)
+
     def test_get_for_pillar_includes_borrowed_tools(self):
         """A tool naming another pillar is offered there, without moving."""
         loader = PluginLoader(Path(__file__).parents[2] / "plugins")

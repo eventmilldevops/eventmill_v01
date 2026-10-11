@@ -30,11 +30,11 @@ from framework.llm.providers import (
 
 ALL_PROVIDERS = ("gcp_gemini", "anthropic", "openai")
 
-# One vendor under several provider ids. These reach different models on a
-# different key from "openai", so they bind and are attributed independently,
-# but they are the same lab — which is why vendor is a separate field from
+# One vendor under several provider ids. This reaches a different model on a
+# different key from "openai", so it binds and is attributed independently,
+# but it is the same lab — which is why vendor is a separate field from
 # provider_id and why nothing may infer one from the other.
-DAYBREAK_PROVIDERS = ("openai_daybreak_red", "openai_daybreak_blue")
+DAYBREAK_PROVIDERS = ("openai_daybreak_blue",)
 
 EVERY_PROVIDER = ALL_PROVIDERS + DAYBREAK_PROVIDERS
 
@@ -42,7 +42,7 @@ EVERY_PROVIDER = ALL_PROVIDERS + DAYBREAK_PROVIDERS
 # operator chose, so a silent manifest edit fails here rather than at a vendor.
 EXPECTED_TIERS = {
     "gcp_gemini": {"light": "gemini-3.8-flash", "heavy": "gemini-3.1-pro-preview"},
-    "anthropic": {"light": "claude-sonnet-5", "heavy": "claude-opus-5"},
+    "anthropic": {"light": "claude-sonnet-5-5", "heavy": "claude-opus-5-5"},
     "openai": {"light": "gpt-5.6-terra", "heavy": "gpt-5.6-sol"},
 }
 
@@ -382,8 +382,8 @@ class TestClientConstruction:
         assert set(clients) == {"light", "heavy"}
         assert failures == []
         assert all(not c.connected for c in clients.values())
-        assert clients["heavy"].model_id == "claude-opus-5"
-        assert clients["light"].model_id == "claude-sonnet-5"
+        assert clients["heavy"].model_id == "claude-opus-5-5"
+        assert clients["light"].model_id == "claude-sonnet-5-5"
 
     def test_no_keys_at_all_yields_no_clients_and_no_exception(self) -> None:
         clients, failures = factory.build_clients("openai", connect=False)
@@ -434,7 +434,7 @@ class TestProbeResultReporting:
     def test_an_unconnected_client_probes_without_raising(self) -> None:
         from framework.llm.clients.anthropic import AnthropicClient
 
-        result = AnthropicClient(model_id="claude-opus-5", tier="heavy").probe()
+        result = AnthropicClient(model_id="claude-opus-5-5", tier="heavy").probe()
         assert not result.ok
         assert not result.auth_ok
         assert result.error_kind == "access"
@@ -710,5 +710,5 @@ class TestOnlyConfiguredProvidersAreBound:
             assert provider_id in out
         # And it says which models each would use, so a wrong tier is visible
         # before anything is bound.
-        assert "claude-opus-5" in out
+        assert "claude-opus-5-5" in out
         assert "gpt-5.6-sol" in out

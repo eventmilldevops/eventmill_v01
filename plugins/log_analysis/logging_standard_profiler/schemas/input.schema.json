@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "extract_profile",
+        "validate_profile"
+      ],
+      "default": "extract_profile",
+      "description": "extract_profile reads a standard document and writes a requirement profile (needs a connected model). validate_profile checks a profile JSON, generated or hand-written, with no model call."
+    },
+    "artifact_id": {
+      "type": "string",
+      "description": "Artifact id of the standard document (PDF or text) for extract_profile, or of the profile JSON for validate_profile."
+    },
+    "file_path": {
+      "type": "string",
+      "description": "Path to the same file, as an alternative to artifact_id."
+    },
+    "thinking_level": {
+      "type": "string",
+      "enum": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium",
+      "description": "Reasoning depth requested for the read. Higher is slower."
+    },
+    "force_text": {
+      "type": "boolean",
+      "default": false,
+      "description": "Skip native PDF ingestion and send locally extracted text instead."
+    },
+    "skip_sweep": {
+      "type": "boolean",
+      "default": false,
+      "description": "Do not run the second call that classifies obligation sentences the first read left unquoted. The profile then lists them as not classified."
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "artifact_id"
+      ]
+    },
+    {
+      "required": [
+        "file_path"
+      ]
+    }
+  ]
+}

@@ -97,7 +97,7 @@
         },
         "vendor": {
           "type": ["string", "null"],
-          "description": "Which lab's model the provider reaches, e.g. 'openai', read from response.vendor. Added in schema_version 5, when adopting a specialist model alongside its lab's general one made provider and vendor different questions: openai, openai_daybreak_red and openai_daybreak_blue are three providers and one vendor. Recurrence is counted per provider — two models from one lab are two things worth comparing — but how far a route's support extends is a question about vendors, and a provider id alone can no longer answer it. Null on records written before schema_version 5; those must not be given a vendor by guesswork at read time."
+          "description": "Which lab's model the provider reaches, e.g. 'openai', read from response.vendor. Added in schema_version 5, when adopting a specialist model alongside its lab's general one made provider and vendor different questions: openai and openai_daybreak_blue are two providers and one vendor. Recurrence is counted per provider — two models from one lab are two things worth comparing — but how far a route's support extends is a question about vendors, and a provider id alone can no longer answer it. Null on records written before schema_version 5; those must not be given a vendor by guesswork at read time."
         },
         "model_configured": {
           "type": ["string", "null"],

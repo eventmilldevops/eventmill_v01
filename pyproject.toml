@@ -78,6 +78,10 @@ plugins-log-analysis = [
     "beautifulsoup4>=4.12.0",
     "stix2>=3.0.0",
     "python-docx>=1.1.0",
+    # log_compliance_auditor runs model-written regexes over whole log files.
+    # RE2 is linear-time, so such a pattern cannot hang a run the way a
+    # backtracking engine can; stdlib re has no timeout to fall back on.
+    "google-re2>=1.1",
 ]
 plugins-network-forensics = [
     "scapy>=2.5.0",

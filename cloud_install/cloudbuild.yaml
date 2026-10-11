@@ -117,8 +117,8 @@ steps:
         # All five LLM secrets are mounted for every deployment, the unadopted
         # ones holding the literal "placeholder", so the revision shape is
         # identical everywhere and adopting a vendor is a secret version plus a
-        # restart rather than a different deploy path. Five secrets, six
-        # providers: both Daybreak colours read one credential.
+        # restart rather than a different deploy path. Five secrets, four
+        # providers: Gemini reads one per tier.
         for SECRET in "${_SECRET_GEMINI_FLASH}" "${_SECRET_GEMINI_PRO}" \
                       "${_SECRET_ANTHROPIC}" "${_SECRET_OPENAI}" \
                       "${_SECRET_OPENAI_DAYBREAK}" \
@@ -265,7 +265,7 @@ substitutions:
   _SECRET_GEMINI_PRO: 'eventmill-gemini-pro-api'
   _SECRET_ANTHROPIC: 'eventmill-anthropic-api'
   _SECRET_OPENAI: 'eventmill-openai-api'
-  # Read by both Daybreak providers — one credential, two models. Its
+  # Read by the Daybreak provider. Its
   # "anthropic" substring is a storage label from how the secret was created;
   # it holds an OpenAI key and mounts to OPENAI_DAYBREAK_API_KEY.
   _SECRET_OPENAI_DAYBREAK: 'eventmill-anthropic-daybreak'
@@ -277,7 +277,7 @@ substitutions:
   # so naming one costs nothing, while leaving one out means a vendor with a
   # working key in Secret Manager is silently absent from the deployment.
   # Keep in step with deploy-cloudrun-secrets.sh, which defaults to the same.
-  _LLM_PROVIDERS: 'gcp_gemini anthropic openai openai_daybreak_red openai_daybreak_blue'
+  _LLM_PROVIDERS: 'gcp_gemini anthropic openai openai_daybreak_blue'
 
   _LOG_LEVEL: 'INFO'
 

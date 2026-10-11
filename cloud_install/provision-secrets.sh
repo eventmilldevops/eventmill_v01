@@ -248,8 +248,8 @@ add_secret_version \
     "OpenAI API key — leave unset unless you are using OpenAI"
 
 # A separate credential from the one above, and a separate entitlement: it
-# reaches the Daybreak models rather than the general gpt-5.6 tiers. Both
-# colours read it, so this one entry serves two providers. The name's
+# reaches the Daybreak model rather than the general gpt-5.6 tiers.
+# openai_daybreak_blue reads it. The name's
 # "anthropic" substring is a storage label from how the secret was first
 # created — the value is an OpenAI key, mounted to OPENAI_DAYBREAK_API_KEY.
 add_secret_version \
