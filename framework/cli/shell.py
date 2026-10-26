@@ -4277,6 +4277,33 @@ class EventMillShell(cmd.Cmd):
             self._provider_by_tool[tool_name] = provider_id
             print(f"  {tool_name} will run on {provider_id}.")
 
+    def complete_use(self, text: str, line: str, begidx: int, endidx: int) -> list[str]:
+        """Complete 'use <provider | default> for <tool_name>' one word at a time."""
+        before = line[:begidx].split()[1:]
+        if not before:
+            choices = (*self._selectable_providers(), "default")
+            return [c for c in choices if c.startswith(text)]
+        if len(before) == 1:
+            return ["for"] if "for".startswith(text) else []
+        if len(before) == 2 and before[1] == "for":
+            # Clearing offers the tools that have something to clear.
+            if before[0] == "default" and self._provider_by_tool:
+                tools = sorted(self._provider_by_tool)
+            else:
+                tools = sorted(p.tool_name for p in self.plugin_loader.list_all())
+            return [t for t in tools if t.startswith(text)]
+        return []
+
+    def _selectable_providers(self) -> tuple[str, ...]:
+        """Bound providers, or before 'connect' the ones it would try to bind."""
+        bound = self._bound_providers()
+        if bound:
+            return bound
+        try:
+            return llm_factory.configured_providers()
+        except llm_factory.UnknownProviderError:
+            return llm_factory.known_providers()
+
     def _show_provider_selection(self) -> None:
         """Print which provider serves tools, and any per-tool overrides."""
         bound = self._bound_providers()
