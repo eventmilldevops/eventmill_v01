@@ -88,6 +88,19 @@ IOC_PATTERNS = {
     "email": re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Z|a-z]{2,}\b"),
     "cve": re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE),
     "mitre_technique": re.compile(r"\bT\d{4}(?:\.\d{3})?\b"),
+    # Two shapes. A browser string is taken whole, from "Mozilla/" through the
+    # end of the line or table cell, so its AppleWebKit/Chrome/Safari tokens
+    # are not each offered as an indicator of their own. A tool or library
+    # string is name/version with a dotted version (python-requests/2.31.0,
+    # curl/7.88.1). Protocol versions (HTTP/1.1, TLS/1.2) and path segments
+    # (/api/2.0) are excluded; the model judges what is left.
+    "user_agent": re.compile(
+        r"Mozilla/\d+\.\d+ \([^()\n]{1,300}\)(?:[^\n|\"'`*]{0,300}[^\s|\"'`*.,;])?"
+        r"|(?<![\w./-])"
+        r"(?!(?i:HTTPS?|TCP|UDP|TLS|SSL|DTLS|QUIC|SPDY|SMB\d?|FTP|SSH|RDP|DNS|ICMP|"
+        r"IPv[46]|SMTP|IMAP|POP3)/)"
+        r"[A-Za-z][A-Za-z0-9_.+-]{1,40}/\d+\.\d+(?:\.\d+){0,3}(?![\w/-]|\.\w)"
+    ),
 }
 
 # Defanging reversal patterns
@@ -1086,6 +1099,11 @@ def _coerce_result_shape(result: Any) -> tuple[dict, list[str]]:
             if name in fixed and not isinstance(fixed[name], str):
                 notes.append(f"refined_iocs.{name}")
                 fixed[name] = _as_text(fixed[name])
+        # The model echoes a candidate's type, but may echo the table's
+        # wording ("User Agent") instead, which would make the same string a
+        # second entity in the merge.
+        if re.sub(r"[\s_-]+", "", fixed.get("ioc_type", "").lower()) == "useragent":
+            fixed["ioc_type"] = "user_agent"
         for name, default in (("confidence", "low"), ("priority", "medium")):
             if name in fixed:
                 level = _as_text(fixed[name]).strip().lower()
@@ -2389,10 +2407,7 @@ class ThreatIntelIngester:
             errors.append("url must be a string")
 
         if "ioc_types" in payload:
-            valid_types = {
-                "ip", "domain", "hash_md5", "hash_sha1", "hash_sha256",
-                "url", "email", "cve", "mitre_technique",
-            }
+            valid_types = set(IOC_PATTERNS)
             for t in payload["ioc_types"]:
                 if t not in valid_types:
                     errors.append(f"Unknown ioc_type: {t}")
@@ -2579,7 +2594,7 @@ class ThreatIntelIngester:
         source_context = payload.get("source_context", "")
         ioc_types = payload.get(
             "ioc_types",
-            ["ip", "domain", "hash_sha256", "url", "cve", "mitre_technique"],
+            ["ip", "domain", "hash_sha256", "url", "cve", "user_agent", "mitre_technique"],
         )
         confidence_threshold = payload.get("confidence_threshold", "low")
         # None means "no limit here" — the provider manifest's max_pages is

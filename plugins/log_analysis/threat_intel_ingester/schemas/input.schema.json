@@ -29,11 +29,11 @@
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["ip", "domain", "hash_md5", "hash_sha1", "hash_sha256", "url", "email", "cve", "mitre_technique"]
+        "enum": ["ip", "domain", "hash_md5", "hash_sha1", "hash_sha256", "url", "email", "cve", "user_agent", "mitre_technique"]
       },
       "uniqueItems": true,
-      "description": "IOC types to extract. If omitted, all supported types are extracted.",
-      "default": ["ip", "domain", "hash_sha256", "url", "cve", "mitre_technique"]
+      "description": "IOC types to extract. If omitted, the default set is extracted (hash_md5, hash_sha1 and email are opt-in). user_agent matches tool and library strings with a dotted version (python-requests/2.31.0, curl/7.88.1) and whole browser strings (Mozilla/5.0 (...) ...); protocol versions such as HTTP/1.1 are excluded.",
+      "default": ["ip", "domain", "hash_sha256", "url", "cve", "user_agent", "mitre_technique"]
     },
     "confidence_threshold": {
       "type": "string",

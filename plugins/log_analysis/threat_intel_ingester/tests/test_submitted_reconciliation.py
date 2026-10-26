@@ -5,9 +5,11 @@ Stage 2.0 compares them against a recorded set of the candidates actually
 placed into a prompt, and reports what `raw_iocs` held and no prompt carried as
 a separate `candidates_not_submitted`.
 
-**The two baselines are equivalent on every run today.** Every `IOC_PATTERNS`
-entry is contiguous over non-whitespace, so none can match across the "\n\n"
-page join, which makes the per-page union equal to the whole-document pass; and
+**The two baselines are equivalent on every run today.** No `IOC_PATTERNS`
+entry can match a newline (most are contiguous over non-whitespace; a browser
+user agent spans spaces but stops at a line end), so none can match across the
+"\n\n" page join, which makes the per-page union equal to the whole-document
+pass; and
 `plan_ingestion` batches pages contiguously while every failing batch hands its
 pages to the chunked path. So this is not a defect fix. It is here because 2.5
 rewrites prompt assembly into page units, and a candidate dropped by that

@@ -196,7 +196,7 @@ Optional parameters:
 | Command | What it does |
 |---|---|
 | `run threat_intel_ingester --artifact_id <id> --source_context "Mandiant M-Trends 2025"` | Attaches a description (max 500 chars) of the report's source/context to guide extraction. Default is empty. Quote any value that contains spaces. |
-| `run threat_intel_ingester --artifact_id <id> --ioc_types ip,domain,cve` | Restricts extraction to specific IOC types (comma-separated). Default set is ip, domain, hash_sha256, url, cve, mitre_technique. |
+| `run threat_intel_ingester --artifact_id <id> --ioc_types ip,domain,cve` | Restricts extraction to specific IOC types (comma-separated). Default set is ip, domain, hash_sha256, url, cve, user_agent, mitre_technique; hash_md5, hash_sha1 and email are opt-in. |
 | `run threat_intel_ingester --artifact_id <id> --confidence_threshold medium` | Sets the minimum confidence level to include an IOC: low, medium, or high. Default is low (most inclusive). |
 | `run threat_intel_ingester --artifact_id <id> --max_pages 50` | Caps how many pages are read, as a deliberate cost ceiling — not a quality/accuracy setting. Omitting it reads the whole document (bounded only by the selected provider's own limit: gcp_gemini 1000 pages, anthropic 250, openai 600). Any page cut off by this cap is counted and reported in pages_dropped, and the run is marked partial — pages are never silently dropped. |
 | `run threat_intel_ingester --artifact_id <id> --ioc_types ip,domain,mitre_technique --confidence_threshold medium --source_context "CISA advisory"` | Flags combine freely in a single run. |

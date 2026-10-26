@@ -100,7 +100,7 @@ may have changed. See [Reading a report from a URL](#reading-a-report-from-a-url
 | `artifact_id` | **One of these two** | — | ID of the loaded artifact to process |
 | `url` | **One of these two** | — | http(s) URL of a report page or PDF to fetch and process |
 | `source_context` | No | `""` | Describes the report source (max 500 chars) |
-| `ioc_types` | No | ip, domain, hash_sha256, url, cve, mitre_technique | Which IOC types to extract |
+| `ioc_types` | No | ip, domain, hash_sha256, url, cve, user_agent, mitre_technique | Which IOC types to extract; `hash_md5`, `hash_sha1` and `email` are opt-in |
 | `confidence_threshold` | No | `"low"` | Minimum confidence to include: `low`, `medium`, `high` |
 | `max_pages` | No | *unset — read the whole document* | Deliberate cost ceiling on pages read |
 
@@ -404,6 +404,16 @@ where in the report it was seen.
 
 Both paths are preceded by a regex pass that identifies IOC candidates, which are
 included in the prompt for the model to validate against the document.
+
+`user_agent` candidates come in two shapes. A browser string is taken whole —
+from `Mozilla/` to the end of the line or table cell — so its
+`AppleWebKit/…`, `Chrome/…` and `Safari/…` tokens are not offered as separate
+indicators. A tool or library string is `name/version` with a dotted version:
+`python-requests/2.31.0`, `curl/7.88.1`, `azure-toolkit/1.0`. Protocol versions
+(`HTTP/1.1`, `TLS/1.2`) and URL path segments (`/api/2.0`) are excluded; a
+versionless `curl/8` is not matched. A browser string wrapped across lines — common in PDF
+text — is captured up to the line break. Anything else that fits the shape — a
+product version in prose, say — is the model's to reject.
 
 ## MITRE reconciliation
 
