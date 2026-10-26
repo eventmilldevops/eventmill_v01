@@ -7,7 +7,9 @@ sent — whole, in page-range batches, or as chunked text.
 
 See ``profile.py`` for the profile / plan model and ``pdf_split.py`` for
 cutting a PDF into page-range sub-documents that keep the native
-(page-image) ingestion path.
+(page-image) ingestion path. ``url_fetch.py`` fetches one document from a URL
+under network safeguards, and ``web_markdown.py`` turns a fetched web page
+into Markdown sections that ``plan_text_ingestion`` batches.
 """
 
 from .pdf_split import PdfSplitError, split_pdf
@@ -18,6 +20,7 @@ from .profile import (
     PageRange,
     bisect_range,
     plan_ingestion,
+    plan_text_ingestion,
     profile_document,
     range_from_pages,
 )
@@ -30,6 +33,7 @@ __all__ = [
     "PdfSplitError",
     "bisect_range",
     "plan_ingestion",
+    "plan_text_ingestion",
     "profile_document",
     "range_from_pages",
     "split_pdf",

@@ -189,6 +189,7 @@ Use threat_intel_ingester to extract structured indicators, MITRE ATT&CK mapping
 | `load /path/to/threat_report.pdf` | Loads the threat report (PDF, HTML, STIX, CSV/JSON IOC list, or text) as an artifact into the current session. For PDFs, native document ingestion is preferred where the provider supports it — preserving tables, layout, and cross-page context that plain text extraction loses. |
 | `artifacts` | Lists session artifacts so you can find the ID the load just created (`<artifact_id>`). |
 | `run threat_intel_ingester --artifact_id <artifact_id>` | Extracts structured IOCs (IP, domain, hash, CVE, etc.) with MITRE ATT&CK mapping from the loaded report. Reads the whole document by default — max_pages is only a deliberate cost ceiling, not a default limit. Output is a json_events artifact that can be chained into attack_path_visualizer and adversary_path_projector. |
+| `run threat_intel_ingester --url "https://vendor.example/blog/report/"` | Skips `load`: fetches the report from its URL and ingests it in the same run. A web page is converted to Markdown and read in one call when it fits (split at its headings only when it does not); a link to a PDF is read as a PDF. Only that one document is fetched — no link on it is followed — and private or cloud-metadata addresses are refused. The fetched copy appears in `artifacts`, so `--artifact_id` on it re-reads the same version. Every other flag below works with `--url` in place of `--artifact_id`. |
 
 Optional parameters:
 

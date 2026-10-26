@@ -79,17 +79,26 @@ run threat_intel_ingester --artifact_id <id> --ioc_types ip,domain,cve
 # Cap cost on a very long report — pages beyond it are reported, not hidden
 run threat_intel_ingester --artifact_id <id> --max_pages 50
 
+# Or skip load entirely: fetch the report straight from its URL
+run threat_intel_ingester --url "https://vendor.example/blog/campaign-report/"
+
 # Chain to the visualizer using the output artifact
 run attack_path_visualizer --artifact_id <output_artifact_id> --format mermaid
 
 export <output_artifact_id>                 # push the JSON to cloud storage
 ```
 
+Quote a URL that contains spaces or shell-special characters. A URL run
+registers the fetched copy as an artifact of its own (listed by `artifacts`),
+so `--artifact_id` on that copy re-reads the same bytes rather than a page that
+may have changed. See [Reading a report from a URL](#reading-a-report-from-a-url).
+
 ### Input Parameters
 
 | Parameter | Required | Default | Description |
 |---|---|---|---|
-| `artifact_id` | **Yes** | — | ID of the loaded artifact to process |
+| `artifact_id` | **One of these two** | — | ID of the loaded artifact to process |
+| `url` | **One of these two** | — | http(s) URL of a report page or PDF to fetch and process |
 | `source_context` | No | `""` | Describes the report source (max 500 chars) |
 | `ioc_types` | No | ip, domain, hash_sha256, url, cve, mitre_technique | Which IOC types to extract |
 | `confidence_threshold` | No | `"low"` | Minimum confidence to include: `low`, `medium`, `high` |
@@ -117,8 +126,72 @@ run threat_intel_ingester {"artifact_id": "art_0001", "ioc_types": ["ip", "domai
 - `html_report` — HTML blog posts, advisories, CERT bulletins
 - `text` — Plain text, CSV, STIX bundles
 
+A URL is not an artifact type: `--url` fetches the document and registers it
+as `pdf_report` (a PDF link) or `text` (a web page, converted to Markdown).
+
 **Produced:**
 - `json_events` — Structured IOC records
+- `text` / `pdf_report` — the fetched copy, on a `--url` run
+
+## Reading a report from a URL
+
+`--url` fetches one document and ingests it in the same run. What happens
+depends on what comes back:
+
+| Served as | Saved as | Read by |
+|---|---|---|
+| a PDF (by its bytes, whatever the header says) | `pdf_report` | the native PDF path, exactly as a loaded PDF |
+| HTML | `text` (Markdown), original HTML kept beside it | **sectioned text**, below |
+| plain text / Markdown | `text` | **sectioned text** |
+
+**Sectioned text: one pass when it fits.** Loaded text is read in
+6,000-character chunks of 4,096 output tokens each, so a single blog post can
+become seven calls that each see a seventh of the report. A fetched page is
+instead split at its headings and planned by `plan_text_ingestion`, the same
+arithmetic as page-range batching: the whole text goes in **one call** when the
+reply fits the output budget and the deadline (`ingestion_plan.strategy:
+text_whole`), and only otherwise are sections grouped into as few calls as fit
+(`text_batched`, labels `s1-4`). Each call gets the native path's budget and
+thinking level; a cut-off reply is halved and re-run; a failed call hands its
+sections to the chunked path. A typical vendor blog post (~30k characters, a
+few dozen candidates) is one call.
+
+**What the conversion keeps and drops.** The aim is the report, verbatim:
+
+- **Nothing is escaped.** A generic converter writes `144.172.64[.]99` as
+  `144.172.64\[.\]99`, which the IP regex cannot match — so every defanged
+  indicator in a table would vanish from the regex baseline. Escaping is off.
+- **Tables stay rows and code stays fenced**, so a value stays beside its
+  description and a hunting query keeps its embedded indicators.
+- **Link targets are dropped, link text kept.** Vendor pages link their own
+  docs, products and share buttons dozens of times; each would be a URL and
+  domain candidate. Reported indicators are text (usually defanged) and survive.
+- **Page furniture is dropped:** scripts, navigation, footers, and related-post
+  cards — which name *other* campaigns' actors and would otherwise be read as
+  part of this report. Image alt text is kept as `[Image: …]`.
+
+**Fetch safeguards.** Threat reports name attacker infrastructure on purpose,
+and the service runs a hop from the cloud metadata server, so the fetch is
+narrow: http/https on default ports only; every resolved address must be
+public (private, loopback, link-local/metadata, CGNAT and reserved ranges are
+refused, including IPv4 inside IPv6); the connection goes to the address that
+was checked, with TLS verified against the hostname; each redirect is
+re-checked (5 at most); 10 MB for pages, 50 MB for PDFs, 90 s overall. Exactly
+one document is fetched — **nothing on the page is followed**. Proxy
+environment variables are ignored, because a proxy would make the checked
+address irrelevant.
+
+**Provenance.** `report_metadata.source` (and `source` in the persisted
+artifact) records the URL as given and as served, the redirect chain, the fetch
+time, the SHA-256 of the fetched bytes and of the Markdown the model read, and
+the address that answered. Every prompt also carries `[Fetched from <url>]` in
+its source context.
+
+**Refusals name their cause.** A refused URL is `INPUT_VALIDATION_FAILED`; a
+fetch that failed, was too large, or returned something other than HTML, text
+or PDF is `ARTIFACT_UNREADABLE`, with the actual error in the message. A page
+that converts to almost no text is refused rather than ingested as nothing —
+it is almost always built by JavaScript, which the fetcher does not run.
 
 ## What the result says about itself
 
@@ -147,7 +220,7 @@ more serious statement than one that analysed less of the report.
 | Field | Means |
 |---|---|
 | `report_metadata.pages_total` / `pages_read` / `pages_dropped` | how much of the document was examined |
-| `summary.coverage_unit` | **`pages` or `lines`** — a PDF is counted in pages, everything else in lines |
+| `summary.coverage_unit` | **`pages`, `sections` or `lines`** — a PDF is counted in pages, a page fetched with `--url` in the sections it was read in, everything else in lines |
 
 `coverage_unit` exists because loading a *generated summary* by mistake looks
 identical to loading a report. A 114-line markdown summary reports
@@ -464,19 +537,40 @@ The profile and timings are also in `summary.document_profile` and
 - STIX 2.1 parsing not yet implemented
 - **Verified on `gcp_gemini` light only.** Truncation behaviour and thinking
   spend are per-vendor, and supersession is driven by truncation
+- **`--url` does not run JavaScript.** A page that builds its content in the
+  browser is refused; save it as PDF and load it. Pages behind a login or
+  paywall cannot be fetched
+- **`--url` drops link targets and images.** An indicator that appears only
+  as a hyperlink's destination, or only inside an image, is not read. Merged
+  table cells (`rowspan`) become rows with empty cells; the model sees the
+  description once, on the first row
+- **`--url` connects directly.** It ignores proxy settings, so it will not work
+  from a network that only allows egress through a proxy (Cloud Run needs
+  none)
+- The sectioned-text latency model has not been calibrated against live runs;
+  it reuses the native model's base and per-candidate terms and drops the
+  per-page term (see `_text_latency_model`)
 
 ## Safety Notes
 
-**safe_for_auto_invoke: true**
+**safe_for_auto_invoke: true** · **external_connectivity: true**
 
-Read-only and low-risk. Processes local artifacts and makes external calls only
-to the configured provider via the framework's LLM dispatcher.
+Processes local artifacts and calls the configured provider via the framework's
+LLM dispatcher. With `--url` it also makes **one outbound HTTP(S) request per
+redirect hop** to the operator-supplied URL, under the safeguards in
+[Reading a report from a URL](#reading-a-report-from-a-url); without `--url` it
+makes none. Today only an operator's `run` starts a tool. If the model is ever
+allowed to invoke tools itself, revisit `safe_for_auto_invoke`: a URL taken from
+a report it is reading would then be fetched on the report author's say-so.
 
 ## Dependencies
 
 Beyond framework baseline (`pip install ".[plugins-log-analysis]"`):
 - `pdfplumber>=0.10.0` (text extraction)
 - `beautifulsoup4>=4.12.0` (HTML processing)
+- `markdownify>=1.2.0,<2.0.0` (`--url`: HTML to Markdown; ceilinged because its
+  escaping defaults decide whether defanged indicators stay matchable)
+- `httpx>=0.27.0,<1.0.0` (`--url`: the fetch; already present through the LLM SDKs)
 - `stix2>=3.0.0` (future STIX support)
 - `python-docx>=1.1.0`
 

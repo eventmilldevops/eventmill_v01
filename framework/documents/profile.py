@@ -12,6 +12,9 @@ per-page measurements taken before any LLM call into a plan:
   deadline. Batches always split on page boundaries.
 * ``chunked_text`` — extracted text and candidate lists in small calls;
   the path for callers that cannot send documents natively.
+* ``text_whole`` / ``text_batched`` — the same decision for a text document
+  split into sections (``plan_text_ingestion``): the whole text in one call,
+  or sections grouped into as few calls as the caps allow.
 
 Everything here is arithmetic on counts the caller supplies; the module
 knows nothing about IOC regexes or the LLM client.
@@ -153,7 +156,11 @@ def profile_document(
 
 @dataclass
 class PageRange:
-    """A contiguous 1-based, inclusive page range to send in one call."""
+    """A contiguous 1-based, inclusive page range to send in one call.
+
+    On a text document the units are sections rather than pages, and
+    ``label_prefix`` is ``"s"`` so labels say so.
+    """
 
     start: int
     end: int
@@ -161,6 +168,7 @@ class PageRange:
     estimated_output_tokens: int
     estimated_seconds: float
     oversized: bool = False  # a single page that alone exceeds a cap
+    label_prefix: str = "p"
 
     @property
     def pages(self) -> int:
@@ -168,17 +176,19 @@ class PageRange:
 
     @property
     def label(self) -> str:
-        return f"p{self.start}-{self.end}" if self.pages > 1 else f"p{self.start}"
+        p = self.label_prefix
+        return f"{p}{self.start}-{self.end}" if self.pages > 1 else f"{p}{self.start}"
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        d.pop("label_prefix")
         d["pages"] = self.pages
         return d
 
 
 @dataclass
 class IngestionPlan:
-    strategy: str  # native | native_batched | chunked_text
+    strategy: str  # native | native_batched | chunked_text | text_whole | text_batched
     reason: str
     batches: list[PageRange] = field(default_factory=list)
     estimated_seconds: float = 0.0
@@ -198,7 +208,7 @@ class IngestionPlan:
 
     def describe(self) -> str:
         """One line for logs and run summaries."""
-        if self.strategy == "native_batched":
+        if self.strategy.endswith("_batched"):
             ranges = ", ".join(
                 f"{b.label} ({b.candidates} cand.)" for b in self.batches
             )
@@ -235,41 +245,92 @@ def plan_ingestion(
     full cap is what truncates a reply mid-record.
     """
     latency = latency or LatencyModel()
-    content_budget = max(1, max_output_tokens - max(0, output_reserve_tokens))
-    cap = int(content_budget * OUTPUT_HEADROOM)
-    deadline = call_deadline_s * DEADLINE_HEADROOM
-
-    whole_tokens = profile.estimated_output_tokens
-    whole_seconds = latency.estimate(profile.pages, profile.candidates)
+    cap, deadline = _caps(max_output_tokens, output_reserve_tokens, call_deadline_s)
 
     if not native_available:
         return IngestionPlan(
             strategy="chunked_text",
             reason="native document ingestion not available for this artifact",
-            estimated_seconds=whole_seconds,
+            estimated_seconds=latency.estimate(profile.pages, profile.candidates),
             output_cap_per_call=cap,
             deadline_per_call_s=round(deadline, 1),
         )
+    return _plan_batches(
+        profile, cap=cap, deadline=deadline, latency=latency,
+        strategies=("native", "native_batched"), unit="page", label_prefix="p",
+    )
+
+
+def plan_text_ingestion(
+    profile: DocumentProfile,
+    *,
+    max_output_tokens: int,
+    call_deadline_s: float,
+    output_reserve_tokens: int = 0,
+    latency: LatencyModel | None = None,
+) -> IngestionPlan:
+    """Decide how to send a text document whose "pages" are sections.
+
+    The same arithmetic as ``plan_ingestion`` with the text in the prompt
+    instead of a document attached: the whole text in one call when the reply
+    fits the output cap and the deadline (``text_whole``), otherwise sections
+    grouped greedily into as few calls as fit (``text_batched``). Batches are
+    labelled ``s1-4`` and so on.
+
+    Pass a ``latency`` whose ``seconds_per_page`` reflects sections, not PDF
+    pages: a section of text costs the model far less than a page image.
+    """
+    latency = latency or LatencyModel()
+    cap, deadline = _caps(max_output_tokens, output_reserve_tokens, call_deadline_s)
+    return _plan_batches(
+        profile, cap=cap, deadline=deadline, latency=latency,
+        strategies=("text_whole", "text_batched"), unit="section", label_prefix="s",
+    )
+
+
+def _caps(
+    max_output_tokens: int, output_reserve_tokens: int, call_deadline_s: float,
+) -> tuple[int, float]:
+    content_budget = max(1, max_output_tokens - max(0, output_reserve_tokens))
+    return int(content_budget * OUTPUT_HEADROOM), call_deadline_s * DEADLINE_HEADROOM
+
+
+def _plan_batches(
+    profile: DocumentProfile,
+    *,
+    cap: int,
+    deadline: float,
+    latency: LatencyModel,
+    strategies: tuple[str, str],
+    unit: str,
+    label_prefix: str,
+) -> IngestionPlan:
+    whole_strategy, batched_strategy = strategies
+    whole_tokens = profile.estimated_output_tokens
+    whole_seconds = latency.estimate(profile.pages, profile.candidates)
 
     if _fits(whole_tokens, whole_seconds, cap, deadline):
         return IngestionPlan(
-            strategy="native",
+            strategy=whole_strategy,
             reason=(
                 f"whole document fits one call "
                 f"(~{whole_tokens} of {cap} output tokens, "
                 f"~{whole_seconds:.0f}s of {deadline:.0f}s)"
             ),
             batches=[
-                PageRange(1, profile.pages, profile.candidates, whole_tokens, whole_seconds)
+                PageRange(
+                    1, profile.pages, profile.candidates, whole_tokens, whole_seconds,
+                    label_prefix=label_prefix,
+                )
             ],
             estimated_seconds=whole_seconds,
             output_cap_per_call=cap,
             deadline_per_call_s=round(deadline, 1),
         )
 
-    # Greedy page-boundary batching: close a batch when the next page would
-    # push it over either cap. A page that alone exceeds a cap becomes its
-    # own batch and is marked oversized so the caller can treat it specially.
+    # Greedy boundary batching: close a batch when the next unit would push it
+    # over either cap. A unit that alone exceeds a cap becomes its own batch
+    # and is marked oversized so the caller can treat it specially.
     batches: list[PageRange] = []
     start = 1
     run_candidates = 0
@@ -279,24 +340,28 @@ def plan_ingestion(
         trial_tokens = estimate_output_tokens(trial_cand)
         trial_seconds = latency.estimate(trial_pages, trial_cand)
         if start != idx and not _fits(trial_tokens, trial_seconds, cap, deadline):
-            batches.append(_make_range(start, idx - 1, run_candidates, latency, cap, deadline))
+            batches.append(_make_range(
+                start, idx - 1, run_candidates, latency, cap, deadline, label_prefix,
+            ))
             start = idx
             run_candidates = page_cand
         else:
             run_candidates = trial_cand
-    batches.append(_make_range(start, profile.pages, run_candidates, latency, cap, deadline))
+    batches.append(_make_range(
+        start, profile.pages, run_candidates, latency, cap, deadline, label_prefix,
+    ))
 
     total_seconds = sum(b.estimated_seconds for b in batches)
     oversized = [b.label for b in batches if b.oversized]
     reason = (
         f"whole document would need ~{whole_tokens} output tokens "
         f"(cap {cap}) and ~{whole_seconds:.0f}s (deadline {deadline:.0f}s); "
-        f"split on page boundaries"
+        f"split on {unit} boundaries"
     )
     if oversized:
-        reason += f"; page(s) {', '.join(oversized)} exceed a cap on their own"
+        reason += f"; {unit}(s) {', '.join(oversized)} exceed a cap on their own"
     return IngestionPlan(
-        strategy="native_batched",
+        strategy=batched_strategy,
         reason=reason,
         batches=batches,
         estimated_seconds=total_seconds,
@@ -332,14 +397,20 @@ def bisect_range(
             break
     cut = min(max(cut, rng.start), rng.end - 1)
     return [
-        range_from_pages(rng.start, cut, page_candidates, latency),
-        range_from_pages(cut + 1, rng.end, page_candidates, latency),
+        range_from_pages(
+            rng.start, cut, page_candidates, latency, label_prefix=rng.label_prefix,
+        ),
+        range_from_pages(
+            cut + 1, rng.end, page_candidates, latency, label_prefix=rng.label_prefix,
+        ),
     ]
 
 
 def range_from_pages(
     start: int, end: int, page_candidates: list[int],
     latency: LatencyModel | None = None,
+    *,
+    label_prefix: str = "p",
 ) -> PageRange:
     """A PageRange over ``start..end`` costed from per-page candidate counts."""
     latency = latency or LatencyModel()
@@ -351,12 +422,14 @@ def range_from_pages(
         candidates=candidates,
         estimated_output_tokens=estimate_output_tokens(candidates),
         estimated_seconds=round(latency.estimate(pages, candidates), 1),
+        label_prefix=label_prefix,
     )
 
 
 def _make_range(
     start: int, end: int, candidates: int,
     latency: LatencyModel, cap: int, deadline: float,
+    label_prefix: str = "p",
 ) -> PageRange:
     pages = end - start + 1
     tokens = estimate_output_tokens(candidates)
@@ -368,4 +441,5 @@ def _make_range(
         estimated_output_tokens=tokens,
         estimated_seconds=round(seconds, 1),
         oversized=not _fits(tokens, seconds, cap, deadline),
+        label_prefix=label_prefix,
     )

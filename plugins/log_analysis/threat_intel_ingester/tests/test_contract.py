@@ -237,8 +237,25 @@ class TestSchemasLoad:
         assert "$schema" in output_schema
 
     def test_input_schema_has_required(self, input_schema: dict):
-        assert "required" in input_schema
-        assert "artifact_id" in input_schema["required"]
+        # Exactly one source: a loaded artifact or a URL to fetch.
+        branches = [b.get("required") for b in input_schema.get("anyOf", [])]
+        assert ["artifact_id"] in branches and ["url"] in branches
+        assert input_schema["not"] == {"required": ["artifact_id", "url"]}
+
+    def test_input_schema_takes_one_source(self, input_schema: dict):
+        import jsonschema
+
+        ok = [{"artifact_id": "art_1"}, {"url": "https://example.com/report"}]
+        bad = [
+            {},
+            {"artifact_id": "art_1", "url": "https://example.com/report"},
+            {"url": "ftp://example.com/report.pdf"},
+        ]
+        for payload in ok:
+            jsonschema.validate(payload, input_schema)
+        for payload in bad:
+            with pytest.raises(jsonschema.ValidationError):
+                jsonschema.validate(payload, input_schema)
 
     def test_output_schema_has_ok(self, output_schema: dict):
         assert "ok" in output_schema.get("properties", {})
@@ -326,6 +343,18 @@ class TestValidateInputs:
     def test_accepts_minimal_payload(self, tool_instance):
         result = tool_instance.validate_inputs({"artifact_id": "art_0001"})
         assert result.ok is True
+
+    def test_accepts_url_payload(self, tool_instance):
+        result = tool_instance.validate_inputs({"url": "https://example.com/report"})
+        assert result.ok is True
+
+    def test_rejects_both_sources(self, tool_instance):
+        result = tool_instance.validate_inputs({
+            "artifact_id": "art_0001",
+            "url": "https://example.com/report",
+        })
+        assert result.ok is False
+        assert any("not both" in e for e in result.errors)
 
 
 # ---------------------------------------------------------------------------

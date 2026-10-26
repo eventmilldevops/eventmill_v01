@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy dependency manifest and install with GCP + plugin + LLM provider extras
 # gcp:                  google-cloud-storage, secret-manager, logging
 # plugins-threat-modeling: pypdf (PDF extraction for threat_report_analyzer)
-# plugins-log-analysis: pdfplumber, beautifulsoup4, python-docx, stix2 (for threat_intel_ingester)
+# plugins-log-analysis: pdfplumber, beautifulsoup4, markdownify, httpx, python-docx, stix2 (for threat_intel_ingester)
 # llm-anthropic / llm-openai: the Anthropic and OpenAI SDKs.
 #
 # google-genai is a BASE dependency, not an extra, which is why Gemini worked in

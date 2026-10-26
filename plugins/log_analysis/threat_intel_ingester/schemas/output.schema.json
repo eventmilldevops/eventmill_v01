@@ -89,7 +89,7 @@
                       "string",
                       "null"
                     ],
-                    "description": "Which call named it: a native page range (p12-19) or a chunk label (chunk 3/8)."
+                    "description": "Which call named it: a native page range (p12-19), a fetched page's section range (s1-30) or a chunk label (chunk 3/8)."
                   }
                 }
               }
@@ -112,6 +112,21 @@
                     "description": "Which call named it."
                   }
                 }
+              }
+            },
+            "source": {
+              "type": "object",
+              "description": "Present only when the report was fetched with url (or re-run from such a fetch). Says where it came from and exactly which bytes were read, so a result can be traced to one version of a page that may since have changed.",
+              "properties": {
+                "requested_url": {"type": "string", "description": "The URL as given."},
+                "final_url": {"type": "string", "description": "The URL the document was served from after redirects."},
+                "redirects": {"type": "array", "items": {"type": "string"}, "description": "Every URL redirected from, in order."},
+                "fetched_at": {"type": "string", "description": "UTC time of the fetch (ISO 8601)."},
+                "content_type": {"type": "string", "description": "Content-Type header as served."},
+                "fetched_kind": {"type": "string", "enum": ["html", "text", "pdf"], "description": "What the body was recognised as."},
+                "content_sha256": {"type": "string", "description": "SHA-256 of the bytes fetched."},
+                "markdown_sha256": {"type": "string", "description": "SHA-256 of the Markdown the model read (html and text only)."},
+                "peer_address": {"type": "string", "description": "The checked public address the request was sent to."}
               }
             }
           }
@@ -190,7 +205,7 @@
                         "string",
                         "null"
                       ],
-                      "description": "Which call reported it: a native page range (p12-19) or a chunk label (chunk 3/8)."
+                      "description": "Which call reported it: a native page range (p12-19), a fetched page's section range (s1-30) or a chunk label (chunk 3/8)."
                     },
                     "attempt_id": {
                       "type": [
@@ -344,7 +359,7 @@
                         "string",
                         "null"
                       ],
-                      "description": "Which call reported it: a native page range (p12-19) or a chunk label (chunk 3/8)."
+                      "description": "Which call reported it: a native page range (p12-19), a fetched page's section range (s1-30) or a chunk label (chunk 3/8)."
                     },
                     "attempt_id": {
                       "type": [
@@ -523,14 +538,14 @@
             },
             "ingestion_plan": {
               "type": "object",
-              "description": "How the document was sent: strategy ('native', 'native_batched', 'chunked_text'), the page-range batches with candidate counts and estimates, and the reason."
+              "description": "How the document was sent: strategy ('native', 'native_batched', 'chunked_text', or for a page fetched with url 'text_whole', 'text_batched'), the page- or section-range batches with candidate counts and estimates, and the reason."
             },
             "timings": {
               "type": "object",
               "additionalProperties": {
                 "type": "number"
               },
-              "description": "Seconds spent per phase: extract_s, native_s, chunks_s, reconcile_s, total_s."
+              "description": "Seconds spent per phase: fetch_s (url runs; not included in total_s), extract_s, native_s, text_s (sectioned text from a url), chunks_s, reconcile_s, total_s."
             },
             "tactic_corrected_count": {
               "type": "integer",
@@ -652,15 +667,16 @@
             },
             "native_attempts": {
               "type": "integer",
-              "description": "Native document calls that returned parseable JSON, including the partials later superseded. 0 on a run with no native path. Separate from chunks_attempted, which counts only chunked-text calls and is 0 on a clean native run."
+              "description": "Whole-document calls that returned parseable JSON - native PDF calls, or sectioned-text calls for a page fetched with url - including the partials later superseded. 0 on a run with neither path. Separate from chunks_attempted, which counts only chunked-text calls and is 0 on a clean native run."
             },
             "coverage_unit": {
               "type": "string",
               "enum": [
                 "pages",
-                "lines"
+                "lines",
+                "sections"
               ],
-              "description": "What pages_total/pages_read count. A PDF is measured in pages; every other artifact type in lines. Without this a 114-line summary reads as a 114-page report."
+              "description": "What pages_total/pages_read count. A PDF is measured in pages, a web page fetched with url in the heading-bounded sections it was read in, and every other artifact type in lines. Without this a 114-line summary reads as a 114-page report."
             }
           }
         }

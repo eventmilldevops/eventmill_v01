@@ -3,12 +3,22 @@
   "$id": "https://eventmill.dev/plugins/threat_intel_ingester/input.schema.json",
   "title": "Threat Intel Ingester Input",
   "type": "object",
-  "required": ["artifact_id"],
+  "anyOf": [
+    {"required": ["artifact_id"]},
+    {"required": ["url"]}
+  ],
+  "not": {"required": ["artifact_id", "url"]},
   "additionalProperties": false,
   "properties": {
     "artifact_id": {
       "type": "string",
-      "description": "ID of the registered artifact to ingest. Must reference a pdf_report, html_report, or text artifact."
+      "description": "ID of the registered artifact to ingest. Must reference a pdf_report, html_report, or text artifact. Give this or url, not both."
+    },
+    "url": {
+      "type": "string",
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+      "maxLength": 2048,
+      "description": "Fetch the report from this http(s) URL instead of a loaded artifact. A web page is converted to Markdown and read whole when it fits one call, split at headings when it does not; a link to a PDF is read as a PDF. Only the one document is fetched - no link on it is followed - and private, loopback and cloud-metadata addresses are refused. The fetched copy is registered as an artifact, so a re-run by artifact_id reads the same bytes. Give this or artifact_id, not both."
     },
     "source_context": {
       "type": "string",

@@ -11,6 +11,7 @@ from framework.documents import (
     PdfSplitError,
     bisect_range,
     plan_ingestion,
+    plan_text_ingestion,
     profile_document,
     range_from_pages,
     split_pdf,
@@ -127,6 +128,55 @@ class TestPlan:
         d = plan.to_dict()
         assert d["batch_count"] == len(plan.batches)
         assert d["batches"][0]["pages"] == plan.batches[0].pages
+        assert "label_prefix" not in d["batches"][0]
+
+
+class TestTextPlan:
+    """A fetched page, planned in sections with the text in the prompt."""
+
+    SECTION_LATENCY = LatencyModel(seconds_per_page=0.0)
+
+    def test_a_blog_post_is_one_call(self):
+        # ~30 sections and a handful of indicators, like a vendor blog post.
+        prof = profile_document("text", [1000] * 30, [1] * 10 + [0] * 20, CAP)
+        plan = plan_text_ingestion(
+            prof, max_output_tokens=CAP, call_deadline_s=DEADLINE,
+            latency=self.SECTION_LATENCY,
+        )
+        assert plan.strategy == "text_whole"
+        assert [(b.start, b.end) for b in plan.batches] == [(1, 30)]
+        assert plan.batches[0].label == "s1-30"
+
+    def test_the_pdf_page_cost_would_have_split_it(self):
+        # The reason sections get their own latency model.
+        prof = profile_document("text", [1000] * 30, [1] * 10 + [0] * 20, CAP)
+        plan = plan_text_ingestion(prof, max_output_tokens=CAP, call_deadline_s=DEADLINE)
+        assert plan.strategy == "text_batched"
+
+    def test_an_indicator_dump_is_batched_on_section_boundaries(self):
+        prof = profile_document("text", [5000] * 12, [60] * 12, CAP)
+        plan = plan_text_ingestion(
+            prof, max_output_tokens=CAP, call_deadline_s=DEADLINE,
+            latency=self.SECTION_LATENCY,
+        )
+        assert plan.strategy == "text_batched"
+        assert len(plan.batches) > 1
+        assert plan.batches[0].start == 1 and plan.batches[-1].end == 12
+        for a, b in zip(plan.batches, plan.batches[1:]):
+            assert b.start == a.end + 1
+        assert all(b.label.startswith("s") for b in plan.batches)
+        assert "split on section boundaries" in plan.reason
+        assert plan.describe().startswith("text_batched:")
+        assert "s1-" in plan.describe()
+
+    def test_bisecting_a_section_batch_keeps_its_labels(self):
+        prof = profile_document("text", [1000] * 4, [10] * 4, CAP)
+        plan = plan_text_ingestion(
+            prof, max_output_tokens=CAP, call_deadline_s=DEADLINE,
+            latency=self.SECTION_LATENCY,
+        )
+        halves = bisect_range(plan.batches[0], [10] * 4, latency=self.SECTION_LATENCY)
+        assert [h.label for h in halves] == ["s1-2", "s3-4"]
 
 
 class TestOutputReserve:

@@ -7,7 +7,7 @@
   ],
   "display_name": "Threat Intel Ingester",
   "description_short": "Ingest threat intelligence reports (PDF, HTML, STIX, CSV) and extract structured IOC data with MITRE ATT&CK mapping.",
-  "description_long": "Use this tool when the analyst has a threat intelligence report, vendor advisory, CERT bulletin, or IOC list that needs to be processed into structured, queryable data. The tool accepts PDF reports, HTML pages (blog posts, advisories), STIX 2.1 bundles, and CSV/JSON IOC lists. It extracts and normalizes embedded indicators of compromise (IP addresses, domains, file hashes, CVEs, MITRE technique IDs), maps findings to MITRE ATT&CK where applicable, and produces a compact JSON summary optimized for LLM context window usage. The output is registered as a json_events artifact that can feed the context_enriched_analyzer for cross-referencing against loaded event records. Use this tool BEFORE running context_enriched_analyzer \u2014 it produces the threat context that the enrichment tool consumes.",
+  "description_long": "Use this tool when the analyst has a threat intelligence report, vendor advisory, CERT bulletin, or IOC list that needs to be processed into structured, queryable data. The tool accepts PDF reports, HTML pages (blog posts, advisories), STIX 2.1 bundles, and CSV/JSON IOC lists, either as a loaded artifact or fetched directly from an http(s) URL. A fetched web page is converted to Markdown and read whole when it fits one call; a fetched PDF is read as a PDF. It extracts and normalizes embedded indicators of compromise (IP addresses, domains, file hashes, CVEs, MITRE technique IDs), maps findings to MITRE ATT&CK where applicable, and produces a compact JSON summary optimized for LLM context window usage. The output is registered as a json_events artifact that can feed the context_enriched_analyzer for cross-referencing against loaded event records. Use this tool BEFORE running context_enriched_analyzer \u2014 it produces the threat context that the enrichment tool consumes.",
   "author": "Event Mill Contributors",
   "owner_team": "log_analysis_core",
   "license": "Apache-2.0",
@@ -49,13 +49,15 @@
   "safe_for_auto_invoke": true,
   "requires_auth": false,
   "requires_llm": true,
-  "external_connectivity": false,
+  "external_connectivity": true,
   "minimum_framework_version": "0.2.0",
   "python_version": "3.11",
   "dependencies": [
     "pdfplumber>=0.10.0",
     "beautifulsoup4>=4.12.0",
-    "stix2>=3.0.0"
+    "stix2>=3.0.0",
+    "markdownify>=1.2.0,<2.0.0",
+    "httpx>=0.27.0,<1.0.0"
   ],
   "reference_data_overrides": [],
   "stability": "core",
@@ -69,7 +71,8 @@
     "cve",
     "indicator",
     "report",
-    "advisory"
+    "advisory",
+    "url"
   ],
   "result_summary_fields": [
     "total_iocs",

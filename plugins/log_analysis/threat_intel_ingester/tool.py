@@ -11,6 +11,7 @@ LLM analysis provides confidence scoring and priority assessment.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -30,8 +31,16 @@ from framework.documents import (
     PdfSplitError,
     bisect_range,
     plan_ingestion,
+    plan_text_ingestion,
     profile_document,
     split_pdf,
+)
+from framework.documents.url_fetch import UrlFetchError, fetch_url
+from framework.documents.web_markdown import (
+    MAX_MARKDOWN_CHARS,
+    html_to_markdown,
+    split_markdown_sections,
+    text_to_markdown,
 )
 from framework.llm.providers import OutputLimits, output_limits
 from framework.plugins.protocol import ArtifactRef, QueryHints, ToolResult, ValidationResult
@@ -408,6 +417,65 @@ def _latency_model() -> LatencyModel:
             "EVENTMILL_NATIVE_S_PER_CANDIDATE", base.seconds_per_candidate
         ),
     )
+
+
+def _text_latency_model() -> LatencyModel:
+    """Latency model for fetched text sent in the prompt, one unit per section.
+
+    The base and per-candidate terms are the native model's, overrides
+    included: writing the records dominates either way. The per-page term is
+    dropped because it was calibrated on PDF page images, and a section of
+    text is not one - charging 12 s per section would split a 30-section blog
+    post that fits one call.
+    """
+    native = _latency_model()
+    return LatencyModel(
+        base_seconds=native.base_seconds,
+        seconds_per_page=0.0,
+        seconds_per_candidate=native.seconds_per_candidate,
+    )
+
+
+# Marks a fetched page saved by this plugin: its Markdown is read in sections
+# through plan_text_ingestion rather than in 6,000-character chunks. Carried in
+# the artifact's metadata, so a re-run by artifact_id takes the same path.
+_SECTIONED_TEXT = "markdown_sections"
+
+
+def _is_sectioned_text(artifact: Any) -> bool:
+    metadata = getattr(artifact, "metadata", None) or {}
+    return (
+        getattr(artifact, "artifact_type", None) == "text"
+        and metadata.get("ingest_as") == _SECTIONED_TEXT
+    )
+
+
+# What the result says about a fetched source. Local file paths stay in the
+# artifact's metadata and out of the result.
+_SOURCE_FIELDS = (
+    "requested_url", "final_url", "redirects", "fetched_at", "content_type",
+    "fetched_kind", "content_sha256", "markdown_sha256", "peer_address",
+)
+
+# A converted page with less text than this held no report: almost always a
+# page that builds its content with JavaScript, which the fetcher does not run.
+_MIN_PAGE_TEXT_CHARS = 200
+
+
+def _source_info(metadata: dict) -> dict:
+    info = {key: metadata[key] for key in _SOURCE_FIELDS if key in metadata}
+    info.setdefault("final_url", metadata.get("source_url", ""))
+    return info
+
+
+def _url_filename(url: str, suffix: str) -> str:
+    """A readable original_filename for a fetched document."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    tail = parts.path.rstrip("/").rsplit("/", 1)[-1] or parts.hostname or "page"
+    tail = re.sub(r"[^A-Za-z0-9._-]+", "_", tail)[:80] or "page"
+    return tail if tail.lower().endswith(suffix) else f"{tail}{suffix}"
 
 
 def _page_iocs(page_texts: list[str], ioc_types: list[str]) -> list[list[RawIOC]]:
@@ -2275,8 +2343,8 @@ Respond ONLY with a JSON object in this exact format:
 class ThreatIntelIngester:
     """Event Mill plugin: Threat Intelligence Report Ingester.
 
-    Extracts IOCs from threat intelligence reports (PDF, HTML, text)
-    using a two-pass approach:
+    Extracts IOCs from threat intelligence reports (PDF, HTML, text, or a
+    report fetched from a URL) using a two-pass approach:
     1. Regex-based extraction for baseline IOC identification
     2. LLM-based refinement for confidence scoring, false positive
        filtering, MITRE ATT&CK mapping, and priority assessment
@@ -2311,8 +2379,14 @@ class ThreatIntelIngester:
         """Validate the input payload against the input schema."""
         errors = []
 
-        if "artifact_id" not in payload:
-            errors.append("artifact_id is required")
+        has_artifact = bool(payload.get("artifact_id"))
+        has_url = bool(payload.get("url"))
+        if has_artifact and has_url:
+            errors.append("give either artifact_id or url, not both")
+        elif not has_artifact and not has_url:
+            errors.append("artifact_id or url is required")
+        if "url" in payload and not isinstance(payload["url"], str):
+            errors.append("url must be a string")
 
         if "ioc_types" in payload:
             valid_types = {
@@ -2334,6 +2408,149 @@ class ThreatIntelIngester:
 
         return ValidationResult(ok=len(errors) == 0, errors=errors if errors else None)
 
+    def _artifact_from_url(
+        self, url: str, context: Any,
+    ) -> tuple[Any, dict | None, ToolResult | None]:
+        """Fetch ``url`` and register what came back as this run's input.
+
+        A PDF is saved as a pdf_report and read like any loaded PDF. A web page
+        is converted to Markdown and saved as text marked for sectioned
+        reading, with the original HTML kept beside it. The artifact is
+        registered in the session, so ``artifacts`` lists it and a re-run by
+        artifact_id reads the same bytes rather than a page that may have
+        changed.
+
+        Returns (artifact, source_info, None), or (None, None, failure).
+        """
+        try:
+            doc = fetch_url(url)
+        except UrlFetchError as exc:
+            code = (
+                "INPUT_VALIDATION_FAILED"
+                if exc.reason in ("invalid", "blocked") else "ARTIFACT_UNREADABLE"
+            )
+            logger.warning("[FETCH] %s refused or failed (%s): %s", url, exc.reason, exc)
+            return None, None, ToolResult(
+                ok=False, error_code=code, message=f"Could not fetch {url}: {exc}",
+            )
+
+        workspace = os.environ.get("EVENTMILL_WORKSPACE", "/tmp")
+        artifact_dir = os.path.join(workspace, "artifacts")
+        stem = f"url_{doc.sha256[:12]}"
+        metadata: dict[str, Any] = {
+            "source_url": doc.final_url,
+            "requested_url": doc.requested_url,
+            "final_url": doc.final_url,
+            "redirects": list(doc.redirects),
+            "fetched_at": doc.fetched_at,
+            "content_type": doc.content_type,
+            "fetched_kind": doc.kind,
+            "content_sha256": doc.sha256,
+            "peer_address": doc.peer_address,
+            "size_bytes": len(doc.body),
+        }
+        try:
+            os.makedirs(artifact_dir, exist_ok=True)
+            if doc.kind == "pdf":
+                path = os.path.join(artifact_dir, f"{stem}.pdf")
+                with open(path, "wb") as f:
+                    f.write(doc.body)
+                artifact_type = "pdf_report"
+                metadata["mime_type"] = "application/pdf"
+                metadata["original_filename"] = _url_filename(doc.final_url, ".pdf")
+                # The dispatcher's page-limit guard reads this, as it does for
+                # a loaded PDF.
+                try:
+                    from framework.documents.pdf_split import pdf_page_count
+                    metadata["pages"] = pdf_page_count(path)
+                except Exception as exc:  # noqa: BLE001 - the guard can still read the file
+                    logger.warning("[FETCH] Could not count pages of %s: %s", path, exc)
+            else:
+                if doc.kind == "html":
+                    raw_path = os.path.join(artifact_dir, f"{stem}.html")
+                    with open(raw_path, "wb") as f:
+                        f.write(doc.body)
+                    metadata["raw_file_path"] = raw_path
+                    markdown = html_to_markdown(doc.body, encoding=doc.charset).markdown
+                else:
+                    markdown = text_to_markdown(doc.body, doc.charset)
+                body_chars = len(re.sub(r"^# .*$", "", markdown, count=1, flags=re.M).strip())
+                if body_chars < _MIN_PAGE_TEXT_CHARS:
+                    return None, None, ToolResult(
+                        ok=False,
+                        error_code="ARTIFACT_UNREADABLE",
+                        message=(
+                            f"{doc.final_url} yielded only {body_chars} characters of "
+                            f"text. The page probably builds its content with "
+                            f"JavaScript, which the fetcher does not run. Save it as "
+                            f"a PDF, load it, and run with --artifact_id instead."
+                        ),
+                    )
+                if len(markdown) > MAX_MARKDOWN_CHARS:
+                    return None, None, ToolResult(
+                        ok=False,
+                        error_code="INPUT_VALIDATION_FAILED",
+                        message=(
+                            f"{doc.final_url} converts to {len(markdown):,} characters "
+                            f"of text, above the {MAX_MARKDOWN_CHARS:,} a single "
+                            f"report is allowed. This is not a report page."
+                        ),
+                    )
+                path = os.path.join(artifact_dir, f"{stem}.md")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(markdown)
+                artifact_type = "text"
+                metadata["ingest_as"] = _SECTIONED_TEXT
+                metadata["original_filename"] = _url_filename(doc.final_url, ".md")
+                metadata["markdown_sha256"] = hashlib.sha256(
+                    markdown.encode("utf-8")
+                ).hexdigest()
+        except ImportError as exc:
+            missing = getattr(exc, "name", None) or str(exc)
+            return None, None, ToolResult(
+                ok=False,
+                error_code="DEPENDENCY_MISSING",
+                message=(
+                    f"{missing} is required to read web pages. Install the "
+                    f"plugins-log-analysis extra: pip install \".[plugins-log-analysis]\""
+                ),
+            )
+        except OSError as exc:
+            return None, None, ToolResult(
+                ok=False,
+                error_code="ARTIFACT_UNREADABLE",
+                message=f"Fetched {doc.final_url} but could not save it: {exc}",
+            )
+
+        artifact_id = stem
+        register = getattr(context, "register_artifact", None)
+        if register:
+            try:
+                artifact_id = register(
+                    artifact_type=artifact_type,
+                    file_path=path,
+                    source_tool="threat_intel_ingester",
+                    metadata=dict(metadata),
+                ).artifact_id
+            except Exception as exc:  # noqa: BLE001 - the run can proceed unregistered
+                logger.warning(
+                    "[FETCH] Could not register %s in the session (%s); "
+                    "ingesting it as %s", path, exc, stem,
+                )
+        logger.info(
+            "[FETCH] %s -> %s: %s, %d bytes, sha256 %s, saved as %s (%s)",
+            url, doc.final_url, doc.kind, len(doc.body), doc.sha256[:16],
+            artifact_id, artifact_type,
+        )
+        artifact = ArtifactRef(
+            artifact_id=artifact_id,
+            artifact_type=artifact_type,
+            file_path=path,
+            source_tool="threat_intel_ingester",
+            metadata=metadata,
+        )
+        return artifact, _source_info(metadata), None
+
     def execute(self, payload: dict, context: Any) -> ToolResult:
         """Ingest a threat intelligence report and extract structured IOC data.
 
@@ -2342,13 +2559,21 @@ class ThreatIntelIngester:
         2. LLM pass: refine confidence, filter false positives, map MITRE techniques
         """
         artifact_id = payload.get("artifact_id")
-        if not artifact_id:
+        url = payload.get("url")
+        if artifact_id and url:
+            return ToolResult(
+                ok=False,
+                error_code="INPUT_VALIDATION_FAILED",
+                message="Give either artifact_id or url, not both.",
+            )
+        if not artifact_id and not url:
             return ToolResult(
                 ok=False,
                 error_code="INPUT_VALIDATION_FAILED",
                 message=(
-                    "artifact_id is required. "
-                    "Usage: run threat_intel_ingester {\"artifact_id\": \"<id>\"}"
+                    "artifact_id or url is required. "
+                    "Usage: run threat_intel_ingester --artifact_id <id>  |  "
+                    "run threat_intel_ingester --url <https://...>"
                 ),
             )
         source_context = payload.get("source_context", "")
@@ -2366,10 +2591,22 @@ class ThreatIntelIngester:
 
         # --- Resolve artifact ---
         artifact = None
-        for art in context.artifacts:
-            if art.artifact_id == artifact_id:
-                artifact = art
-                break
+        source_info: dict | None = None
+        fetch_s: float | None = None
+        if url:
+            t_fetch = time.monotonic()
+            artifact, source_info, failure = self._artifact_from_url(url, context)
+            fetch_s = _elapsed(t_fetch)
+            if failure is not None:
+                return failure
+            artifact_id = artifact.artifact_id
+        else:
+            for art in context.artifacts:
+                if art.artifact_id == artifact_id:
+                    artifact = art
+                    break
+            if artifact is not None and (artifact.metadata or {}).get("source_url"):
+                source_info = _source_info(artifact.metadata)
 
         if artifact is None:
             return ToolResult(
@@ -2394,6 +2631,18 @@ class ThreatIntelIngester:
         # --- Extract text ---
         t_start = time.monotonic()
         timings: dict[str, float] = {}
+        if fetch_s is not None:
+            timings["fetch_s"] = fetch_s
+        # A fetched web page is read in heading-bounded sections, planned like
+        # PDF pages, instead of the 6,000-character chunks other text gets.
+        sectioned = _is_sectioned_text(artifact)
+        if source_info:
+            # Every prompt names where the report came from, so the model can
+            # attribute the publisher without guessing.
+            fetched_note = f"[Fetched from {source_info['final_url']}]"
+            source_context = (
+                f"{source_context} {fetched_note}" if source_context else fetched_note
+            )
         logger.info(
             "Extracting text from %s artifact %s",
             artifact.artifact_type,
@@ -2405,6 +2654,9 @@ class ThreatIntelIngester:
             if artifact.artifact_type == "pdf_report":
                 page_texts = extract_pdf_page_texts(artifact.file_path, max_pages)
                 raw_text = "\n\n".join(t for t in page_texts if t)
+            elif sectioned:
+                raw_text = extractor(str(artifact.file_path))
+                page_texts = split_markdown_sections(raw_text) or [raw_text]
             else:
                 raw_text = extractor(str(artifact.file_path))
                 page_texts = [raw_text]
@@ -2435,6 +2687,8 @@ class ThreatIntelIngester:
                     page_count, pages_total, artifact_id,
                     page_count + 1, pages_total,
                 )
+        elif sectioned:
+            page_count = len(page_texts)
         else:
             page_count = len(raw_text.splitlines())
 
@@ -2485,18 +2739,31 @@ class ThreatIntelIngester:
             and hasattr(context.llm_query, "supports_native_document")
             and context.llm_query.supports_native_document("application/pdf")
         )
-        plan = plan_ingestion(
-            doc_profile,
-            native_available=native_capable,
-            max_output_tokens=limits.max_output_tokens,
-            output_reserve_tokens=limits.thinking_reserve_tokens,
-            call_deadline_s=_NATIVE_CALL_DEADLINE_S,
-            latency=_latency_model(),
+        text_batching = bool(
+            sectioned and context.llm_enabled and context.llm_query is not None
         )
+        if text_batching:
+            plan = plan_text_ingestion(
+                doc_profile,
+                max_output_tokens=limits.max_output_tokens,
+                output_reserve_tokens=limits.thinking_reserve_tokens,
+                call_deadline_s=_NATIVE_CALL_DEADLINE_S,
+                latency=_text_latency_model(),
+            )
+        else:
+            plan = plan_ingestion(
+                doc_profile,
+                native_available=native_capable,
+                max_output_tokens=limits.max_output_tokens,
+                output_reserve_tokens=limits.thinking_reserve_tokens,
+                call_deadline_s=_NATIVE_CALL_DEADLINE_S,
+                latency=_latency_model(),
+            )
         # The console shows WARNING and above: a document that had to be split
         # says so there, so a multi-minute run is never silent about why.
         logger.log(
-            logging.WARNING if plan.strategy != "native" else logging.INFO,
+            logging.WARNING if plan.strategy not in ("native", "text_whole")
+            else logging.INFO,
             "[PLAN] %s", plan.describe(),
         )
 
@@ -2910,6 +3177,227 @@ class ThreatIntelIngester:
                         sum(len(page_iocs[pg - 1]) for pg in failed_pages),
                     )
 
+            # --- Sectioned text path: a fetched page, whole or in batches ---
+            # The native path's rules with the text in the prompt instead of a
+            # document attached: same output budget, same thinking level, a
+            # truncated batch halved and re-run, a failed one handed to the
+            # chunked path. Results share native_batch_results and its
+            # provenance, so the merge cannot tell the two apart and needs to
+            # learn nothing new.
+            elif text_batching and plan.strategy in ("text_whole", "text_batched"):
+                text_cap = limits.max_output_tokens
+                text_latency = _text_latency_model()
+                section_candidate_counts = [len(sec) for sec in page_iocs]
+                n_sections = doc_profile.pages
+                pending_text: list[PageRange] = list(plan.batches)
+                calls_left = len(pending_text) + _NATIVE_MAX_EXTRA_CALLS
+                batch_no = 0
+                t_text = time.monotonic()
+                try:
+                    while pending_text and calls_left > 0:
+                        batch = pending_text.pop(0)
+                        calls_left -= 1
+                        batch_no += 1
+                        if batch.pages == n_sections:
+                            batch_iocs = raw_iocs
+                            # The template calls this slot "truncated"; on the
+                            # whole-text call it is not, and the model is told.
+                            text_header = (
+                                "[The complete report text follows; nothing "
+                                "has been omitted.]"
+                            )
+                            section_note = ""
+                        else:
+                            batch_iocs = _dedupe_iocs([
+                                ioc for sec in range(batch.start, batch.end + 1)
+                                for ioc in page_iocs[sec - 1]
+                            ])
+                            text_header = (
+                                f"[Report sections {batch.start}-{batch.end} of "
+                                f"{n_sections}]"
+                            )
+                            section_note = (
+                                f" [sections {batch.start}-{batch.end} of "
+                                f"{n_sections}; other sections are processed "
+                                f"separately]"
+                            )
+                        report_text = text_header + "\n\n" + "\n\n".join(
+                            page_texts[batch.start - 1: batch.end]
+                        )
+                        candidates_text = (
+                            "\n".join(
+                                f"- [{ioc.ioc_type}] {ioc.value} "
+                                f"| Context: {ioc.context[:200]}"
+                                for ioc in batch_iocs
+                            )
+                            or "(none found by regex pre-scan)"
+                        )
+                        _record_submitted(batch_iocs)
+                        text_prompt = LLM_REFINEMENT_PROMPT.format(
+                            source_context=(source_context or "Not provided")
+                            + section_note,
+                            ioc_candidates=candidates_text,
+                            report_text=report_text,
+                        )
+                        t_call = time.monotonic()
+                        logger.info(
+                            "[TEXT] %s start (call %d): %d candidates, %d chars "
+                            "of text, max_tokens=%d, tier=%s, thinking=%s, "
+                            "est. ~%d output tokens / ~%.0fs",
+                            batch.label, batch_no, len(batch_iocs),
+                            len(report_text), text_cap, _native_tier(),
+                            _NATIVE_THINKING_LEVEL,
+                            batch.estimated_output_tokens, batch.estimated_seconds,
+                        )
+                        try:
+                            text_response = context.llm_query.query_text(
+                                prompt=text_prompt,
+                                system_context=(
+                                    "You are a threat intelligence analyst. "
+                                    "Respond only with valid JSON."
+                                ),
+                                max_tokens=text_cap,
+                                grounding_data=grounding,
+                                hints=QueryHints(
+                                    # No tier: the manifest's model_tier
+                                    # governs, as on the native path.
+                                    needs_structured_output=True,
+                                    thinking_level=_NATIVE_THINKING_LEVEL,
+                                ),
+                            )
+                        except Exception as e:
+                            logger.error(
+                                "[TEXT] %s exception after %.1fs — sections %d-%d "
+                                "go to the chunked text path | exception_type=%s, "
+                                "message=%s",
+                                batch.label, _elapsed(t_call), batch.start,
+                                batch.end, type(e).__name__, e, exc_info=True,
+                            )
+                            failed_pages.extend(range(batch.start, batch.end + 1))
+                            continue
+
+                        text_ok = bool(getattr(text_response, "ok", False))
+                        text_body = getattr(text_response, "text", None)
+                        text_error = getattr(text_response, "error", None)
+                        log_llm_interaction(
+                            prompt=f"[ti_ingester text {batch.label}] {text_prompt[:500]}",
+                            response_text=text_body,
+                            model_id=(
+                                getattr(text_response, "model_used", None)
+                                or "threat_intel_ingester"
+                            ),
+                            error=str(text_error) if not text_ok else None,
+                        )
+                        logger.info(
+                            "[TEXT] %s done in %.1fs: ok=%s, model=%s, finish=%s, "
+                            "response=%d chars, token_usage=%s",
+                            batch.label, _elapsed(t_call), text_ok,
+                            getattr(text_response, "model_used", None),
+                            getattr(text_response, "finish_reason", None),
+                            len(text_body or ""),
+                            getattr(text_response, "token_usage", None),
+                        )
+
+                        parsed = None
+                        truncated = bool(getattr(text_response, "truncated", False))
+                        if text_ok and text_body:
+                            parsed, repaired = _parse_llm_json_result(text_body)
+                            truncated = truncated or repaired
+                            if parsed is None:
+                                logger.warning(
+                                    "[TEXT] %s JSON parse failed — sections %d-%d "
+                                    "go to the chunked text path | "
+                                    "response_length=%d, first_200=%r, last_200=%r",
+                                    batch.label, batch.start, batch.end,
+                                    len(text_body), text_body[:200], text_body[-200:],
+                                )
+                        elif not text_ok:
+                            logger.warning(
+                                "[TEXT] %s returned failure — sections %d-%d go to "
+                                "the chunked text path | error=%r",
+                                batch.label, batch.start, batch.end, text_error,
+                            )
+
+                        if parsed:
+                            native_batch_results.append(parsed)
+                            native_provenance.append({
+                                "label": batch.label,
+                                "attempt_id": batch_no,
+                                "page_start": batch.start,
+                                "page_end": batch.end,
+                                "truncated": truncated,
+                                "superseded_by": None,
+                            })
+                            shaped = _coerce_result_shape(parsed)[0]
+                            logger.info(
+                                "[TEXT] %s parsed %s — %d refined_iocs, "
+                                "%d techniques, %d attack paths",
+                                batch.label, "PARTIAL" if truncated else "OK",
+                                len(shaped["refined_iocs"]),
+                                len(shaped["additional_mitre_techniques"]),
+                                len(shaped["attack_graph"]["paths"]),
+                            )
+                            if not truncated:
+                                continue
+
+                        if truncated:
+                            halves = bisect_range(
+                                batch, section_candidate_counts, latency=text_latency,
+                            )
+                            returned = (
+                                len(parsed.get("refined_iocs", [])) if parsed else 0
+                            )
+                            if len(halves) > 1 and calls_left >= len(halves):
+                                logger.warning(
+                                    "[TEXT] %s was cut off at the output cap after "
+                                    "%d of %d candidate(s) — re-running those "
+                                    "sections as %s and %s",
+                                    batch.label, returned, len(batch_iocs),
+                                    halves[0].label, halves[1].label,
+                                )
+                                pending_text[:0] = halves
+                                continue
+                            logger.warning(
+                                "[TEXT] %s was cut off at the output cap after %d "
+                                "of %d candidate(s) and cannot be split further — "
+                                "sections %d-%d go to the chunked path",
+                                batch.label, returned, len(batch_iocs),
+                                batch.start, batch.end,
+                            )
+                        failed_pages.extend(range(batch.start, batch.end + 1))
+
+                    if pending_text:
+                        leftover = [
+                            sec for rng in pending_text
+                            for sec in range(rng.start, rng.end + 1)
+                        ]
+                        logger.warning(
+                            "[TEXT] Call budget spent with %d section(s) still "
+                            "unprocessed (%s) — they go to the chunked text path",
+                            len(leftover),
+                            ", ".join(rng.label for rng in pending_text),
+                        )
+                        failed_pages.extend(leftover)
+                finally:
+                    timings["text_s"] = _elapsed(t_text)
+
+                native_calls = batch_no
+                failed_pages = sorted(set(failed_pages))
+                if native_batch_results and not failed_pages:
+                    native_pdf_succeeded = True
+                    logger.info(
+                        "Sectioned text ingestion succeeded in %.1fs (%d call(s))",
+                        timings["text_s"], len(native_batch_results),
+                    )
+                elif failed_pages:
+                    fallback_pages = list(failed_pages)
+                    logger.warning(
+                        "[TEXT] %d call(s) returned usable JSON; %d section(s) "
+                        "with %d candidates fall back to the chunked text path",
+                        len(native_batch_results), len(failed_pages),
+                        sum(len(page_iocs[sec - 1]) for sec in failed_pages),
+                    )
+
             # Split large inputs into chunks to stay within LLM context limits.
             # Large PDFs previously caused repeated 503s even with backoff because
             # the monolithic prompt (100 IOCs + 8 kB text) exceeded the model's
@@ -2930,8 +3418,8 @@ class ThreatIntelIngester:
                 chunk_units = []
                 n_chunks = 0
                 logger.info(
-                    "Skipping chunked LLM path — native PDF "
-                    "ingestion succeeded"
+                    "Skipping chunked LLM path — %s ingestion succeeded",
+                    "sectioned text" if text_batching else "native PDF",
                 )
 
             logger.info(
@@ -3290,10 +3778,16 @@ class ThreatIntelIngester:
         # ToolResult and the persisted artifact. An export outlives the session
         # that produced it, and a file read back from the bucket months later
         # has only what was written into it.
-        # A PDF is counted in pages; every other artifact type is counted in
-        # lines. The keys stay "pages_*" so existing consumers keep working,
-        # and "unit" says what they actually mean.
-        coverage_unit = "pages" if artifact.artifact_type == "pdf_report" else "lines"
+        # A PDF is counted in pages, a fetched web page in the sections it was
+        # read in, and every other artifact type in lines. The keys stay
+        # "pages_*" so existing consumers keep working, and "unit" says what
+        # they actually mean.
+        if artifact.artifact_type == "pdf_report":
+            coverage_unit = "pages"
+        elif sectioned:
+            coverage_unit = "sections"
+        else:
+            coverage_unit = "lines"
         coverage_fields = {
             "pages_total": pages_total if pages_total else page_count,
             "pages_read": page_count,
@@ -3377,6 +3871,11 @@ class ThreatIntelIngester:
                 "ingestion_mode": ingestion_mode,
                 **analysis,
             }
+            if source_info:
+                # Where the report was fetched from and which bytes were read,
+                # so a result read back later can be traced to one version of
+                # a page that may since have changed.
+                output_data["source"] = dict(source_info)
 
             # Write artifact file
 
@@ -3401,6 +3900,10 @@ class ThreatIntelIngester:
                 metadata={
                     "ioc_count": len(filtered_iocs),
                     "source_artifact": artifact_id,
+                    **(
+                        {"source_url": source_info["final_url"]}
+                        if source_info else {}
+                    ),
                 },
             )
             output_artifact_id = art_ref.artifact_id
@@ -3452,6 +3955,7 @@ class ThreatIntelIngester:
                     # about whichever one a batch happened to name first.
                     "actors": list(report_meta.get("actors", [])),
                     "campaigns": list(report_meta.get("campaigns", [])),
+                    **({"source": dict(source_info)} if source_info else {}),
                 },
                 "iocs": filtered_iocs,
                 "mitre_mappings": all_mitre,
@@ -3521,7 +4025,10 @@ class ThreatIntelIngester:
         title = meta.get("title", "Unknown report")
         artifact_type = meta.get("artifact_type", "unknown")
         pages = meta.get("page_count", "?")
-        size_label = "pages" if artifact_type == "pdf_report" else "lines"
+        size_label = summary.get("coverage_unit") or (
+            "pages" if artifact_type == "pdf_report" else "lines"
+        )
+        source_url = (meta.get("source") or {}).get("final_url", "")
         # Status before anything else, including the report identity. The
         # summary is capped at the manifest's summary_budget by
         # PluginExecutor, so a warning placed after the content is the part
@@ -3536,7 +4043,10 @@ class ThreatIntelIngester:
             # IOC list reads as a failure unless the reason is stated.
             parts.append(f"{notes}.")
 
-        parts.append(f"Ingested {artifact_type} ({pages} {size_label}): {title}.")
+        fetched_from = f" fetched from {source_url[:200]}" if source_url else ""
+        parts.append(
+            f"Ingested {artifact_type} ({pages} {size_label}){fetched_from}: {title}."
+        )
 
 
         # Attribution
