@@ -152,7 +152,7 @@ echo "📦 Building container image..."
 gcloud builds submit \
     --project="${PROJECT_ID}" \
     --config=build-event-mill.yaml \
-    --substitutions="_REGION=${REGION}" \
+    --substitutions="_REGION=${REGION},_AR_REPO=${AR_REPO}" \
     .
 
 # ---------------------------------------------------------------------------

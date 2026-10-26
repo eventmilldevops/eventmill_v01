@@ -113,8 +113,8 @@ def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             raise HTTPException(
                 status_code=503,
                 detail=(
-                    "LLM not connected — check GEMINI_FLASH_API_KEY/"
-                    "GEMINI_PRO_API_KEY environment variables."
+                    "LLM not connected — check the provider API key "
+                    "environment variables (see the 'providers' command)."
                 ),
             )
 
