@@ -258,6 +258,67 @@ def test_an_unrecognized_document_is_an_error(tool, tmp_path):
     result = tool.execute({"sources": [str(other)]}, context=None)
     assert result.ok is False
     assert result.error_code == "INPUT_UNRECOGNIZED"
+    assert "expected attack_graph" in result.message
+
+
+def _run_record_artifact(tmp_path) -> FakeArtifact:
+    """A projector run record: the blocks its schema requires, nothing else."""
+    record = tmp_path / "adversary_projection_run_20261028_044831_1aa96f3f.json"
+    record.write_text(
+        json.dumps({"run": {}, "model": {}, "deterministic": {}, "outcome": {}}),
+        encoding="utf-8",
+    )
+    return FakeArtifact(
+        "art_run", "json_events", str(record),
+        source_tool="adversary_path_projector", metadata={"kind": "projection_run"},
+    )
+
+
+def test_a_run_record_names_itself_and_points_at_the_exports(
+    tool, tmp_path, graph_path, seed_path
+):
+    """The mix-up that happened live: two run records instead of graph and seed."""
+    context = FakeContext([
+        FakeArtifact("art_graph", "json_events", graph_path,
+                     metadata={"kind": "adversary_path_graph"}),
+        FakeArtifact("art_seed", "json_events", seed_path,
+                     metadata={"kind": "adversary_scenario_seed"}),
+        _run_record_artifact(tmp_path),
+    ])
+    result = tool.execute({"artifact_ids": ["art_run"]}, context)
+    assert result.ok is False
+    assert result.error_code == "INPUT_UNRECOGNIZED"
+    assert "projection run record" in result.message
+    assert "art_graph (path graph)" in result.message
+    assert "art_seed (scenario seed)" in result.message
+    assert result.details["recognized_as"] == "projection_run_record"
+    assert result.details["suggested_artifact_ids"] == ["art_graph", "art_seed"]
+
+
+def test_a_run_record_with_no_exports_in_session_says_so(tool, tmp_path):
+    result = tool.execute(
+        {"artifact_ids": ["art_run"]}, FakeContext([_run_record_artifact(tmp_path)])
+    )
+    assert result.error_code == "INPUT_UNRECOGNIZED"
+    assert "No path graph or scenario seed is registered" in result.message
+    assert result.details["suggested_artifact_ids"] == []
+
+
+def test_the_newest_export_of_each_kind_is_suggested(
+    tool, tmp_path, graph_path, seed_path
+):
+    # The registry lists oldest first; a later projection supersedes an earlier.
+    context = FakeContext([
+        FakeArtifact("art_graph_old", "json_events", graph_path,
+                     metadata={"kind": "adversary_path_graph"}),
+        FakeArtifact("art_graph_new", "json_events", graph_path,
+                     metadata={"kind": "adversary_path_graph"}),
+        FakeArtifact("art_seed", "json_events", seed_path,
+                     metadata={"kind": "adversary_scenario_seed"}),
+        _run_record_artifact(tmp_path),
+    ])
+    result = tool.execute({"artifact_ids": ["art_run"]}, context)
+    assert result.details["suggested_artifact_ids"] == ["art_graph_new", "art_seed"]
 
 
 def test_execute_writes_no_artifact_at_this_stage(tool, graph_path, seed_path):
@@ -454,6 +515,23 @@ def test_an_export_passed_as_the_flow_map_is_refused(tool, graph_path, seed_path
     )
     assert result.ok is False
     assert result.error_code == "FLOW_MAP_NOT_OBJECT"
+
+
+def test_a_validate_report_passed_as_the_flow_map_names_itself(
+    tool, graph_path, tmp_path
+):
+    report = tmp_path / "adversary_path_projector_20261028_020842.json"
+    report.write_text(
+        json.dumps({"action": "validate_flow_map", "valid": True, "counts": {}}),
+        encoding="utf-8",
+    )
+    result = tool.execute(
+        {"sources": [graph_path], "flow_map_path": str(report)}, context=None
+    )
+    assert result.ok is False
+    assert result.error_code == "FLOW_MAP_NOT_OBJECT"
+    assert "validate_flow_map result" in result.message
+    assert result.details["recognized_as"] == "validate_flow_map_report"
 
 
 def test_the_flow_map_is_supplied_once(tool, graph_path, map_path):

@@ -225,6 +225,79 @@ def _read_json(path: Path) -> Any:
         return json.load(handle)
 
 
+# The kind values the projector registers its two exports under. Read only to
+# point at the right ids after a mix-up; a document's role is always inferred
+# from its content, never from this label.
+_GRAPH_KIND = "adversary_path_graph"
+_SEED_KIND = "adversary_scenario_seed"
+
+
+def _is_run_record(document: Any) -> bool:
+    """A projector run record: the blocks its schema requires."""
+    return isinstance(document, dict) and all(
+        key in document for key in ("run", "outcome", "deterministic")
+    )
+
+
+def _is_validate_report(document: Any) -> bool:
+    """The projector's validate_flow_map result, which the shell saves as JSON."""
+    return (
+        isinstance(document, dict)
+        and document.get("action") == "validate_flow_map"
+        and "components" not in document
+    )
+
+
+def _latest_exports(context: Any) -> dict[str, str]:
+    """The most recent path graph and scenario seed registered in the session.
+
+    The registry lists artifacts oldest first, so the last match of each kind
+    is the newest.
+    """
+    found: dict[str, str] = {}
+    for artifact in getattr(context, "artifacts", None) or []:
+        kind = (getattr(artifact, "metadata", None) or {}).get("kind")
+        if kind in (_GRAPH_KIND, _SEED_KIND):
+            found[kind] = artifact.artifact_id
+    return found
+
+
+def _misplaced_input(document: Any, name: str, context: Any) -> ToolResult | None:
+    """Name a projection run record passed where a graph or seed belongs.
+
+    All three projector documents are json_events from the same tool, so the
+    artifact listing gives no cue which is which. Anything that is not a run
+    record keeps the original message.
+    """
+    if not _is_run_record(document):
+        return None
+    exports = _latest_exports(context)
+    graph, seed = exports.get(_GRAPH_KIND), exports.get(_SEED_KIND)
+    if graph or seed:
+        listed = ", ".join(
+            f"{artifact_id} ({label})"
+            for artifact_id, label in ((graph, "path graph"), (seed, "scenario seed"))
+            if artifact_id
+        )
+        pointer = f"In this session: {listed}."
+    else:
+        pointer = "No path graph or scenario seed is registered in this session."
+    return ToolResult(
+        ok=False,
+        error_code="INPUT_UNRECOGNIZED",
+        message=(
+            f"{name} is a projection run record, not a path graph or scenario "
+            f"seed. The designer reads the graph and the seed. {pointer} In a "
+            "multi-run loop only the first successful run writes them."
+        ),
+        details={
+            "file": name,
+            "recognized_as": "projection_run_record",
+            "suggested_artifact_ids": [i for i in (graph, seed) if i],
+        },
+    )
+
+
 def _load_flow_map(payload: dict[str, Any], context: Any) -> tuple[Any, ToolResult | None]:
     """The supplied flow map, if any, by artifact id or by local path.
 
@@ -257,6 +330,17 @@ def _load_flow_map(payload: dict[str, Any], context: Any) -> tuple[Any, ToolResu
     try:
         return nz.load_flow_map(parsed, name), None
     except nz.FlowMapError as exc:
+        if _is_validate_report(parsed):
+            return None, ToolResult(
+                ok=False,
+                error_code="FLOW_MAP_NOT_OBJECT",
+                message=(
+                    f"{name} is a validate_flow_map result, not a flow map. Pass "
+                    "the id of the loaded map file ('load <map>.json'), or use "
+                    "--flow_map_path."
+                ),
+                details={"file": name, "recognized_as": "validate_flow_map_report"},
+            )
         return None, ToolResult(
             ok=False,
             error_code="FLOW_MAP_NOT_OBJECT",
@@ -370,6 +454,9 @@ class AttackPathDetectionDesigner:
             try:
                 documents.append(nz.load_document(parsed, name))
             except nz.NormalizationError as exc:
+                misplaced = _misplaced_input(parsed, name, context)
+                if misplaced is not None:
+                    return misplaced
                 return ToolResult(
                     ok=False,
                     error_code="INPUT_UNRECOGNIZED",

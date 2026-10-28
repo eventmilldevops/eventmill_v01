@@ -902,6 +902,48 @@ class TestFlowMapSources:
         assert not result.ok
         assert result.error_code == "ARTIFACT_UNREADABLE"
 
+    def test_a_validate_report_as_the_map_artifact_is_named(
+            self, plugin_instance, tmp_path):
+        """The live mix-up: the shell's saved validate result passed as the map."""
+        report = tmp_path / "adversary_path_projector_20261028_020842.json"
+        report.write_text(json.dumps({
+            "action": "validate_flow_map", "application": "Bottling Plant",
+            "valid": True, "counts": {"components": 10},
+        }), encoding="utf-8")
+        context = FakeContext(
+            artifacts=[FakeArtifact("art_report", "json_events", str(report))]
+        )
+        result = plugin_instance.execute({
+            "action": "project_paths", "threat_actor": "APT29",
+            "flow_map_artifact_id": "art_report",
+        }, context)
+        assert not result.ok
+        assert result.error_code == "INPUT_VALIDATION_FAILED"
+        assert "art_report" in result.message
+        assert "validate_flow_map result, not a flow map" in result.message
+        assert result.details["recognized_as"] == "validate_flow_map_report"
+
+    def test_a_run_record_as_the_map_file_is_named(self, plugin_instance, tmp_path):
+        record = tmp_path / "adversary_projection_run_x.json"
+        record.write_text(json.dumps(
+            {"run": {}, "model": {}, "deterministic": {}, "outcome": {}}
+        ), encoding="utf-8")
+        result = plugin_instance.execute(
+            {"action": "validate_flow_map", "file_path": str(record)}, None
+        )
+        assert not result.ok
+        assert result.error_code == "INPUT_VALIDATION_FAILED"
+        assert "projection run record" in result.message
+
+    def test_the_shipped_example_map_still_validates(self, plugin_instance):
+        example = (Path(_tool_mod.__file__).parent / "examples"
+                   / "plant_ot_flow_map.json")
+        result = plugin_instance.execute(
+            {"action": "validate_flow_map", "file_path": str(example)}, None
+        )
+        assert result.ok, result.message
+        assert result.result["counts"]["components"] == 10
+
 
 # ---------------------------------------------------------------------------
 # summarize_for_llm
@@ -2876,6 +2918,20 @@ class TestRunGroupSummary:
         # The sample map declares no controls on the API, which sits on both
         # recurring routes.
         assert "no security controls on" in with_map
+
+    def test_a_misplaced_map_degrades_the_report_rather_than_failing_it(
+            self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):
+        """The map is optional here, so the wrong document costs only context."""
+        report_file = tmp_path / "validate_report.json"
+        report_file.write_text(json.dumps(
+            {"action": "validate_flow_map", "valid": True, "counts": {}}
+        ), encoding="utf-8")
+        result, _ = self._report_for(
+            plugin_instance, sample_flow_map, tmp_path, monkeypatch,
+            file_path=str(report_file))
+        warnings = result.result.get("report_warnings", [])
+        assert any("validate_flow_map result" in w for w in warnings)
+        assert any("without control context" in w for w in warnings)
 
     def test_a_group_mixing_maps_is_refused(
             self, plugin_instance, sample_flow_map, tmp_path, monkeypatch):

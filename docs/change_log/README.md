@@ -12,6 +12,12 @@ not finished.
 Read newest-first. This index covers the current thread only; older entries are
 self-describing and listed by filename.
 
+## Projector document mix-ups — 2026-10-27
+
+| Date | Entry | What landed |
+|---|---|---|
+| 10-27 | `2026-10-27-misplaced-document-errors.md` | The designer and the projector name a run record, validate result, graph or seed passed in the wrong slot, and say what to pass instead. No error code changed |
+
 ## Anthropic CVP workspace provider — 2026-10-27
 
 An Anthropic key from an approved Cyber Verification Program workspace, bound

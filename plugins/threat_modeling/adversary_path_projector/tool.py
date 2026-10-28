@@ -3394,18 +3394,62 @@ class AdversaryPathProjector:
         artifact_id = str(payload.get("flow_map_artifact_id", "") or "").strip()
         file_path = str(payload.get("file_path", "") or "").strip()
         if artifact_id:
-            return self._read_json_artifact(artifact_id, context)
+            data, error = self._read_json_artifact(artifact_id, context)
+            if error is not None:
+                return None, error
+            return self._refuse_misplaced_flow_map(data, f"Artifact '{artifact_id}'")
         if file_path:
             try:
                 with open(file_path, "r", encoding="utf-8") as handle:
-                    return json.load(handle), None
+                    data = json.load(handle)
             except Exception as exc:
                 return None, ToolResult(
                     ok=False,
                     error_code="ARTIFACT_UNREADABLE",
                     message=f"Failed to read flow map '{file_path}': {exc}",
                 )
+            return self._refuse_misplaced_flow_map(data, f"'{file_path}'")
         return None, None
+
+    @staticmethod
+    def _misplaced_flow_map(raw: Any) -> tuple[str, str] | None:
+        """Recognise a projector document supplied where a flow map belongs.
+
+        The validate report, the run record and the two exports are all
+        json_events from this tool, so the artifact listing gives no cue which
+        is which. Returns ``(slug, description)``, or None for anything that
+        might be a flow map, which then gets the ordinary lint.
+        """
+        if not isinstance(raw, dict) or "components" in raw:
+            return None
+        if raw.get("action") == "validate_flow_map":
+            return "validate_flow_map_report", "a validate_flow_map result"
+        if all(key in raw for key in ("run", "outcome", "deterministic")):
+            return "projection_run_record", "a projection run record"
+        if isinstance(raw.get("attack_graph"), dict):
+            return "path_graph", "a projected path graph"
+        if isinstance(raw.get("scenarios"), list):
+            return "scenario_seed", "a scenario seed"
+        return None
+
+    def _refuse_misplaced_flow_map(
+        self, raw: Any, source: str
+    ) -> tuple[Any, ToolResult | None]:
+        """Pass a flow map through, or say which projector document it is."""
+        misplaced = self._misplaced_flow_map(raw)
+        if misplaced is None:
+            return raw, None
+        slug, description = misplaced
+        return None, ToolResult(
+            ok=False,
+            error_code="INPUT_VALIDATION_FAILED",
+            message=(
+                f"{source} is {description}, not a flow map. Load the map file "
+                f"('load <map>.json') and pass that artifact id, or use "
+                f"--file_path."
+            ),
+            details={"recognized_as": slug},
+        )
 
     def _validate_flow_map(self, payload: dict[str, Any], context: Any) -> ToolResult:
         """Lint a flow map, rank its entry surface, and compute reachability."""
@@ -4210,6 +4254,14 @@ class AdversaryPathProjector:
         # routes, it just cannot say which controls sit on them, and says so.
         flow_map: dict[str, Any] | None = None
         raw, load_error = self._load_flow_map_source(payload, context)
+        if load_error is not None and (load_error.details or {}).get("recognized_as"):
+            # Another projector document in the map slot. The map is optional
+            # here, so this degrades like a map with blocking errors does.
+            result.setdefault("report_warnings", []).append(
+                f"{load_error.message} The report was written without control "
+                f"context."
+            )
+            load_error = None
         if load_error is not None:
             return load_error
         if raw is not None:
