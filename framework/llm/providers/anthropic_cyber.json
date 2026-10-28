@@ -2,12 +2,12 @@
   "provider_id": "anthropic_cyber",
   "vendor": "anthropic",
   "display_name": "Anthropic Claude (CVP workspace)",
-  "_verified": "UNVERIFIED — this provider has never been called. Its key is a separate API key in an approved Cyber Verification Program workspace, so it carries the cyber-research classifier adjustment that the 'anthropic' key does not. Everything below is inherited from anthropic.json, which was verified 2026-10-10 on the same model ids. Run 'providers probe anthropic_cyber' before reading any of it as measured; a working 'anthropic' key is not evidence that the workspace key is entitled.",
+  "_verified": "UNVERIFIED — this provider has never been called. Its key MUST be a separate API key created inside an approved Cyber Verification Program workspace, which is what carries the cyber-research classifier adjustment that the 'anthropic' key does not. Everything below is inherited from anthropic.json, which was verified 2026-10-10 on the same model ids. Run 'providers probe anthropic_cyber' before reading any of it as measured; a working 'anthropic' key is not evidence that the workspace key is entitled.",
   "_vendor_note": "A separate provider id, not a tier of 'anthropic'. It reaches the same models on a different key in a different workspace, so it binds, routes and is attributed independently — but it is the same vendor, which is what 'vendor' above records. Anything reasoning about how far a finding's support extends must count vendors, not provider ids, or one lab's two keys read as two independent opinions.",
   "tiers": {
     "light": {
       "model_id": "claude-sonnet-5-5",
-      "display_name": "Claude Sonnet 5.5",
+      "display_name": "Claude Sonnet 5.5 (CVP)",
       "fallback_model_id": "",
       "api_key_env": "ANTHROPIC_CYBER_API_KEY",
       "max_output_tokens": 128000,
@@ -29,7 +29,7 @@
     },
     "heavy": {
       "model_id": "claude-opus-5-5",
-      "display_name": "Claude Opus 5.5",
+      "display_name": "Claude Opus 5.5 (CVP)",
       "fallback_model_id": "claude-sonnet-5-5",
       "_fallback_note": "Same-provider fallback only: Sonnet 5.5 on this same workspace key. It never falls back to 'anthropic', which is a different credential and was not chosen for this call.",
       "api_key_env": "ANTHROPIC_CYBER_API_KEY",

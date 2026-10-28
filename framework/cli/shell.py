@@ -4588,14 +4588,14 @@ class EventMillShell(cmd.Cmd):
             print("  'providers' lists each configured provider and the key it needs.")
             return
         
-        print(f"  {'Model':20s} {'Provider':11s} {'Tier':8s} {'Status':14s} {'ID':30s}")
-        print(f"  {'─' * 20} {'─' * 11} {'─' * 8} {'─' * 14} {'─' * 30}")
+        print(f"  {'Model':24s} {'Provider':11s} {'Tier':8s} {'Status':14s} {'ID':30s}")
+        print(f"  {'─' * 24} {'─' * 11} {'─' * 8} {'─' * 14} {'─' * 30}")
 
         for model in self._available_models:
             status = self._model_connected_status(model)
             provider = model.get("provider", DEFAULT_PROVIDER_ID)
             print(
-                f"  {model['name']:20s} {provider:11s} {model['tier']:8s} "
+                f"  {model['name']:24s} {provider:11s} {model['tier']:8s} "
                 f"{status:14s} {model['id']:30s}"
             )
         

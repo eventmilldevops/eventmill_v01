@@ -345,6 +345,13 @@ The `eventmill-anthropic-cyber` secret was created by hand in the console for
 the Anthropic CVP workspace key. `provision-gcp-project.sh` also creates it as
 `placeholder` on a re-run if it is missing.
 
+**The value in `eventmill-anthropic-cyber` must be an API key created inside an
+approved Cyber Verification Program workspace.** A key from the standard
+workspace, even for the same Claude models, does not carry the cyber-research
+classifier adjustment, so projector runs on `anthropic_cyber` will still be
+refused. Confirm the workspace is approved before storing the key. On Cloud Run,
+store it only in Secret Manager, not in `deploy.env`.
+
 The interactive helper is available on the Linux deploy server:
 
 ```bash
@@ -397,8 +404,8 @@ store_eventmill_secret eventmill-ttyd-cred
 ```
 
 Call only the provider entries you intend to use; always set the ttyd pair.
-The `eventmill-anthropic-cyber` line is for the CVP workspace key only; leave it
-out unless that workspace is provisioned.
+The `eventmill-anthropic-cyber` line is for a key from an approved CVP workspace
+only; leave it out unless that workspace is provisioned.
 Unused provider secrets may retain `placeholder`. Keep the provisioned entries:
 the deployment mounts them even when the provider is dormant. At least one LLM
 provider needs a real key. A non-placeholder value is not proof of API access;

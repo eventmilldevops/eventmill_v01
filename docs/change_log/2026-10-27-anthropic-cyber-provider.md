@@ -23,6 +23,9 @@ already takes `provider_id` per instance.
   Heavy falls back only to Sonnet on the same key, never to `anthropic`.
 - **`framework/llm/factory.py`** — `PROVIDER_CLIENTS`, `PROVIDER_SECRETS`
   (`eventmill-anthropic-cyber`) and `PROVIDER_SDK_INSTALL` entries.
+- **Display:** the tier labels read `Claude Sonnet 5.5 (CVP)` and `Claude Opus 5.5 (CVP)`
+  in the startup model list and `models`, so the workspace models are not
+  mistaken for the standard ones. `models` widens its name column to 24.
 - **Config:** `.env.example`, `docker-compose.yml` (both services),
   `cloud_install/docker-compose.cloudrun.yml`.
 - **Cloud Run:** `deploy-cloudrun-secrets.sh` (mount switch
@@ -45,6 +48,9 @@ already takes `provider_id` per instance.
 - **Provider id `anthropic_cyber`**, snake_case like every other id. It maps to a
   file name, an env-var token and shell `case` guards.
 - **Secret `eventmill-anthropic-cyber`**, mounted to `ANTHROPIC_CYBER_API_KEY`.
+  Its value must be an API key created inside an approved CVP workspace. A key
+  from the standard workspace does not carry the classifier adjustment, so the
+  provider would be refused the same way `anthropic` is.
 - **Two tiers, not one.** Daybreak declares one model under both tiers so that
   `_fallback_client` cannot substitute a different model. Here the tiers really
   are Sonnet and Opus, so they stay separate and the same-key fallback is
@@ -66,11 +72,15 @@ already takes `provider_id` per instance.
   change (`factory.py` line 243 quoted annotation, and the dispatcher test at
   line 473). mypy is not installed in this environment and was not run.
 
-**Not verified:** the workspace key has never been called. A live
-`providers probe anthropic_cyber` and a projector run with
-`use anthropic_cyber for adversary_path_projector` are the next steps. Until the
-probe passes, the manifest's UNVERIFIED notice stands. Cloud Run has not been
-redeployed.
+**Live result (operator-confirmed, 2026-10-27):** a projector run with
+`use anthropic_cyber for adversary_path_projector` cleared the cyber refusal
+that the same run on `anthropic` received. The operator confirmed this; the run
+records were not reviewed here.
+
+**Not yet verified:** `providers probe anthropic_cyber` has not been run, and
+the limits and PDF handling are still inherited from `anthropic.json`. Until the
+probe passes and the limits are measured, the manifest's UNVERIFIED notice
+stands. Cloud Run has not been redeployed.
 
 ## Open
 
