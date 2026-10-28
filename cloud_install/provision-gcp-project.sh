@@ -107,6 +107,7 @@ SECRET_NAMES=(
     eventmill-anthropic-api
     eventmill-openai-api
     eventmill-anthropic-daybreak
+    eventmill-anthropic-cyber
     eventmill-gcs-sa
     eventmill-ttyd-user
     eventmill-ttyd-cred

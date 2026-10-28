@@ -256,6 +256,14 @@ add_secret_version \
     "eventmill-anthropic-daybreak" \
     "OpenAI Daybreak API key — leave unset unless you have Daybreak access"
 
+# A separate Anthropic key, created in an approved Cyber Verification Program
+# workspace. anthropic_cyber reads it and it is mounted to
+# ANTHROPIC_CYBER_API_KEY. Same models as the standard Anthropic key; the
+# workspace carries the classifier adjustment, not a different model.
+add_secret_version \
+    "eventmill-anthropic-cyber" \
+    "Anthropic CVP workspace API key — leave unset unless the workspace is provisioned"
+
 # =============================================================================
 # Section 2: GCS Service Account Key
 # =============================================================================
@@ -305,6 +313,7 @@ echo "  gcloud secrets versions list eventmill-gemini-pro-api   --project=${PROJ
 echo "  gcloud secrets versions list eventmill-anthropic-api    --project=${PROJECT_ID}"
 echo "  gcloud secrets versions list eventmill-openai-api       --project=${PROJECT_ID}"
 echo "  gcloud secrets versions list eventmill-anthropic-daybreak --project=${PROJECT_ID}"
+echo "  gcloud secrets versions list eventmill-anthropic-cyber  --project=${PROJECT_ID}"
 echo "  gcloud secrets versions list eventmill-ttyd-user        --project=${PROJECT_ID}"
 echo ""
 echo "To deploy Event Mill:"

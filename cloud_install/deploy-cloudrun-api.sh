@@ -82,6 +82,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --set-env-vars="ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
     --set-env-vars="OPENAI_API_KEY=${OPENAI_API_KEY:-}" \
     --set-env-vars="OPENAI_DAYBREAK_API_KEY=${OPENAI_DAYBREAK_API_KEY:-}" \
+    --set-env-vars="ANTHROPIC_CYBER_API_KEY=${ANTHROPIC_CYBER_API_KEY:-}" \
     --set-env-vars="EVENTMILL_BUCKET_PREFIX=${EVENTMILL_BUCKET_PREFIX:-${PROJECT_ID}-eventmill}" \
     --set-env-vars="EVENTMILL_LOG_LEVEL=${EVENTMILL_LOG_LEVEL:-INFO}" \
     --no-allow-unauthenticated

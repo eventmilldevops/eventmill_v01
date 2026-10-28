@@ -1,0 +1,98 @@
+{
+  "provider_id": "anthropic_cyber",
+  "vendor": "anthropic",
+  "display_name": "Anthropic Claude (CVP workspace)",
+  "_verified": "UNVERIFIED — this provider has never been called. Its key is a separate API key in an approved Cyber Verification Program workspace, so it carries the cyber-research classifier adjustment that the 'anthropic' key does not. Everything below is inherited from anthropic.json, which was verified 2026-10-10 on the same model ids. Run 'providers probe anthropic_cyber' before reading any of it as measured; a working 'anthropic' key is not evidence that the workspace key is entitled.",
+  "_vendor_note": "A separate provider id, not a tier of 'anthropic'. It reaches the same models on a different key in a different workspace, so it binds, routes and is attributed independently — but it is the same vendor, which is what 'vendor' above records. Anything reasoning about how far a finding's support extends must count vendors, not provider ids, or one lab's two keys read as two independent opinions.",
+  "tiers": {
+    "light": {
+      "model_id": "claude-sonnet-5-5",
+      "display_name": "Claude Sonnet 5.5",
+      "fallback_model_id": "",
+      "api_key_env": "ANTHROPIC_CYBER_API_KEY",
+      "max_output_tokens": 128000,
+      "max_context_tokens": 1000000,
+      "cost_tier": "low",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "capabilities": [
+        "text",
+        "multimodal_image",
+        "native_pdf",
+        "structured_output",
+        "function_calling"
+      ],
+      "_note": "One API key serves both tiers of this workspace, as on 'anthropic'. The workspace changes the safeguard classifier, not the model id, so the tier ids are the same as 'anthropic'."
+    },
+    "heavy": {
+      "model_id": "claude-opus-5-5",
+      "display_name": "Claude Opus 5.5",
+      "fallback_model_id": "claude-sonnet-5-5",
+      "_fallback_note": "Same-provider fallback only: Sonnet 5.5 on this same workspace key. It never falls back to 'anthropic', which is a different credential and was not chosen for this call.",
+      "api_key_env": "ANTHROPIC_CYBER_API_KEY",
+      "max_output_tokens": 128000,
+      "max_context_tokens": 1000000,
+      "cost_tier": "high",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "capabilities": [
+        "text",
+        "multimodal_image",
+        "native_pdf",
+        "structured_output",
+        "function_calling",
+        "deep_reasoning"
+      ]
+    }
+  },
+  "request_constraints": {
+    "_note": "Rejected parameters, inherited from anthropic.json and verified against the Models API capability block on the same model ids. Sending any of these is a 400, so no client may pass them for this provider.",
+    "thinking_budget_tokens": false,
+    "sampling_params": false,
+    "assistant_prefill": false,
+    "thinking_mode": "adaptive",
+    "stream_above_output_tokens": 32768
+  },
+  "file_handling": {
+    "application/pdf": {
+      "max_pages": 250,
+      "max_size_mb": 24,
+      "tokens_per_page": 2407,
+      "tokens_per_page_by_resolution": {
+        "low": 2407,
+        "medium": 2407,
+        "high": 2407
+      },
+      "default_media_resolution": "medium",
+      "ingestion_paths": [
+        "inline_bytes"
+      ],
+      "preferred_ingestion": "inline_bytes",
+      "_verified": "Inherited from anthropic.json, measured 2026-09-24 on claude-sonnet-5 and claude-opus-5. Not measured on this workspace key.",
+      "_note": "Inline only, never the Files API: an upload is retained provider-side until deleted. No gs_uri path: this provider cannot read a GCS URI, so the dispatcher reads the bytes first (no remote_uri_gs capability)."
+    }
+  },
+  "output_budget": {
+    "_note": "Thinking tokens are output tokens and come out of max_tokens, as on Gemini — but budget_tokens was removed on the 5 family, so depth is set by output_config.effort and the spend is adaptive rather than capped. These reserves are what to hold back when sizing how much content one call may emit; max_tokens is a ceiling, not a charge, so reserving generously costs nothing unless spent.",
+    "default_thinking_level": "high",
+    "thinking_reserve_tokens": {
+      "low": 4096,
+      "medium": 16384,
+      "high": 32768
+    }
+  },
+  "document_strategies": {
+    "application/pdf": "native",
+    "application/json": "extract_text",
+    "text/csv": "extract_text",
+    "text/plain": "extract_text",
+    "text/html": "extract_text",
+    "default": "extract_and_chunk"
+  }
+}

@@ -762,6 +762,14 @@ class TestPdfContextGuard:
         assert r is not None and not r.ok
         assert r.fallback_reason == "pdf_exceeds_provider_page_limit"
 
+    def test_cyber_inherits_anthropic_pdf_limits(self, dispatcher):
+        """The CVP workspace serves the same models, so the same page cap applies."""
+        from framework.llm.providers import pdf_handling
+        pages = pdf_handling("anthropic")["max_pages"] + 1
+        r = self._check_on(dispatcher, "anthropic_cyber", pages)
+        assert r is not None and not r.ok
+        assert r.fallback_reason == "pdf_exceeds_provider_page_limit"
+
     def test_size_limit_read_from_the_selected_provider(self, dispatcher):
         """40 MB: inside Gemini's 50 MB, outside Anthropic's 24 MB."""
         art = ArtifactRef(

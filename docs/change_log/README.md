@@ -12,6 +12,37 @@ not finished.
 Read newest-first. This index covers the current thread only; older entries are
 self-describing and listed by filename.
 
+## Anthropic CVP workspace provider — 2026-10-27
+
+An Anthropic key from an approved Cyber Verification Program workspace, bound
+as its own provider so the classifier adjustment reaches only the calls that
+choose it.
+
+| Date | Entry | What landed |
+|---|---|---|
+| 10-27 | `2026-10-27-anthropic-cyber-provider.md` | `anthropic_cyber`: same models as `anthropic` on `ANTHROPIC_CYBER_API_KEY`, full Daybreak-style wiring, UNVERIFIED until probed |
+
+## Log compliance audit — 2026-10-10/12
+
+Whether a log holds what an investigation needs, judged against the
+organization's own logging standard. Spec:
+`docs/specs/log_compliance_audit.md`. Decision record:
+`docs/adr/0001-grade-the-standard-and-the-log-against-fixed-categories.md`.
+
+| Date | Entry | What landed |
+|---|---|---|
+| 10-12 | `2026-10-12-log-compliance-operator-acceptance.md` | **No code changed.** Merged as pull request #6. The operator confirmed both plugins on Gemini, Anthropic and OpenAI, against the database audit log and the Linux syslog sample. Lists what that closes and what is still unverified |
+| 10-11 | `2026-10-11-audit-report-run-record.md` | Every audit report opens with a run record (date, models, calls, tokens) and a note on reliance worded for the owner of the business risk. The profiler stores the tokens an extraction took |
+| 10-11 | `2026-10-11-clarity-graded-on-one-clause.md` | The clarity grade rests on the strongest single clause, which is named, instead of pooling criteria across clauses. A prose list in a quote is no longer taken as `allowed_values` |
+| 10-11 | `2026-10-11-investigation-coverage-and-standard-clarity.md` | Seven investigation categories. The audit reports coverage of each in five bins, counted from the records, and the profiler grades the standard's wording on the same categories. Two models had scored the same log 70% and 82% by counting requirements |
+| 10-10 | `2026-10-10-requirement-kinds.md` | A requirement carries a `kind`. Only presence rules are counted; prohibitions, quality rules, event-selection rules and permissions are listed for a person |
+| 10-10 | `2026-10-10-profile-alternative-elements.md` | `any_of` groups, so a requirement can accept any one of several elements |
+| 10-10 | `2026-10-10-log-compliance-repeatability.md` | Five runs of four logs on two providers. Scope set to a first-look tool with no cross-run state. The tool parses the syslog header itself |
+| 10-10 | `2026-10-10-log-compliance-live-runs.md` | First live runs, three defects fixed |
+| 10-10 | `2026-10-10-log-compliance-audit.md` | The build: `logging_standard_profiler` and `log_compliance_auditor` |
+| 10-10 | `2026-10-10-daybreak-red-removed.md` | The `openai_daybreak_red` provider removed; Blue kept |
+| 10-10 | `2026-10-10-anthropic-5-5-models.md` | Anthropic tiers moved to Sonnet 5.5 and Opus 5.5 |
+
 ## Report processing integrity — 2026-09-15
 
 Whether a long threat report survives chunking with its evidence intact. Plan:

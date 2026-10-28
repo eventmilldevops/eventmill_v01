@@ -49,6 +49,10 @@ PROVIDER_CLIENTS: dict[str, tuple[str, str]] = {
     # this: every manifest lookup it makes and every response it stamps reads
     # that instead of the class.
     "openai_daybreak_blue": ("framework.llm.clients.openai", "OpenAIClient"),
+    # Same class and SDK as "anthropic", on a second workspace key that carries
+    # the Cyber Verification Program classifier adjustment. Bound, routed and
+    # attributed as its own provider, for the same reason as Daybreak above.
+    "anthropic_cyber": ("framework.llm.clients.anthropic", "AnthropicClient"),
 }
 
 # Names the deploy path uses for each provider's secret, for error messages that
@@ -62,6 +66,7 @@ PROVIDER_SECRETS: dict[str, tuple[str, ...]] = {
     # key, mounted to the OpenAI transport. Overridable at deploy time via
     # EVENTMILL_SECRET_OPENAI_DAYBREAK, so a rename is config, not code.
     "openai_daybreak_blue": ("eventmill-anthropic-daybreak",),
+    "anthropic_cyber": ("eventmill-anthropic-cyber",),
 }
 
 # What to pip install to get a provider's SDK. Not derivable from the provider
@@ -74,6 +79,7 @@ PROVIDER_SDK_INSTALL: dict[str, str] = {
     "anthropic": "eventmill[llm-anthropic]",
     "openai": "eventmill[llm-openai]",
     "openai_daybreak_blue": "eventmill[llm-openai]",
+    "anthropic_cyber": "eventmill[llm-anthropic]",
 }
 
 PROVIDERS_ENV = "EVENTMILL_LLM_PROVIDERS"

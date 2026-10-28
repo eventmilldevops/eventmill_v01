@@ -127,6 +127,10 @@ MAX_INSTANCES="${CLOUD_RUN_MAX_INSTANCES:-3}"
 # 0 leaves the Daybreak secret unmounted and drops the Daybreak provider from
 # the default provider list. The secret need not exist in that case.
 MOUNT_DAYBREAK="${EVENTMILL_MOUNT_DAYBREAK:-1}"
+# 0 leaves the Anthropic CVP workspace secret unmounted and drops the
+# anthropic_cyber provider from the default provider list. Same shape as the
+# Daybreak switch above; lab deploys set it to 0.
+MOUNT_ANTHROPIC_CYBER="${EVENTMILL_MOUNT_ANTHROPIC_CYBER:-1}"
 
 # Bucket prefix: same derivation as provision-gcp-project.sh.
 # Never allowed to be empty — an empty prefix makes the runtime resolver fall
@@ -145,6 +149,9 @@ SECRET_OPENAI="${EVENTMILL_SECRET_OPENAI:-eventmill-openai-api}"
 # holds an OpenAI key and is mounted to the OpenAI transport. Override the name
 # here rather than correcting it in code if that is ever renamed.
 SECRET_OPENAI_DAYBREAK="${EVENTMILL_SECRET_OPENAI_DAYBREAK:-eventmill-anthropic-daybreak}"
+# The key anthropic_cyber reads: a separate Anthropic key in an approved Cyber
+# Verification Program workspace. Overridable here rather than in code.
+SECRET_ANTHROPIC_CYBER="${EVENTMILL_SECRET_ANTHROPIC_CYBER:-eventmill-anthropic-cyber}"
 SECRET_TTYD_USER="${EVENTMILL_SECRET_TTYD_USER:-eventmill-ttyd-user}"
 SECRET_TTYD_CRED="${EVENTMILL_SECRET_TTYD_CRED:-eventmill-ttyd-cred}"
 
@@ -161,11 +168,15 @@ SECRET_TTYD_CRED="${EVENTMILL_SECRET_TTYD_CRED:-eventmill-ttyd-cred}"
 # So adoption is now decided by whether a key holds a real value, which is
 # already where the operator's real decision lives, and this variable stops
 # being a second switch that has to agree with it.
+_DEFAULT_LLM_PROVIDERS="gcp_gemini anthropic openai"
 if [ "${MOUNT_DAYBREAK}" = "1" ]; then
-    LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai openai_daybreak_blue}"
-else
-    LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-gcp_gemini anthropic openai}"
+    _DEFAULT_LLM_PROVIDERS="${_DEFAULT_LLM_PROVIDERS} openai_daybreak_blue"
 fi
+if [ "${MOUNT_ANTHROPIC_CYBER}" = "1" ]; then
+    _DEFAULT_LLM_PROVIDERS="${_DEFAULT_LLM_PROVIDERS} anthropic_cyber"
+fi
+LLM_PROVIDERS="${EVENTMILL_LLM_PROVIDERS:-${_DEFAULT_LLM_PROVIDERS}}"
+unset _DEFAULT_LLM_PROVIDERS
 
 SA_NAME="${EVENTMILL_SA_NAME:-eventmill-runner}"
 
@@ -284,6 +295,7 @@ LLM_SECRETS=(
     "${SECRET_OPENAI}"
 )
 [ "${MOUNT_DAYBREAK}" = "1" ] && LLM_SECRETS+=("${SECRET_OPENAI_DAYBREAK}")
+[ "${MOUNT_ANTHROPIC_CYBER}" = "1" ] && LLM_SECRETS+=("${SECRET_ANTHROPIC_CYBER}")
 
 # The typo guard stays: an unknown id is refused rather than ignored, because
 # it would otherwise deploy with that provider silently absent.
@@ -296,10 +308,16 @@ for _provider in ${LLM_PROVIDERS}; do
                 echo "       EVENTMILL_MOUNT_DAYBREAK=0 leaves its key unmounted."
                 exit 1
             fi ;;
+        anthropic_cyber)
+            if [ "${MOUNT_ANTHROPIC_CYBER}" != "1" ]; then
+                echo "ERROR: EVENTMILL_LLM_PROVIDERS names '${_provider}', but"
+                echo "       EVENTMILL_MOUNT_ANTHROPIC_CYBER=0 leaves its key unmounted."
+                exit 1
+            fi ;;
         *)
             echo "ERROR: unknown provider '${_provider}' in EVENTMILL_LLM_PROVIDERS."
             echo "       Known: gcp_gemini anthropic openai"
-            echo "              openai_daybreak_blue"
+            echo "              openai_daybreak_blue anthropic_cyber"
             echo ""
             echo "  Refused rather than ignored: a typo here would deploy with"
             echo "  that provider silently absent, which looks like a working"
@@ -342,6 +360,9 @@ SECRET_MOUNTS="${SECRET_MOUNTS},ANTHROPIC_API_KEY=${SECRET_ANTHROPIC}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},OPENAI_API_KEY=${SECRET_OPENAI}:latest"
 if [ "${MOUNT_DAYBREAK}" = "1" ]; then
     SECRET_MOUNTS="${SECRET_MOUNTS},OPENAI_DAYBREAK_API_KEY=${SECRET_OPENAI_DAYBREAK}:latest"
+fi
+if [ "${MOUNT_ANTHROPIC_CYBER}" = "1" ]; then
+    SECRET_MOUNTS="${SECRET_MOUNTS},ANTHROPIC_CYBER_API_KEY=${SECRET_ANTHROPIC_CYBER}:latest"
 fi
 SECRET_MOUNTS="${SECRET_MOUNTS},TTYD_USERNAME=${SECRET_TTYD_USER}:latest"
 SECRET_MOUNTS="${SECRET_MOUNTS},TTYD_PASSWORD=${SECRET_TTYD_CRED}:latest"

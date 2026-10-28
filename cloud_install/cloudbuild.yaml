@@ -117,11 +117,11 @@ steps:
         # All five LLM secrets are mounted for every deployment, the unadopted
         # ones holding the literal "placeholder", so the revision shape is
         # identical everywhere and adopting a vendor is a secret version plus a
-        # restart rather than a different deploy path. Five secrets, four
+        # restart rather than a different deploy path. Six secrets, five
         # providers: Gemini reads one per tier.
         for SECRET in "${_SECRET_GEMINI_FLASH}" "${_SECRET_GEMINI_PRO}" \
                       "${_SECRET_ANTHROPIC}" "${_SECRET_OPENAI}" \
-                      "${_SECRET_OPENAI_DAYBREAK}" \
+                      "${_SECRET_OPENAI_DAYBREAK}" "${_SECRET_ANTHROPIC_CYBER}" \
                       "${_SECRET_TTYD_USER}" "${_SECRET_TTYD_CRED}"; do
           if ! gcloud secrets describe "$${SECRET}" --project="${PROJECT_ID}" > /dev/null 2>&1; then
             echo "ERROR: Secret '$${SECRET}' not found."
@@ -233,7 +233,7 @@ steps:
           --min-instances=0 \
           --max-instances=3 \
           --service-account="$${SA_EMAIL}" \
-          --set-secrets="GEMINI_FLASH_API_KEY=${_SECRET_GEMINI_FLASH}:latest,GEMINI_PRO_API_KEY=${_SECRET_GEMINI_PRO}:latest,ANTHROPIC_API_KEY=${_SECRET_ANTHROPIC}:latest,OPENAI_API_KEY=${_SECRET_OPENAI}:latest,OPENAI_DAYBREAK_API_KEY=${_SECRET_OPENAI_DAYBREAK}:latest,TTYD_USERNAME=${_SECRET_TTYD_USER}:latest,TTYD_PASSWORD=${_SECRET_TTYD_CRED}:latest" \
+          --set-secrets="GEMINI_FLASH_API_KEY=${_SECRET_GEMINI_FLASH}:latest,GEMINI_PRO_API_KEY=${_SECRET_GEMINI_PRO}:latest,ANTHROPIC_API_KEY=${_SECRET_ANTHROPIC}:latest,OPENAI_API_KEY=${_SECRET_OPENAI}:latest,OPENAI_DAYBREAK_API_KEY=${_SECRET_OPENAI_DAYBREAK}:latest,ANTHROPIC_CYBER_API_KEY=${_SECRET_ANTHROPIC_CYBER}:latest,TTYD_USERNAME=${_SECRET_TTYD_USER}:latest,TTYD_PASSWORD=${_SECRET_TTYD_CRED}:latest" \
           --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},EVENTMILL_BUCKET_PREFIX=$${BUCKET_PREFIX},EVENTMILL_LOG_LEVEL=${_LOG_LEVEL},EVENTMILL_LLM_PROVIDERS=${_LLM_PROVIDERS},EVENTMILL_NATIVE_BASE_S=${_NATIVE_BASE_S},EVENTMILL_NATIVE_S_PER_PAGE=${_NATIVE_S_PER_PAGE},EVENTMILL_NATIVE_S_PER_CANDIDATE=${_NATIVE_S_PER_CANDIDATE}" \
           "$${AUTH_FLAG}"
 
@@ -269,6 +269,10 @@ substitutions:
   # "anthropic" substring is a storage label from how the secret was created;
   # it holds an OpenAI key and mounts to OPENAI_DAYBREAK_API_KEY.
   _SECRET_OPENAI_DAYBREAK: 'eventmill-anthropic-daybreak'
+  # Read by the anthropic_cyber provider: a separate Anthropic key in an
+  # approved Cyber Verification Program workspace, mounted to
+  # ANTHROPIC_CYBER_API_KEY.
+  _SECRET_ANTHROPIC_CYBER: 'eventmill-anthropic-cyber'
   _SECRET_TTYD_USER: 'eventmill-ttyd-user'
   _SECRET_TTYD_CRED: 'eventmill-ttyd-cred'
 
@@ -277,7 +281,7 @@ substitutions:
   # so naming one costs nothing, while leaving one out means a vendor with a
   # working key in Secret Manager is silently absent from the deployment.
   # Keep in step with deploy-cloudrun-secrets.sh, which defaults to the same.
-  _LLM_PROVIDERS: 'gcp_gemini anthropic openai openai_daybreak_blue'
+  _LLM_PROVIDERS: 'gcp_gemini anthropic openai openai_daybreak_blue anthropic_cyber'
 
   _LOG_LEVEL: 'INFO'
 

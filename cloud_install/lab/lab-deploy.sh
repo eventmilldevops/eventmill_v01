@@ -16,6 +16,7 @@
 #   EVENTMILL_IMAGE_TAG=<LAB_IMAGE_TAG>, SKIP_BUILD=1  pinned, never rebuilt
 #   CLOUD_RUN_MAX_INSTANCES=2                          two students per login
 #   EVENTMILL_MOUNT_DAYBREAK=0                         Daybreak key not mounted
+#   EVENTMILL_MOUNT_ANTHROPIC_CYBER=0                  CVP workspace key not mounted
 #
 # Two students share each service and login. The deploy script's concurrency
 # of 5 lets both land on one container, and ttyd gives each connection its own
@@ -84,7 +85,7 @@ echo "Instances:   $(lab_service "${FIRST}") .. $(lab_service "${LAST}")  ($((LA
 echo "Image:       ${IMAGE}"
 echo "Scaling:     min ${LAB_MIN_INSTANCES}, max ${LAB_MAX_INSTANCES} per service"
 echo "Peak vCPU:   $(( (LAST - FIRST + 1) * LAB_MAX_INSTANCES * 2 )) (2 per instance)"
-echo "Providers:   ${LAB_LLM_PROVIDERS}  (Daybreak not mounted)"
+echo "Providers:   ${LAB_LLM_PROVIDERS}  (Daybreak and anthropic_cyber not mounted)"
 echo "Parallel:    ${PARALLEL}"
 echo "Logs:        ${LOG_DIR}"
 echo ""
@@ -146,6 +147,7 @@ deploy_one() {
        EVENTMILL_SECRET_TTYD_USER="$(lab_secret_user "${n}")" \
        EVENTMILL_SECRET_TTYD_CRED="$(lab_secret_cred "${n}")" \
        EVENTMILL_MOUNT_DAYBREAK=0 \
+       EVENTMILL_MOUNT_ANTHROPIC_CYBER=0 \
        EVENTMILL_LLM_PROVIDERS="${LAB_LLM_PROVIDERS}" \
        CLOUD_RUN_MIN_INSTANCES="${LAB_MIN_INSTANCES}" \
        CLOUD_RUN_MAX_INSTANCES="${LAB_MAX_INSTANCES}" \

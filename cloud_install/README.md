@@ -132,7 +132,7 @@ Substitutions:
 |---|---|---|
 | `_REGION` | **none — required** | Cloud Run region. Must match the region you provisioned in; the build fails fast if unset rather than guessing. |
 | `_BUCKET_PREFIX` | `${PROJECT_ID}-eventmill` | GCS bucket prefix — must match provisioned buckets |
-| `_LLM_PROVIDERS` | `gcp_gemini anthropic openai openai_daybreak_blue` | Space-separated provider IDs. Set to `gcp_gemini anthropic openai` for the three-provider setup in this guide. |
+| `_LLM_PROVIDERS` | `gcp_gemini anthropic openai openai_daybreak_blue anthropic_cyber` | Space-separated provider IDs. Set to `gcp_gemini anthropic openai` for the three-provider setup in this guide. `anthropic_cyber` reads the Anthropic CVP workspace key (`_SECRET_ANTHROPIC_CYBER`, default `eventmill-anthropic-cyber`); it stays dormant until that secret holds a real key. |
 
 Cloud Build cannot read `~/.eventmill/deploy.env`, so `_REGION` has to be passed
 explicitly here even though the shell scripts pick it up automatically. When
@@ -329,8 +329,21 @@ These are the default mappings:
 | Gemini heavy | `eventmill-gemini-pro-api` | `GEMINI_PRO_API_KEY` |
 | Anthropic, both tiers | `eventmill-anthropic-api` | `ANTHROPIC_API_KEY` |
 | OpenAI, both tiers | `eventmill-openai-api` | `OPENAI_API_KEY` |
+| OpenAI Daybreak (optional) | `eventmill-anthropic-daybreak` | `OPENAI_DAYBREAK_API_KEY` |
+| Anthropic CVP workspace (optional) | `eventmill-anthropic-cyber` | `ANTHROPIC_CYBER_API_KEY` |
 | Terminal username | `eventmill-ttyd-user` | `TTYD_USERNAME` |
 | Terminal password | `eventmill-ttyd-cred` | `TTYD_PASSWORD` |
+
+**Provider keys are added manually in Secret Manager.** Create or update the
+secret version in the Google Cloud console (Security → Secret Manager → the
+secret → Add new version), or with the `store_eventmill_secret` function below.
+The key is never read from `.env` or `deploy.env` for the Secret Manager path,
+and the deploy does not write it for you. Each secret must already exist before
+`deploy-cloudrun-secrets.sh` runs, or Cloud Run rejects the revision.
+
+The `eventmill-anthropic-cyber` secret was created by hand in the console for
+the Anthropic CVP workspace key. `provision-gcp-project.sh` also creates it as
+`placeholder` on a re-run if it is missing.
 
 The interactive helper is available on the Linux deploy server:
 
@@ -378,11 +391,14 @@ store_eventmill_secret eventmill-gemini-flash-api
 store_eventmill_secret eventmill-gemini-pro-api
 store_eventmill_secret eventmill-anthropic-api
 store_eventmill_secret eventmill-openai-api
+store_eventmill_secret eventmill-anthropic-cyber
 store_eventmill_secret eventmill-ttyd-user
 store_eventmill_secret eventmill-ttyd-cred
 ```
 
 Call only the provider entries you intend to use; always set the ttyd pair.
+The `eventmill-anthropic-cyber` line is for the CVP workspace key only; leave it
+out unless that workspace is provisioned.
 Unused provider secrets may retain `placeholder`. Keep the provisioned entries:
 the deployment mounts them even when the provider is dormant. At least one LLM
 provider needs a real key. A non-placeholder value is not proof of API access;
@@ -545,7 +561,7 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | `EVENTMILL_BUCKET_PREFIX` | No | Bucket naming prefix — must match `provision-gcp-project.sh` (default: `${GOOGLE_CLOUD_PROJECT}-eventmill`) |
 | `CLOUD_RUN_REGION` | **Yes** | Deploy region. No default — must match the region you provisioned in, because the Artifact Registry image path embeds it. Every script refuses to guess. |
 | `GCS_LOG_BUCKET` | No | Legacy single-bucket override — leave empty for new deployments |
-| `EVENTMILL_LLM_PROVIDERS` | No | Space-separated provider IDs. Script default: `gcp_gemini anthropic openai openai_daybreak_blue`. This guide explicitly selects the first three. Missing or `placeholder` keys stay dormant; unknown IDs are refused. |
+| `EVENTMILL_LLM_PROVIDERS` | No | Space-separated provider IDs. Script default: `gcp_gemini anthropic openai openai_daybreak_blue anthropic_cyber`. This guide explicitly selects the first three. Missing or `placeholder` keys stay dormant; unknown IDs are refused. |
 | `EVENTMILL_SECRET_GEMINI_FLASH` | No | Secret Manager name for Flash API key (default: `eventmill-gemini-flash-api`) |
 | `EVENTMILL_SECRET_GEMINI_PRO` | No | Secret Manager name for Pro API key (default: `eventmill-gemini-pro-api`) |
 | `EVENTMILL_SECRET_ANTHROPIC` | No | Secret Manager name for the Anthropic API key (default: `eventmill-anthropic-api`) |
@@ -562,7 +578,7 @@ docker compose -f cloud_install/docker-compose.cloudrun.yml up --build
 | `GEMINI_PRO_API_KEY` | Gemini Pro API key — heavy tier (injected from Secret Manager) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (injected from Secret Manager; `placeholder` until adopted) |
 | `OPENAI_API_KEY` | OpenAI API key (injected from Secret Manager; `placeholder` until adopted) |
-| `EVENTMILL_LLM_PROVIDERS` | Providers this deployment may bind; script defaults include the three standard providers and one optional Daybreak profile. Unkeyed providers stay dormant. |
+| `EVENTMILL_LLM_PROVIDERS` | Providers this deployment may bind; script defaults include the three standard providers, the optional Daybreak profile, and the optional Anthropic CVP workspace profile (`anthropic_cyber`). Unkeyed providers stay dormant. |
 | `TTYD_USERNAME` | ttyd basic auth username |
 | `TTYD_PASSWORD` | ttyd basic auth password |
 | `EVENTMILL_BUCKET_PREFIX` | Bucket prefix for pillar-based storage resolution |

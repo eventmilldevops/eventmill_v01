@@ -36,7 +36,11 @@ ALL_PROVIDERS = ("gcp_gemini", "anthropic", "openai")
 # provider_id and why nothing may infer one from the other.
 DAYBREAK_PROVIDERS = ("openai_daybreak_blue",)
 
-EVERY_PROVIDER = ALL_PROVIDERS + DAYBREAK_PROVIDERS
+# The same Anthropic models on a second workspace key. Same lab as "anthropic",
+# so it is counted as a provider and not as an independent vendor.
+CYBER_PROVIDERS = ("anthropic_cyber",)
+
+EVERY_PROVIDER = ALL_PROVIDERS + DAYBREAK_PROVIDERS + CYBER_PROVIDERS
 
 # What each provider's manifest is expected to declare. Wired to the models the
 # operator chose, so a silent manifest edit fails here rather than at a vendor.
@@ -44,12 +48,14 @@ EXPECTED_TIERS = {
     "gcp_gemini": {"light": "gemini-3.8-flash", "heavy": "gemini-3.1-pro-preview"},
     "anthropic": {"light": "claude-sonnet-5-5", "heavy": "claude-opus-5-5"},
     "openai": {"light": "gpt-5.6-terra", "heavy": "gpt-5.6-sol"},
+    "anthropic_cyber": {"light": "claude-sonnet-5-5", "heavy": "claude-opus-5-5"},
 }
 
 EXPECTED_KEY_ENV = {
     "gcp_gemini": ("GEMINI_FLASH_API_KEY", "GEMINI_PRO_API_KEY"),
     "anthropic": ("ANTHROPIC_API_KEY",),
     "openai": ("OPENAI_API_KEY",),
+    "anthropic_cyber": ("ANTHROPIC_CYBER_API_KEY",),
 }
 
 
@@ -66,6 +72,7 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "EVENTMILL_MAX_OUTPUT_LIGHT", "EVENTMILL_MAX_OUTPUT_HEAVY",
         "GEMINI_API_KEY", "GEMINI_FLASH_API_KEY", "GEMINI_PRO_API_KEY",
         "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_DAYBREAK_API_KEY",
+        "ANTHROPIC_CYBER_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
     for provider in EVERY_PROVIDER:

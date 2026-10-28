@@ -34,7 +34,10 @@ EXPECTED_VENDORS = {
     "anthropic": "anthropic",
     "openai": "openai",
     "openai_daybreak_blue": "openai",
+    "anthropic_cyber": "anthropic",
 }
+
+CYBER_PROVIDERS = ("anthropic_cyber",)
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +49,7 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "EVENTMILL_MAX_OUTPUT_LIGHT", "EVENTMILL_MAX_OUTPUT_HEAVY",
         "GEMINI_API_KEY", "GEMINI_FLASH_API_KEY", "GEMINI_PRO_API_KEY",
         "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_DAYBREAK_API_KEY",
+        "ANTHROPIC_CYBER_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
     for provider_id in EXPECTED_VENDORS:
@@ -102,6 +106,82 @@ class TestDaybreakIsAnOrdinaryProvider:
         # An unverified capability token is a promise the router acts on.
         for spec in load_tier_specs(provider_id).values():
             assert "native_pdf" not in spec.capabilities
+
+
+class TestCyberIsAnOrdinaryProvider:
+    """The CVP workspace provider: same models as 'anthropic', its own key."""
+
+    @pytest.mark.parametrize("provider_id", CYBER_PROVIDERS)
+    def test_both_tiers_are_declared_on_the_standard_models(
+        self, provider_id: str,
+    ) -> None:
+        specs = load_tier_specs(provider_id)
+        standard = load_tier_specs("anthropic")
+        assert set(specs) == {"light", "heavy"}
+        assert {s.model_id for s in specs.values()} == {
+            s.model_id for s in standard.values()
+        }
+
+    @pytest.mark.parametrize("provider_id", CYBER_PROVIDERS)
+    def test_heavy_falls_back_only_within_this_key(self, provider_id: str) -> None:
+        # Sonnet on the same workspace key is the only same-provider fallback.
+        # Nothing may name 'anthropic' here: that is another credential, and a
+        # silent switch to it would bill and log somewhere nobody chose.
+        specs = load_tier_specs(provider_id)
+        assert specs["light"].fallback_model_id == ""
+        assert specs["heavy"].fallback_model_id == "claude-sonnet-5-5"
+
+    def test_it_reads_a_key_that_is_not_the_standard_one(self) -> None:
+        for provider_id in CYBER_PROVIDERS:
+            assert factory.key_env_vars(provider_id) == ("ANTHROPIC_CYBER_API_KEY",)
+        assert factory.key_env_vars("anthropic") == ("ANTHROPIC_API_KEY",)
+
+    def test_the_standard_key_never_reaches_the_cyber_provider(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-standard")
+        for provider_id in CYBER_PROVIDERS:
+            clients, failures = factory.build_clients(provider_id, connect=False)
+            assert clients == {}
+            assert failures
+            assert all("ANTHROPIC_CYBER_API_KEY" in f for f in failures)
+
+    def test_the_cyber_key_never_reaches_the_standard_provider(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The reverse direction: the workspace key must not quietly serve the
+        # standard provider, which would apply the adjustment to traffic that
+        # was never routed to it.
+        monkeypatch.setenv("ANTHROPIC_CYBER_API_KEY", "sk-ant-cyber")
+        clients, failures = factory.build_clients("anthropic", connect=False)
+        assert clients == {}
+        assert failures
+        assert all("ANTHROPIC_API_KEY" in f for f in failures)
+
+    def test_a_missing_cyber_key_leaves_every_other_provider_available(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GEMINI_FLASH_API_KEY", "k-flash")
+        monkeypatch.setenv("GEMINI_PRO_API_KEY", "k-pro")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-standard")
+        monkeypatch.setenv("ANTHROPIC_CYBER_API_KEY", factory.PLACEHOLDER)
+        available = set(factory.available_providers())
+        assert available == {"gcp_gemini", "anthropic", "openai"}
+        assert not available & set(CYBER_PROVIDERS)
+
+    @pytest.mark.parametrize("provider_id", CYBER_PROVIDERS)
+    def test_the_client_stamps_its_own_provider_id(self, provider_id: str) -> None:
+        # The class is shared with 'anthropic'; the id must come from the
+        # instance, and must survive with_model, or attribution drifts.
+        from framework.llm.clients.anthropic import AnthropicClient
+
+        client = AnthropicClient(
+            model_id="claude-opus-5-5", tier="heavy",
+            api_key_env_var="ANTHROPIC_CYBER_API_KEY", provider_id=provider_id,
+        )
+        assert client.provider_id == provider_id
+        assert client.with_model("claude-sonnet-5-5").provider_id == provider_id
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ Stage E).
 | Daybreak **Blue** | **registered, never called, and will not be** — manifest stays UNVERIFIED |
 | Adding a provider needs no code | **proven** — Red was the first provider added after the seam settled: one manifest, one secret, worked first time out. Swapping Red for e.g. Kimi 3 should need no code either (a vendor with its own SDK surface still needs a client) |
 | Daybreak Red access | ended — manifest, registry entries and default-list entries removed 2026-10-10. An `EVENTMILL_LLM_PROVIDERS` that still names `openai_daybreak_red` is now refused as unknown |
+| `anthropic_cyber`: the Anthropic CVP workspace key as its own provider | **registered 2026-10-28, never called** — manifest UNVERIFIED. Same models as `anthropic` on `ANTHROPIC_CYBER_API_KEY` (secret `eventmill-anthropic-cyber`), selected deliberately with `use anthropic_cyber for <tool>`. Exists because the standard key's cyber classifier refused projector runs (`stop_reason: refusal`, `category=cyber`); the workspace adjustment is the reason it is separate. Mount switch `EVENTMILL_MOUNT_ANTHROPIC_CYBER` (lab deploys set 0) |
 | Projector run record names provider **and** vendor, hashes the prompt (schema v5) | done |
 | Group summary: recurrence per provider, agreement across them | done |
 | **The live cross-vendor run (Stage E)** | done 2026-09-14 — Gemini 3.1 Pro vs Daybreak Red completed with very similar output; `openai` and `anthropic` worked; `summarize_run_group` worked. Qualitative sign-off: runs-per-vendor and the `stepstate-medium-2` score were not captured |
@@ -201,7 +202,10 @@ used to. Anything counting how far a finding's support extends must count
 vendors; anything comparing two models counts providers. The Daybreak provider
 declares its single model under **both** tiers — see
 `docs/change_log/2026-09-14-daybreak-providers.md` for why one tier would have
-let `_fallback_client` answer a Red run with something else. **A mounted key is not a bound provider** — but with all three named,
+let `_fallback_client` answer a Red run with something else. `anthropic` and
+`anthropic_cyber` are the same vendor on the same models under two workspace
+keys: one model read twice, not two opinions, so agreement between them is not
+evidence. **A mounted key is not a bound provider** — but with all three named,
 a *real* key is, which is the point: adopting a vendor is a secret version and
 a restart, with no variable to remember.
 `providers` shows what is configured and keyed; `providers probe` proves

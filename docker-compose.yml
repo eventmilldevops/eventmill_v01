@@ -18,6 +18,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_DAYBREAK_API_KEY=${OPENAI_DAYBREAK_API_KEY}
+      - ANTHROPIC_CYBER_API_KEY=${ANTHROPIC_CYBER_API_KEY}
     stdin_open: true
     tty: true
 
@@ -41,6 +42,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_DAYBREAK_API_KEY=${OPENAI_DAYBREAK_API_KEY}
+      - ANTHROPIC_CYBER_API_KEY=${ANTHROPIC_CYBER_API_KEY}
     stdin_open: true
     tty: true
     profiles:
